@@ -55,6 +55,9 @@ export const config = Object.freeze({
   // Resend HTTP API (for cloud hosts that block SMTP ports)
   resendApiKey: (process.env.RESEND_API_KEY ?? '').trim(),
   resendFrom: (process.env.RESEND_FROM ?? 'SP College Workflow <onboarding@resend.dev>').trim(),
+  // Brevo HTTP API (alternative for cloud hosts without domain verification)
+  brevoApiKey: (process.env.BREVO_API_KEY ?? '').trim(),
+  brevoSenderEmail: (process.env.BREVO_SENDER_EMAIL ?? '').trim(),
   // Default principal email for issue notifications (demo)
   principalEmail: (process.env.PRINCIPAL_EMAIL ?? 'protonedge01@gmail.com').trim(),
 });

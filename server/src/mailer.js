@@ -41,18 +41,34 @@ function getSmtpTransporter() {
 }
 
 /**
- * Sends an email using Resend (HTTP) or SMTP (nodemailer).
- * If the primary transport fails and the other is configured, it retries
+ * Sends an email using Brevo (HTTP), Resend (HTTP), or SMTP (nodemailer).
+ * If the primary transport fails and another is configured, it retries
  * with the fallback transport so at least one path can succeed.
  *
  * @param {{ to: string, cc?: string, subject: string, html: string }} opts
  */
 export async function sendMail({ to, cc, subject, html }) {
+  // 1. If Brevo HTTP API is configured, use it first (HTTPS port 443, never blocked by cloud hosts)
+  if (config.brevoApiKey) {
+    try {
+      return await _sendViaBrevo({ to, cc, subject, html });
+    } catch (brevoErr) {
+      console.warn(`[mailer] Brevo failed: ${brevoErr.message}`);
+    }
+  }
+
+  // 2. Resend HTTP API
   if (useResend()) {
     try {
       return await _sendViaResend({ to, cc, subject, html });
     } catch (resendErr) {
       console.warn(`[mailer] Resend failed: ${resendErr.message}`);
+      if (resendErr.message?.includes('testing emails')) {
+        console.warn(
+          `[mailer] Account restriction: Resend with onboarding@resend.dev only permits sending to the account owner (protonedge01@gmail.com). ` +
+          `To deliver to external addresses like ${to}, verify a custom domain on resend.com/domains or provide BREVO_API_KEY.`
+        );
+      }
       // Fallback to SMTP if credentials are configured
       if (config.smtp.user && config.smtp.pass) {
         console.log('[mailer] Falling back to SMTP…');
@@ -62,7 +78,7 @@ export async function sendMail({ to, cc, subject, html }) {
     }
   }
 
-  // Primary: SMTP
+  // 3. Primary: SMTP
   try {
     return await _sendViaSmtp({ to, cc, subject, html });
   } catch (smtpErr) {
@@ -74,6 +90,38 @@ export async function sendMail({ to, cc, subject, html }) {
     }
     throw smtpErr;
   }
+}
+
+async function _sendViaBrevo({ to, cc, subject, html }) {
+  const toList = (Array.isArray(to) ? to : to.split(',')).map((e) => ({ email: e.trim() }));
+  const ccList = cc ? (Array.isArray(cc) ? cc : cc.split(',')).map((e) => ({ email: e.trim() })) : undefined;
+  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'api-key': config.brevoApiKey,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
+    body: JSON.stringify({
+      sender: {
+        name: 'SP College Workflow',
+        email: config.brevoSenderEmail || config.smtp.user || 'protonedge01@gmail.com',
+      },
+      to: toList,
+      cc: ccList,
+      subject,
+      htmlContent: html,
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Brevo HTTP error ${res.status}: ${errText}`);
+  }
+
+  const data = await res.json();
+  console.log(`[mailer/brevo] sent "${subject}" → ${to} (id: ${data.messageId || 'OK'})`);
+  return { messageId: data.messageId, response: 'Brevo OK' };
 }
 
 async function _sendViaResend({ to, cc, subject, html }) {
