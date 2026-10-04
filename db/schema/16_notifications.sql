@@ -73,7 +73,18 @@ BEGIN
             VALUES (NEW.raised_by, NEW.request_id,
                     'Request ' || NEW.request_number || ' escalated',
                     'Forwarded to ' || v_stage_name || ' for review.');
+        ELSIF OLD.current_status = 'AWAITING_RESUBMISSION' THEN
+            INSERT INTO notifications (user_id, request_id, subject, body)
+            VALUES (NEW.raised_by, NEW.request_id,
+                    'Request ' || NEW.request_number || ' resubmitted',
+                    'Resubmitted to ' || v_stage_name || ' for review.');
         END IF;
+
+    ELSIF NEW.current_status = 'AWAITING_RESUBMISSION' THEN
+        INSERT INTO notifications (user_id, request_id, subject, body)
+        VALUES (NEW.raised_by, NEW.request_id,
+                'Request ' || NEW.request_number || ' returned for correction',
+                'Sent back for correction. Please review remarks and resubmit.');
 
     ELSIF NEW.current_status IN ('APPROVED','PARTIALLY_APPROVED','REJECTED','CARRIED_FORWARD') THEN
         INSERT INTO notifications (user_id, request_id, subject, body)
