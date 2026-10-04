@@ -54,10 +54,13 @@ const CHOICES = {
 // Where the request goes next, named rather than left as "escalate". The bands
 // are the Principal's: up to ₹50,000 they decide, then CDC, then the Chairman
 // and Vice Chairman (docs/plan/decisions.md).
-function escalateLabel(stageCode, amount) {
+function escalateLabel(stageCode, amount, fundingType) {
   if (stageCode === 'PURCHASE_COMMITTEE') return 'Pass to Principal';
   if (stageCode === 'PRINCIPAL') {
-    return amount <= 500000 ? 'Refer to CDC' : 'Refer to Chairman & Vice Chairman';
+    if (amount <= 500000) {
+      return fundingType === 'NON_GRANT' ? 'Refer to CDC (Non-Grant)' : 'Refer to CDC (Grant)';
+    }
+    return 'Refer to Chairman & Vice Chairman';
   }
   return 'Escalate';
 }
@@ -66,7 +69,8 @@ const STAGE_NOTE = {
   PURCHASE_COMMITTEE: 'The committee checks that the request is complete and properly documented. '
     + 'It cannot approve the spending — passing it on sends it to the Principal, who decides.',
   PRINCIPAL: 'Every request reaches you, whatever it costs. You decide up to ₹50,000; above that the '
-    + 'decision belongs to CDC, and above ₹5,00,000 to the Chairman and Vice Chairman.',
+    + 'decision belongs to CDC (Grant or Non-Grant depending on department), and above ₹5,00,000 to the Chairman and Vice Chairman.',
+  CDC: 'You are reviewing this request as the designated CDC representative for this department\'s funding stream. Your decision finalizes the CDC review stage.',
 };
 
 // Whole paise, so the preview total adds up the way the server's NUMERIC does.
@@ -99,7 +103,7 @@ export const DecisionPanel = ({ request }) => {
     : null;
 
   const label = (code) =>
-    (code === 'ESCALATE' ? escalateLabel(request.stage.code, Number(request.tentativeTotalCost)) : CHOICES[code].label);
+    (code === 'ESCALATE' ? escalateLabel(request.stage.code, Number(request.tentativeTotalCost), request.fundingType || request.department?.fundingType) : CHOICES[code].label);
 
   const problems = [];
   if (action === 'REJECT' && reason.trim().length < 3) problems.push('Give a reason for rejecting.');

@@ -94,7 +94,8 @@ test('a partial approval at CDC reports both what was sanctioned and what was no
     })),
   };
   expectStatus(await t.api('POST', `/api/requests/${ids.partial}/actions`, { token: tok.cdcGrant, body: decision }), 201);
-  expectStatus(await t.api('POST', `/api/requests/${ids.partial}/actions`, { token: tok.cdcNonGrant, body: decision }), 201);
+  // CDC Non-Grant member cannot access this Grant request
+  expectStatus(await t.api('POST', `/api/requests/${ids.partial}/actions`, { token: tok.cdcNonGrant, body: decision }), 404);
 
   const r = await report(ids.partial, tok.principal);
   assert.equal(r.request.requestedAmount, 201000);
@@ -111,9 +112,8 @@ test('a partial approval at CDC reports both what was sanctioned and what was no
 
   assert.deepEqual(r.route.map((s) => s.code), ['PURCHASE_COMMITTEE', 'PRINCIPAL', 'CDC']);
   assert.ok(!/Chairman/.test(r.workflow.map((w) => w.sentence).join(' ')));
-  // Both CDC members are named, not one anonymous "CDC approved".
   const cdcSteps = r.workflow.filter((w) => w.stage?.code === 'CDC');
-  assert.equal(new Set(cdcSteps.map((w) => w.by)).size, 2);
+  assert.equal(cdcSteps.length, 1);
 });
 
 test('a resubmitted request reports the original and the correction, not just the latest', async () => {

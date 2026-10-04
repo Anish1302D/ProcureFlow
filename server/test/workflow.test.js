@@ -467,17 +467,15 @@ test('CDC decides between 50,000 and 5 lakh, and cannot return for correction', 
   expectStatus(await t.api('POST', `/api/requests/${ids.cdcReq}/actions`, {
     token: tok.cdc, body: { action: 'ESCALATE' } }), 422);
 
-  // Both CDC roles are required, in either order; the non-grant member first.
-  const first = expectStatus(await t.api('POST', `/api/requests/${ids.cdcReq}/actions`, {
-    token: tok.cdcNonGrant, body: { action: 'APPROVE' } }), 201);
-  assert.equal(first.request.status, 'UNDER_CDC_REVIEW');
-  assert.deepEqual(first.request.jointApprovals.map((a) => [a.roleCode, a.decided]),
-    [['CDC_GRANT_MEMBER', false], ['CDC_NON_GRANT_MEMBER', true]]);
+  // CDC Non-Grant member cannot see or approve a Grant request (CS department is GRANT)
+  expectStatus(await t.api('POST', `/api/requests/${ids.cdcReq}/actions`, {
+    token: tok.cdcNonGrant, body: { action: 'APPROVE' } }), 404);
 
-  const second = expectStatus(await t.api('POST', `/api/requests/${ids.cdcReq}/actions`, {
+  // CDC Grant member approves the Grant request directly
+  const decided = expectStatus(await t.api('POST', `/api/requests/${ids.cdcReq}/actions`, {
     token: tok.cdc, body: { action: 'APPROVE' } }), 201);
-  assert.equal(second.request.status, 'APPROVED');
-  assert.equal(second.request.sanctionedAmount, 200000);
+  assert.equal(decided.request.status, 'APPROVED');
+  assert.equal(decided.request.sanctionedAmount, 200000);
 });
 
 test('lists are scoped to what each person may see', async () => {

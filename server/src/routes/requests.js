@@ -86,15 +86,23 @@ async function resolvePrincipal() {
  * Resolve the approvers staffed at a particular workflow stage.
  * @returns {Array<{ email: string, name: string }>}
  */
-async function resolveCdcApprovers() {
+async function resolveCdcApprovers(requestId) {
   try {
+    const { rows: fundingRows } = await pool.query(
+      `SELECT app_request_funding_type($1) AS funding_type`,
+      [requestId],
+    );
+    const fundingType = fundingRows[0]?.funding_type || 'GRANT';
+    const roleCode = fundingType === 'NON_GRANT' ? 'CDC_NON_GRANT_MEMBER' : 'CDC_GRANT_MEMBER';
     const { rows } = await pool.query(
       `SELECT u.full_name, u.email FROM stage_approvers sa
          JOIN users u ON u.user_id = sa.user_id
          JOIN workflow_stages ws ON ws.stage_id = sa.stage_id
-        WHERE ws.code = 'CDC' AND u.is_active`,
+         JOIN roles r ON r.role_id = sa.role_id
+        WHERE ws.code = 'CDC' AND r.code = $1 AND u.is_active`,
+      [roleCode],
     );
-    return rows.map((r) => ({ email: r.email, name: r.full_name }));
+    return rows.map((r) => ({ email: r.email, name: r.full_name, fundingType }));
   } catch { return []; }
 }
 
@@ -322,10 +330,10 @@ function notifyRequestAsync({ request, actorId, action, comments, rejectionReaso
           }
         }
 
-        // 2. Notify BOTH CDC members on entering CDC stage
+        // 2. Notify matching CDC member on entering CDC stage
         if (request.status === 'UNDER_CDC_REVIEW') {
           try {
-            const cdcApprovers = await resolveCdcApprovers();
+            const cdcApprovers = await resolveCdcApprovers(request.id);
             for (const cdcMember of cdcApprovers) {
               try {
                 const emailData = buildRequestStatusEmail({
@@ -334,7 +342,7 @@ function notifyRequestAsync({ request, actorId, action, comments, rejectionReaso
                   recipientName: cdcMember.name,
                   notificationType: 'CDC REVIEW REQUIRED',
                   emailAction: 'Request Awaiting CDC Approval',
-                  eventDescription: `Financial request "${request.title}" requires joint CDC review.`,
+                  eventDescription: `Financial request "${request.title}" requires CDC review (${cdcMember.fundingType === 'NON_GRANT' ? 'Non-Grant' : 'Grant'}).`,
                   decision: 'PENDING REVIEW',
                   approverName: actor.full_name,
                   approverRole: 'Principal',
@@ -481,6 +489,8 @@ const summaryRow = (r) => ({
   stage: r.stage_code ? { code: r.stage_code, name: r.stage_name } : null,
   budgetHead: { id: r.budget_head_id, name: r.budget_head_name, headType: r.head_type },
   financialYear: r.financial_year,
+  department: r.department_id ? { id: r.department_id, name: r.department_name } : null,
+  fundingType: r.funding_type,
   raisedBy: { id: r.raised_by, name: r.raised_by_name },
   tentativeTotalCost: r.tentative_total_cost,
   sanctionedAmount: r.sanctioned_amount,
@@ -529,7 +539,6 @@ const attachmentRow = (r) => ({
 // decision before the request moves on (docs/plan/decisions.md). Order matters
 // only for display; either may act first.
 const JOINT_STAGE_ROLES = {
-  CDC: ['CDC_GRANT_MEMBER', 'CDC_NON_GRANT_MEMBER'],
   FINAL_AUTHORITY: ['CHAIRMAN', 'VICE_PRESIDENT'],
 };
 
@@ -576,11 +585,19 @@ export async function loadDetail(db, requestId, user) {
   const { rows } = await db.query(
     `SELECT r.*, u.full_name AS raised_by_name,
             bh.code AS budget_head_code, bh.name AS budget_head_name, bh.head_type,
-            fy.label AS financial_year, d.name AS department_name, c.name AS course_name,
+            fy.label AS financial_year, d.name AS department_name, d.funding_type AS department_funding_type,
+            c.name AS course_name, c.funding_type AS course_funding_type,
+            app_request_funding_type(r.request_id) AS request_funding_type,
             ws.code AS stage_code, ws.name AS stage_name, ws.is_final AS stage_is_final,
             src.request_number AS carried_from_number, cfy.label AS carried_from_fy,
             EXISTS (SELECT 1 FROM stage_approvers sa
-                     WHERE sa.stage_id = r.current_stage_id AND sa.user_id = $2) AS staffed_here
+                     JOIN roles ro ON ro.role_id = sa.role_id
+                    WHERE sa.stage_id = r.current_stage_id AND sa.user_id = $2
+                      AND (
+                        ro.code NOT IN ('CDC_GRANT_MEMBER', 'CDC_NON_GRANT_MEMBER')
+                        OR (ro.code = 'CDC_GRANT_MEMBER' AND app_request_funding_type(r.request_id) = 'GRANT')
+                        OR (ro.code = 'CDC_NON_GRANT_MEMBER' AND app_request_funding_type(r.request_id) = 'NON_GRANT')
+                      )) AS staffed_here
        FROM requests r
        JOIN users u            ON u.user_id = r.raised_by
        JOIN budget_heads bh    ON bh.budget_head_id = r.budget_head_id
@@ -627,8 +644,9 @@ export async function loadDetail(db, requestId, user) {
       : null,
     budgetHead: { id: r.budget_head_id, code: r.budget_head_code, name: r.budget_head_name, headType: r.head_type },
     financialYear: { id: r.financial_year_id, label: r.financial_year },
-    department: r.department_id ? { id: r.department_id, name: r.department_name } : null,
-    course: r.course_id ? { id: r.course_id, name: r.course_name } : null,
+    department: r.department_id ? { id: r.department_id, name: r.department_name, fundingType: r.department_funding_type } : null,
+    course: r.course_id ? { id: r.course_id, name: r.course_name, fundingType: r.course_funding_type } : null,
+    fundingType: r.request_funding_type,
     raisedBy: { id: r.raised_by, name: r.raised_by_name },
     tentativeTotalCost: r.tentative_total_cost,
     sanctionedAmount: r.sanctioned_amount,
@@ -801,6 +819,8 @@ requestsRouter.get('/', async (req, res) => {
             r.raised_by, u.full_name AS raised_by_name,
             r.budget_head_id, bh.name AS budget_head_name, bh.head_type,
             fy.label AS financial_year, ws.code AS stage_code, ws.name AS stage_name,
+            d.department_id, d.name AS department_name,
+            app_request_funding_type(r.request_id) AS funding_type,
             (SELECT count(*) FROM request_items ri WHERE ri.request_id = r.request_id)::int AS item_count,
             EXTRACT(DAY FROM NOW() - COALESCE(r.submitted_at, r.created_at))::int AS days_open,
             count(*) OVER () AS total_count
@@ -808,6 +828,7 @@ requestsRouter.get('/', async (req, res) => {
        JOIN users u            ON u.user_id = r.raised_by
        JOIN budget_heads bh    ON bh.budget_head_id = r.budget_head_id
        JOIN financial_years fy ON fy.financial_year_id = r.financial_year_id
+       LEFT JOIN departments d ON d.department_id = r.department_id
        LEFT JOIN workflow_stages ws ON ws.stage_id = r.current_stage_id
       WHERE ($1::request_status[] IS NULL OR r.current_status = ANY($1))
         AND ($2::int  IS NULL OR r.financial_year_id = $2)
@@ -815,7 +836,13 @@ requestsRouter.get('/', async (req, res) => {
         AND (NOT $4 OR r.raised_by = $6)
         AND (NOT $5 OR (left(r.current_status::text, 6) = 'UNDER_' AND EXISTS (
                SELECT 1 FROM stage_approvers sa
-                WHERE sa.stage_id = r.current_stage_id AND sa.user_id = $6)))
+                JOIN roles ro ON ro.role_id = sa.role_id
+                WHERE sa.stage_id = r.current_stage_id AND sa.user_id = $6
+                  AND (
+                    ro.code NOT IN ('CDC_GRANT_MEMBER', 'CDC_NON_GRANT_MEMBER')
+                    OR (ro.code = 'CDC_GRANT_MEMBER' AND app_request_funding_type(r.request_id) = 'GRANT')
+                    OR (ro.code = 'CDC_NON_GRANT_MEMBER' AND app_request_funding_type(r.request_id) = 'NON_GRANT')
+                  ))))
         AND ($7::text IS NULL OR r.title ILIKE $7 OR r.request_number ILIKE $7)
       ORDER BY r.updated_at DESC, r.request_id
       LIMIT $8 OFFSET $9`,
@@ -1131,7 +1158,13 @@ requestsRouter.post('/:id/actions', async (req, res) => {
     const { rows: stageRows } = await db.query(
       `SELECT r.current_stage_id, ws.code AS stage_code, r.tentative_total_cost,
               EXISTS (SELECT 1 FROM stage_approvers sa
-                       WHERE sa.stage_id = r.current_stage_id AND sa.user_id = $2) AS staffed_here
+                       JOIN roles ro ON ro.role_id = sa.role_id
+                      WHERE sa.stage_id = r.current_stage_id AND sa.user_id = $2
+                        AND (
+                          ro.code NOT IN ('CDC_GRANT_MEMBER', 'CDC_NON_GRANT_MEMBER')
+                          OR (ro.code = 'CDC_GRANT_MEMBER' AND app_request_funding_type(r.request_id) = 'GRANT')
+                          OR (ro.code = 'CDC_NON_GRANT_MEMBER' AND app_request_funding_type(r.request_id) = 'NON_GRANT')
+                        )) AS staffed_here
          FROM requests r
          LEFT JOIN workflow_stages ws ON ws.stage_id = r.current_stage_id
         WHERE r.request_id = $1`,

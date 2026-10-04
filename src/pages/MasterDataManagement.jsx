@@ -41,7 +41,11 @@ const labelCls = 'block text-xs font-semibold text-gray-600 uppercase tracking-w
 
 function DeptModal({ dept, onClose, onSaved }) {
   const { showToast } = useApp();
-  const [form, setForm] = useState({ code: dept?.code ?? '', name: dept?.name ?? '' });
+  const [form, setForm] = useState({
+    code: dept?.code ?? '',
+    name: dept?.name ?? '',
+    fundingType: dept?.fundingType ?? 'GRANT',
+  });
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
@@ -50,10 +54,24 @@ function DeptModal({ dept, onClose, onSaved }) {
     setSaving(true);
     try {
       if (dept) {
-        await api(`/api/admin/departments/${dept.id}`, { method: 'PATCH', body: { code: form.code.trim().toUpperCase(), name: form.name.trim() } });
+        await api(`/api/admin/departments/${dept.id}`, {
+          method: 'PATCH',
+          body: {
+            code: form.code.trim().toUpperCase(),
+            name: form.name.trim(),
+            fundingType: form.fundingType,
+          },
+        });
         showToast(`${form.name} updated`, 'success');
       } else {
-        await api('/api/admin/departments', { method: 'POST', body: { code: form.code.trim().toUpperCase(), name: form.name.trim() } });
+        await api('/api/admin/departments', {
+          method: 'POST',
+          body: {
+            code: form.code.trim().toUpperCase(),
+            name: form.name.trim(),
+            fundingType: form.fundingType,
+          },
+        });
         showToast(`${form.name} added`, 'success');
       }
       onSaved();
@@ -73,6 +91,20 @@ function DeptModal({ dept, onClose, onSaved }) {
         <label className={labelCls}>Full name *</label>
         <input className={inputCls} placeholder="e.g. Computer Science"
           value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+      </div>
+      <div>
+        <label className={labelCls}>Funding Type *</label>
+        <select
+          className={inputCls}
+          value={form.fundingType}
+          onChange={(e) => setForm((f) => ({ ...f, fundingType: e.target.value }))}
+        >
+          <option value="GRANT">Grant (Government / State Aid)</option>
+          <option value="NON_GRANT">Non-Grant (Self-Financed)</option>
+        </select>
+        <p className="text-[10px] text-gray-400 mt-1">
+          Determines whether requests from this department are reviewed by CDC Grant Member or CDC Non-Grant Member.
+        </p>
       </div>
     </FormModal>
   );
@@ -226,7 +258,16 @@ export const MasterDataManagement = () => {
                     </button>
                     <Building2 className="w-4 h-4 text-indigo-400 shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-sm text-gray-800">{dept.name}</p>
+                      <p className="font-semibold text-sm text-gray-800 flex items-center gap-2">
+                        {dept.name}
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide ${
+                          dept.fundingType === 'NON_GRANT'
+                            ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                            : 'bg-sky-50 text-sky-700 border border-sky-200'
+                        }`}>
+                          {dept.fundingType === 'NON_GRANT' ? 'Non-Grant' : 'Grant'}
+                        </span>
+                      </p>
                       <p className="text-[11px] text-gray-400 font-mono">{dept.code} · {dept.courseCount} course{dept.courseCount !== 1 ? 's' : ''}</p>
                     </div>
                     <div className="flex items-center gap-1.5">

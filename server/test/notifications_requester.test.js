@@ -84,23 +84,23 @@ test('HOD gets in-app notification and email when Principal and higher authority
     body: { email: newHodEmail },
   }), 200);
 
-  // 6. CDC grant member approves
+  // 6. CDC grant member approves (CS department is GRANT, so CDC Grant member decides)
   const decBody = {
     action: 'APPROVE',
     decisions: [{ requestItemId: draft.items[0].id, approvedQuantity: 3, approvedAmount: 120000 }],
     comments: 'CDC Grant Approved',
   };
-  expectStatus(await t.api('POST', `/api/requests/${ids.req1}/actions`, {
+  const approval = expectStatus(await t.api('POST', `/api/requests/${ids.req1}/actions`, {
     token: tok.cdcGrant,
     body: decBody,
   }), 201);
+  assert.equal(approval.request.status, 'APPROVED');
 
-  // CDC non-grant member approves (joint approval)
-  const finalApproval = expectStatus(await t.api('POST', `/api/requests/${ids.req1}/actions`, {
+  // Verify CDC non-grant member cannot access this grant department request
+  expectStatus(await t.api('POST', `/api/requests/${ids.req1}/actions`, {
     token: tok.cdcNonGrant,
     body: decBody,
-  }), 201);
-  assert.equal(finalApproval.request.status, 'APPROVED');
+  }), 404);
 
   // 7. Verify HOD login has the approval notification
   // Login with new updated email to verify User Management change worked

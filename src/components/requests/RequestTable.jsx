@@ -58,7 +58,18 @@ export const RequestTable = ({ query = {}, empty, showRaisedBy = true, pageSize 
                 className="hover:bg-indigo-50/40 cursor-pointer transition-colors"
               >
                 <td className="py-3 px-3 max-w-xs">
-                  <p className="font-mono font-bold text-indigo-600">{r.requestNumber}</p>
+                  <div className="flex items-center gap-1.5">
+                    <p className="font-mono font-bold text-indigo-600">{r.requestNumber}</p>
+                    {r.fundingType && (
+                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide ${
+                        r.fundingType === 'NON_GRANT'
+                          ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                          : 'bg-sky-50 text-sky-700 border border-sky-200'
+                      }`}>
+                        {r.fundingType === 'NON_GRANT' ? 'Non-Grant' : 'Grant'}
+                      </span>
+                    )}
+                  </div>
                   <p className="font-semibold text-gray-800 truncate">{r.title}</p>
                 </td>
                 <td className="py-3 px-3 text-gray-500">

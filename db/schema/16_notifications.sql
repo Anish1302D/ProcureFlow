@@ -66,7 +66,13 @@ BEGIN
                'Request ' || NEW.request_number || ' awaits your review',
                NEW.title || ' is now with ' || v_stage_name || '.'
         FROM stage_approvers sa
-        WHERE sa.stage_id = NEW.current_stage_id;
+        JOIN roles ro ON ro.role_id = sa.role_id
+        WHERE sa.stage_id = NEW.current_stage_id
+          AND (
+            ro.code NOT IN ('CDC_GRANT_MEMBER', 'CDC_NON_GRANT_MEMBER')
+            OR (ro.code = 'CDC_GRANT_MEMBER' AND app_request_funding_type(NEW.request_id) = 'GRANT')
+            OR (ro.code = 'CDC_NON_GRANT_MEMBER' AND app_request_funding_type(NEW.request_id) = 'NON_GRANT')
+          );
 
         IF left(OLD.current_status::TEXT, 6) = 'UNDER_' THEN
             INSERT INTO notifications (user_id, request_id, subject, body)

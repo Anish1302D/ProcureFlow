@@ -89,6 +89,31 @@ BEGIN
             USING ERRCODE = 'SP004';
     END IF;
 
+    -- CDC Grant vs Non-Grant role check
+    IF v_stage_code = 'CDC' THEN
+        IF app_request_funding_type(p_request_id) = 'GRANT' AND NOT (
+            EXISTS (
+                SELECT 1 FROM stage_approvers sa
+                JOIN roles ro ON ro.role_id = sa.role_id
+                WHERE sa.stage_id = v_req.current_stage_id AND sa.user_id = p_actor_id
+                  AND ro.code = 'CDC_GRANT_MEMBER'
+            ) OR app_has_role('ADMIN')
+        ) THEN
+            RAISE EXCEPTION 'Only CDC Grant Member can decide requests for Grant departments'
+                USING ERRCODE = 'SP004';
+        ELSIF app_request_funding_type(p_request_id) = 'NON_GRANT' AND NOT (
+            EXISTS (
+                SELECT 1 FROM stage_approvers sa
+                JOIN roles ro ON ro.role_id = sa.role_id
+                WHERE sa.stage_id = v_req.current_stage_id AND sa.user_id = p_actor_id
+                  AND ro.code = 'CDC_NON_GRANT_MEMBER'
+            ) OR app_has_role('ADMIN')
+        ) THEN
+            RAISE EXCEPTION 'Only CDC Non-Grant Member can decide requests for Non-Grant departments'
+                USING ERRCODE = 'SP004';
+        END IF;
+    END IF;
+
     -- Specific Stage Restrictions
     IF v_stage_code = 'PURCHASE_COMMITTEE' AND p_action IN ('APPROVE', 'PARTIAL_APPROVE') THEN
         RAISE EXCEPTION 'Purchase Committee performs validity review only and cannot approve requests'
@@ -252,37 +277,23 @@ BEGIN
 
     -- Evaluate multi-approver completion for CDC and Final Authority
     IF v_stage_code = 'CDC' AND p_action IN ('APPROVE', 'PARTIAL_APPROVE', 'ESCALATE') THEN
-        SELECT COUNT(DISTINCT sa.role_id) INTO v_cdc_count
-        FROM approval_actions aa
-        JOIN stage_approvers sa ON sa.user_id = aa.performed_by AND sa.stage_id = v_cdc_stage_id
-        JOIN roles r ON r.role_id = sa.role_id
-        WHERE aa.request_id = p_request_id
-          AND aa.stage_id = v_cdc_stage_id
-          AND aa.action IN ('APPROVE', 'PARTIAL_APPROVE', 'ESCALATE')
-          AND r.code IN ('CDC_GRANT_MEMBER', 'CDC_NON_GRANT_MEMBER');
+        IF v_req.tentative_total_cost <= 500000 THEN
+            SELECT count(*),
+                   count(*) FILTER (WHERE item_status = 'APPROVED'),
+                   count(*) FILTER (WHERE item_status = 'REJECTED')
+              INTO v_total, v_approved, v_rejected
+            FROM request_items WHERE request_id = p_request_id;
 
-        IF v_cdc_count >= 2 THEN
-            IF v_req.tentative_total_cost <= 500000 THEN
-                SELECT count(*),
-                       count(*) FILTER (WHERE item_status = 'APPROVED'),
-                       count(*) FILTER (WHERE item_status = 'REJECTED')
-                  INTO v_total, v_approved, v_rejected
-                FROM request_items WHERE request_id = p_request_id;
-
-                v_new_status := CASE
-                    WHEN v_total = 0 THEN 'APPROVED'
-                    WHEN v_rejected = v_total THEN 'REJECTED'
-                    WHEN v_approved = v_total THEN 'APPROVED'
-                    ELSE 'PARTIALLY_APPROVED'
-                END::request_status;
-                v_new_stage := v_cdc_stage_id;
-            ELSE
-                v_new_stage := v_final_stage_id;
-                v_new_status := 'UNDER_FINAL_AUTHORITY_REVIEW';
-            END IF;
-        ELSE
-            v_new_status := 'UNDER_CDC_REVIEW';
+            v_new_status := CASE
+                WHEN v_total = 0 THEN 'APPROVED'
+                WHEN v_rejected = v_total THEN 'REJECTED'
+                WHEN v_approved = v_total THEN 'APPROVED'
+                ELSE 'PARTIALLY_APPROVED'
+            END::request_status;
             v_new_stage := v_cdc_stage_id;
+        ELSE
+            v_new_stage := v_final_stage_id;
+            v_new_status := 'UNDER_FINAL_AUTHORITY_REVIEW';
         END IF;
         UPDATE approval_actions SET new_status = v_new_status WHERE action_id = v_action_id;
 

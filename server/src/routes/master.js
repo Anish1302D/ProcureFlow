@@ -65,8 +65,8 @@ masterRouter.get('/financial-years', async (req, res) => {
 
 masterRouter.get('/departments', async (req, res) => {
   const rows = await withUser(req.user.id, async (db) =>
-    (await db.query('SELECT department_id, code, name FROM departments ORDER BY name')).rows);
-  res.json(rows.map((r) => ({ id: r.department_id, code: r.code, name: r.name })));
+    (await db.query('SELECT department_id, code, name, funding_type FROM departments ORDER BY name')).rows);
+  res.json(rows.map((r) => ({ id: r.department_id, code: r.code, name: r.name, fundingType: r.funding_type })));
 });
 
 masterRouter.get('/courses', async (req, res) => {

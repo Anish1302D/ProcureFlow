@@ -80,7 +80,7 @@ test('2. Principal APPROVE above 50,000 is rejected', async () => {
   assert.match(res.body.error.message, /above ₹50,000/);
 });
 
-test('3. Single CDC member approving does not close request', async () => {
+test('3. Single CDC Grant member approving closes Grant request as APPROVED', async () => {
   const req = await createSubmittedRequest(tok.head, 'Authz test - Single CDC approve', 100000);
 
   expectStatus(await t.api('POST', `/api/requests/${req.id}/actions`, { token: tok.pc1, body: { action: 'FORWARD' } }), 201);
@@ -91,55 +91,55 @@ test('3. Single CDC member approving does not close request', async () => {
     body: { action: 'APPROVE' },
   }), 201);
 
-  assert.equal(res.request.status, 'UNDER_CDC_REVIEW');
+  assert.equal(res.request.status, 'APPROVED');
 });
 
-test('4. Same CDC member approving twice writes row but leaves status as UNDER_CDC_REVIEW', async () => {
-  const req = await createSubmittedRequest(tok.head, 'Authz test - CDC double approve', 100000);
+test('4. CDC Non-Grant member cannot see or approve a Grant department request', async () => {
+  const req = await createSubmittedRequest(tok.head, 'Authz test - CDC non-grant blocked', 100000);
 
   expectStatus(await t.api('POST', `/api/requests/${req.id}/actions`, { token: tok.pc1, body: { action: 'FORWARD' } }), 201);
   expectStatus(await t.api('POST', `/api/requests/${req.id}/actions`, { token: tok.principal, body: { action: 'FORWARD' } }), 201);
 
-  expectStatus(await t.api('POST', `/api/requests/${req.id}/actions`, { token: tok.cdcGrant, body: { action: 'APPROVE' } }), 201);
+  // CDC Non-Grant member attempting to act on Grant department request is refused with 404 (not found / not permitted via RLS)
+  const nonGrantRes = await t.api('POST', `/api/requests/${req.id}/actions`, {
+    token: tok.cdcNonGrant,
+    body: { action: 'APPROVE' },
+  });
+  assert.equal(nonGrantRes.status, 404);
+});
 
-  const secondRes = await t.api('POST', `/api/requests/${req.id}/actions`, {
+test('5. Non-Grant request is approved solely by CDC Non-Grant member', async () => {
+  // Set CHEM department to NON_GRANT
+  await t.superuser.query("UPDATE departments SET funding_type = 'NON_GRANT' WHERE department_id = $1", [ids.chemDept]);
+
+  // Create request for CHEM department (Non-Grant)
+  const draft = expectStatus(await t.api('POST', '/api/requests', {
+    token: tok.head,
+    body: {
+      title: 'Authz test - Non-Grant department',
+      departmentId: ids.chemDept,
+      budgetHeadId: ids.it,
+      items: [{ budgetItemId: ids['MIC-01'], quantity: 1, unitCost: 100000 }],
+    },
+  }), 201);
+
+  expectStatus(await t.api('POST', `/api/requests/${draft.id}/submit`, { token: tok.head }), 200);
+  expectStatus(await t.api('POST', `/api/requests/${draft.id}/actions`, { token: tok.pc1, body: { action: 'FORWARD' } }), 201);
+  expectStatus(await t.api('POST', `/api/requests/${draft.id}/actions`, { token: tok.principal, body: { action: 'FORWARD' } }), 201);
+
+  // CDC Grant member cannot see or approve Non-Grant request
+  const grantRes = await t.api('POST', `/api/requests/${draft.id}/actions`, {
     token: tok.cdcGrant,
     body: { action: 'APPROVE' },
   });
+  assert.equal(grantRes.status, 404);
 
-  assert.equal(secondRes.status, 201);
-  assert.equal(secondRes.body.request.status, 'UNDER_CDC_REVIEW');
-
-  const dbRows = (await t.superuser.query("SELECT * FROM approval_actions WHERE request_id = $1 AND action = 'APPROVE'", [req.id])).rows;
-  console.log('[Test 4] DB approval_actions count for duplicate approve:', dbRows.length);
-  assert.equal(dbRows.length, 2, 'Two approval_actions rows are recorded in DB');
-});
-
-test('5. Two Grant members do not satisfy CDC', async () => {
-  const grantRoleId = (await t.superuser.query("SELECT role_id FROM roles WHERE code = 'CDC_GRANT_MEMBER'")).rows[0].role_id;
-  const cdcStageId = (await t.superuser.query("SELECT stage_id FROM workflow_stages WHERE code = 'CDC'")).rows[0].stage_id;
-
-  const newUserRes = await t.superuser.query(`
-    INSERT INTO users (email, full_name, password_hash)
-    VALUES ('cdc.grant2@spcollege.edu', 'Second Grant Member', crypt('ChangeMe#2026', gen_salt('bf', 12)))
-    RETURNING user_id;
-  `);
-  const grant2UserId = newUserRes.rows[0].user_id;
-
-  await t.superuser.query('INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)', [grant2UserId, grantRoleId]);
-  await t.superuser.query('INSERT INTO stage_approvers (stage_id, user_id, role_id) VALUES ($1, $2, $3)', [cdcStageId, grant2UserId, grantRoleId]);
-
-  const tokGrant2 = await t.login('cdc.grant2@spcollege.edu');
-
-  const req = await createSubmittedRequest(tok.head, 'Authz test - Two Grant members', 100000);
-
-  expectStatus(await t.api('POST', `/api/requests/${req.id}/actions`, { token: tok.pc1, body: { action: 'FORWARD' } }), 201);
-  expectStatus(await t.api('POST', `/api/requests/${req.id}/actions`, { token: tok.principal, body: { action: 'FORWARD' } }), 201);
-
-  expectStatus(await t.api('POST', `/api/requests/${req.id}/actions`, { token: tok.cdcGrant, body: { action: 'APPROVE' } }), 201);
-  const res = expectStatus(await t.api('POST', `/api/requests/${req.id}/actions`, { token: tokGrant2, body: { action: 'APPROVE' } }), 201);
-
-  assert.equal(res.request.status, 'UNDER_CDC_REVIEW');
+  // CDC Non-Grant member CAN approve and finalize the decision
+  const nonGrantApproval = expectStatus(await t.api('POST', `/api/requests/${draft.id}/actions`, {
+    token: tok.cdcNonGrant,
+    body: { action: 'APPROVE' },
+  }), 201);
+  assert.equal(nonGrantApproval.request.status, 'APPROVED');
 });
 
 test('6. Single Chairman approval does not close final stage', async () => {

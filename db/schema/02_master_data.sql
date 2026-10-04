@@ -11,7 +11,8 @@ CREATE TABLE roles (
 CREATE TABLE departments (
     department_id SERIAL PRIMARY KEY,
     code          TEXT NOT NULL UNIQUE,
-    name          TEXT NOT NULL
+    name          TEXT NOT NULL,
+    funding_type  course_funding_type NOT NULL DEFAULT 'GRANT'
 );
 
 CREATE TABLE users (

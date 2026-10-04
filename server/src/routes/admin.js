@@ -266,29 +266,30 @@ adminRouter.post('/users/:id/reactivate', async (req, res) => {
 const deptSchema = z.object({
   code: z.string().trim().toUpperCase().min(1).max(20).regex(/^[A-Z0-9_-]+$/, 'Code must be letters, numbers or hyphens'),
   name: z.string().trim().min(2).max(200),
+  fundingType: z.enum(['GRANT', 'NON_GRANT']).optional(),
 });
 
 adminRouter.get('/departments', async (_req, res) => {
   const { rows } = await anonQuery(
-    `SELECT d.department_id, d.code, d.name,
+    `SELECT d.department_id, d.code, d.name, d.funding_type,
             COUNT(c.course_id)::int AS course_count
        FROM departments d
        LEFT JOIN courses c ON c.department_id = d.department_id
       GROUP BY d.department_id ORDER BY d.name`,
   );
-  res.json(rows.map((r) => ({ id: r.department_id, code: r.code, name: r.name, courseCount: r.course_count })));
+  res.json(rows.map((r) => ({ id: r.department_id, code: r.code, name: r.name, fundingType: r.funding_type, courseCount: r.course_count })));
 });
 
 adminRouter.post('/departments', async (req, res) => {
   const body = deptSchema.parse(req.body);
   const result = await withUser(req.user.id, async (db) => {
     const { rows } = await db.query(
-      `INSERT INTO departments (code, name) VALUES ($1, $2) RETURNING department_id, code, name`,
-      [body.code, body.name],
+      `INSERT INTO departments (code, name, funding_type) VALUES ($1, $2, $3) RETURNING department_id, code, name, funding_type`,
+      [body.code, body.name, body.fundingType || 'GRANT'],
     );
     return rows[0];
   });
-  res.status(201).json({ id: result.department_id, code: result.code, name: result.name, courseCount: 0 });
+  res.status(201).json({ id: result.department_id, code: result.code, name: result.name, fundingType: result.funding_type, courseCount: 0 });
 });
 
 adminRouter.patch('/departments/:id', async (req, res) => {
@@ -299,16 +300,17 @@ adminRouter.patch('/departments/:id', async (req, res) => {
     const push = (col, val) => { vals.push(val); sets.push(`${col} = $${vals.length}`); };
     if (body.code !== undefined) push('code', body.code);
     if (body.name !== undefined) push('name', body.name);
+    if (body.fundingType !== undefined) push('funding_type', body.fundingType);
     if (!sets.length) throw new HttpError(400, 'Nothing to update');
     vals.push(deptId);
     const { rows, rowCount } = await db.query(
-      `UPDATE departments SET ${sets.join(', ')} WHERE department_id = $${vals.length} RETURNING department_id, code, name`,
+      `UPDATE departments SET ${sets.join(', ')} WHERE department_id = $${vals.length} RETURNING department_id, code, name, funding_type`,
       vals,
     );
     if (!rowCount) throw notFound('Department not found');
     return rows[0];
   });
-  res.json({ id: result.department_id, code: result.code, name: result.name });
+  res.json({ id: result.department_id, code: result.code, name: result.name, fundingType: result.funding_type });
 });
 
 adminRouter.delete('/departments/:id', async (req, res) => {

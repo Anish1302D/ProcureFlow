@@ -73,8 +73,27 @@ AS $$
     );
 $$;
 
+CREATE OR REPLACE FUNCTION app_request_funding_type(p_request_id UUID)
+RETURNS course_funding_type
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT COALESCE(
+        c.funding_type,
+        d.funding_type,
+        'GRANT'::course_funding_type
+    )
+    FROM requests r
+    LEFT JOIN courses c ON c.course_id = r.course_id
+    LEFT JOIN departments d ON d.department_id = r.department_id
+    WHERE r.request_id = p_request_id;
+$$;
+
 -- True when the user is a configured approver on a stage this request sits at
 -- now, or passed through earlier (so approvers keep visibility after escalating).
+-- For CDC, grants visibility only to the matching Grant vs Non-Grant member.
 CREATE OR REPLACE FUNCTION app_is_stage_participant(p_request_id UUID, p_user_id UUID)
 RETURNS BOOLEAN
 LANGUAGE sql
@@ -86,6 +105,7 @@ AS $$
         SELECT 1
         FROM requests r
         JOIN stage_approvers sa ON sa.user_id = p_user_id
+        JOIN roles ro ON ro.role_id = sa.role_id
         WHERE r.request_id = p_request_id
           AND (
                 sa.stage_id = r.current_stage_id
@@ -94,6 +114,11 @@ AS $$
                     WHERE aa.request_id = r.request_id
                       AND aa.stage_id   = sa.stage_id
                 )
+          )
+          AND (
+                ro.code NOT IN ('CDC_GRANT_MEMBER', 'CDC_NON_GRANT_MEMBER')
+             OR (ro.code = 'CDC_GRANT_MEMBER' AND app_request_funding_type(r.request_id) = 'GRANT')
+             OR (ro.code = 'CDC_NON_GRANT_MEMBER' AND app_request_funding_type(r.request_id) = 'NON_GRANT')
           )
     );
 $$;
