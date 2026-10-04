@@ -184,7 +184,7 @@ export const NewRequestModal = () => {
     const failedFiles = [];
     for (const file of files) {
       const upload = new FormData();
-      upload.append('file', file);
+      upload.append('file', file, file.name);
       try {
         await api(`/api/requests/${created.id}/attachments`, { method: 'POST', form: upload });
       } catch (err) {
@@ -415,16 +415,25 @@ export const NewRequestModal = () => {
         <div>
           <span className={labelCls}>Quotations and supporting documents</span>
           <div className="flex flex-wrap items-center gap-2">
-            {files.map((f) => (
-              <span key={`${f.name}-${f.size}`} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-gray-100 text-xs text-gray-700">
-                <Paperclip className="w-3 h-3" /> {f.name}
-                <button onClick={() => setFiles((fs) => fs.filter((x) => x !== f))} aria-label={`Remove ${f.name}`} className="text-gray-400 hover:text-red-600"><X className="w-3 h-3" /></button>
+            {files.map((f, idx) => (
+              <span key={`${f.name}-${f.size}-${idx}`} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 border border-indigo-200 text-xs text-indigo-800 font-medium">
+                <Paperclip className="w-3 h-3 text-indigo-600 shrink-0" /> {f.name}
+                <span className="text-[10px] text-gray-500 font-normal">({(f.size / 1024).toFixed(0)} KB)</span>
+                <button type="button" onClick={() => setFiles((fs) => fs.filter((_, i) => i !== idx))} aria-label={`Remove ${f.name}`} className="text-gray-400 hover:text-red-600 ml-1">
+                  <X className="w-3 h-3" />
+                </button>
               </span>
             ))}
             <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 cursor-pointer hover:underline">
               <Paperclip className="w-3.5 h-3.5" /> Add file
               <input type="file" multiple accept={ACCEPT} className="hidden"
-                onChange={(e) => { setFiles((fs) => [...fs, ...Array.from(e.target.files)]); e.target.value = ''; }} />
+                onChange={(e) => {
+                  const chosen = Array.from(e.target.files || []);
+                  if (chosen.length > 0) {
+                    setFiles((fs) => [...fs, ...chosen]);
+                  }
+                  e.target.value = '';
+                }} />
             </label>
             <span className="text-[11px] text-gray-400">PDF, image, Word or Excel · up to 10 MB each</span>
           </div>
