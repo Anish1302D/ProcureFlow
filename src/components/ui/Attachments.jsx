@@ -15,10 +15,11 @@ const size = (bytes) =>
  * document keeps its row and points at its replacement, so the earlier
  * versions are whatever leads to the file on screen.
  */
-function withHistory(files) {
+function withHistory(files = []) {
+  const list = files || [];
   const replacedBy = new Map();
-  for (const f of files) if (f.supersededById) replacedBy.set(f.supersededById, f);
-  return files
+  for (const f of list) if (f.supersededById) replacedBy.set(f.supersededById, f);
+  return list
     .filter((f) => !f.supersededById)
     .map((f) => {
       const earlier = [];
@@ -33,7 +34,7 @@ function withHistory(files) {
  * version of an existing file instead of deleting it. The server enforces all
  * three.
  */
-export const Attachments = ({ files, uploadPath, canDelete = () => false, canReplace = false }) => {
+export const Attachments = ({ files = [], uploadPath, canDelete = () => false, canReplace = false }) => {
   const { showToast } = useApp();
   const { run, busy } = useAction();
   const input = useRef(null);

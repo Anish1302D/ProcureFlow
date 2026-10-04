@@ -355,7 +355,7 @@ CREATE POLICY attachments_delete ON attachments
 ALTER TABLE budget_provisions ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY budget_provisions_read ON budget_provisions
-    FOR SELECT TO app_user
+    FOR SELECT
     USING (
         app_has_role('ADMIN')
         OR app_has_role('PRINCIPAL')
@@ -371,7 +371,7 @@ CREATE POLICY budget_provisions_read ON budget_provisions
     );
 
 CREATE POLICY budget_provisions_write ON budget_provisions
-    FOR ALL TO app_user
+    FOR ALL
     USING (
         app_has_role('ADMIN')
         OR (

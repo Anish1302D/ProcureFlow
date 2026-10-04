@@ -147,7 +147,7 @@ $$;
 ALTER TABLE budget_provisions ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS budget_provisions_read ON budget_provisions;
-CREATE POLICY budget_provisions_read ON budget_provisions FOR SELECT TO app_user USING (
+CREATE POLICY budget_provisions_read ON budget_provisions FOR SELECT USING (
     app_has_role('ADMIN')
     OR app_has_role('PRINCIPAL')
     OR app_has_role('PURCHASE_COMMITTEE')
@@ -162,7 +162,7 @@ CREATE POLICY budget_provisions_read ON budget_provisions FOR SELECT TO app_user
 );
 
 DROP POLICY IF EXISTS budget_provisions_write ON budget_provisions;
-CREATE POLICY budget_provisions_write ON budget_provisions FOR ALL TO app_user USING (
+CREATE POLICY budget_provisions_write ON budget_provisions FOR ALL USING (
     app_has_role('ADMIN')
     OR (
         app_has_role('HEAD')
@@ -178,8 +178,10 @@ CREATE POLICY budget_provisions_write ON budget_provisions FOR ALL TO app_user U
 
 -- Update attachments RLS policies for budget_provision attachments
 DROP POLICY IF EXISTS attachments_read ON attachments;
-CREATE POLICY attachments_read ON attachments FOR SELECT TO app_user USING (
-    (request_id IS NOT NULL AND (app_can_see_request(request_id) OR app_principal_can_read(request_id)))
+CREATE POLICY attachments_read ON attachments FOR SELECT USING (
+    app_has_role('ADMIN')
+    OR uploaded_by = app_current_user_id()
+    OR (request_id IS NOT NULL AND (app_can_see_request(request_id) OR app_principal_can_read(request_id)))
     OR (issue_id IS NOT NULL AND (
         app_has_role('ADMIN') OR app_has_role('PRINCIPAL') OR uploaded_by = app_current_user_id()
     ))
@@ -189,10 +191,11 @@ CREATE POLICY attachments_read ON attachments FOR SELECT TO app_user USING (
 );
 
 DROP POLICY IF EXISTS attachments_insert ON attachments;
-CREATE POLICY attachments_insert ON attachments FOR INSERT TO app_user WITH CHECK (
+CREATE POLICY attachments_insert ON attachments FOR INSERT WITH CHECK (
     uploaded_by = app_current_user_id()
     AND (
-        request_id IS NOT NULL
+        app_has_role('ADMIN')
+        OR (request_id IS NOT NULL AND (app_can_see_request(request_id) OR app_principal_can_read(request_id)))
         OR issue_id IS NOT NULL
         OR (budget_provision_id IS NOT NULL AND (
             app_has_role('ADMIN')
