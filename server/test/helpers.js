@@ -7,7 +7,7 @@ import dotenv from 'dotenv';
 import pg from 'pg';
 import { TEST_DB, adminUrl, resetTestDatabase } from '../scripts/reset-test-db.js';
 
-dotenv.config({ quiet: true });
+dotenv.config({ path: [path.resolve(process.cwd(), '.env'), path.resolve(import.meta.dirname, '../.env')], quiet: true });
 
 export const PASSWORD = 'ChangeMe#2026';
 

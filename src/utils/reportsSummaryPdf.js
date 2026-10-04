@@ -123,7 +123,12 @@ export function generateReportsSummaryPdf(data, saveAsFilename = null) {
   const fy = data?.financialYear ?? {};
   const fyLabel = fy.label ? `FY ${fy.label}` : 'Current Financial Year';
   const generatedAt = data?.generatedAt ?? new Date().toISOString();
-  const reportId = `RPT-FY${(fy.label ?? 'NA').replace(/[^0-9A-Za-z]/g, '')}-${new Date(generatedAt).toISOString().slice(0, 10).replace(/-/g, '')}`;
+  const dept = data?.department;
+  const isDeptReport = Boolean(dept?.name);
+  const deptCode = dept?.code ? ` (${dept.code})` : '';
+  const reportId = isDeptReport
+    ? `RPT-${(dept.code || 'DEPT').replace(/[^0-9A-Za-z]/g, '')}-FY${(fy.label ?? 'NA').replace(/[^0-9A-Za-z]/g, '')}-${new Date(generatedAt).toISOString().slice(0, 10).replace(/-/g, '')}`
+    : `RPT-FY${(fy.label ?? 'NA').replace(/[^0-9A-Za-z]/g, '')}-${new Date(generatedAt).toISOString().slice(0, 10).replace(/-/g, '')}`;
   const totals = summaryTotals(data);
   const heads = data?.byBudgetHead ?? [];
   const statuses = data?.byStatus ?? [];
@@ -238,10 +243,18 @@ export function generateReportsSummaryPdf(data, saveAsFilename = null) {
   doc.setDrawColor(...SLATE_300);
   doc.setLineWidth(0.5);
   doc.roundedRect(LEFT, y, WIDTH, bannerH, 3, 3, 'FD');
-  font('bold', 10.5, SLATE_900);
-  doc.text('INSTITUTIONAL PROCUREMENT & BUDGET UTILISATION REPORT', LEFT + 10, y + 15);
+
+  const bannerTitle = isDeptReport
+    ? `DEPARTMENT APPROVAL & BUDGET REPORT — ${dept.name.toUpperCase()}`
+    : 'INSTITUTIONAL PROCUREMENT & BUDGET UTILISATION REPORT';
+  const bannerSubtitle = isDeptReport
+    ? `Departmental analysis of submitted purchase requests, budget head sanctions and provisions for ${dept.name}`
+    : 'Consolidated college-wide analysis of submitted purchase requests, sanctions and the approval pipeline';
+
+  font('bold', 10, SLATE_900);
+  doc.text(bannerTitle, LEFT + 10, y + 15);
   font('normal', 7.5, SLATE_500);
-  doc.text('Consolidated analysis of submitted purchase requests, sanctions and the approval pipeline', LEFT + 10, y + 27);
+  doc.text(bannerSubtitle, LEFT + 10, y + 27);
 
   doc.setFillColor(224, 231, 255);
   doc.rect(RIGHT - 110, y + 8, 100, 16, 'F');
@@ -255,9 +268,11 @@ export function generateReportsSummaryPdf(data, saveAsFilename = null) {
   y += bannerH + 8;
 
   font('normal', 6.8, SLATE_500);
-  const scopeText = collegeWide
-    ? `Prepared for ${data?.generatedBy?.name ?? 'the Competent Authority'}. Coverage: all submitted requests of the college for ${fyLabel}. Drafts are excluded.`
-    : `Prepared for ${data?.generatedBy?.name ?? 'the requesting user'}. Coverage: only the requests this user is permitted to view for ${fyLabel}. Drafts are excluded.`;
+  const scopeText = isDeptReport
+    ? `Prepared for ${data?.generatedBy?.name ?? 'the Competent Authority'}. Coverage: submitted requests for Department of ${dept.name}${deptCode} for ${fyLabel}. Drafts are excluded.`
+    : (collegeWide
+      ? `Prepared for ${data?.generatedBy?.name ?? 'the Competent Authority'}. Coverage: all submitted requests across all college departments for ${fyLabel}. Drafts are excluded.`
+      : `Prepared for ${data?.generatedBy?.name ?? 'the requesting user'}. Coverage: only the requests this user is permitted to view for ${fyLabel}. Drafts are excluded.`);
   doc.text(scopeText, LEFT, y + 4);
   y += 14;
 

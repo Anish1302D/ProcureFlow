@@ -212,6 +212,53 @@ test('GET /api/reports/summary provides comprehensive FY reporting data scoped b
 
   const summaryHead = expectStatus(await t.api('GET', `/api/reports/summary?financialYearId=${ids.fy}`, { token: tok.head }), 200);
   assert.ok(summaryHead.byBudgetHead);
+  assert.ok(Array.isArray(summaryHead.lineItems));
+  assert.ok(Array.isArray(summaryHead.issuesDetailed));
+});
+
+test('department-wise report filtering and role-based download permissions', async () => {
+  // Department-wise spend by budget head
+  const deptSpend = expectStatus(
+    await t.api('GET', `/api/reports/by-budget-head?financialYearId=${ids.fy}&departmentId=${ids.cs}`, { token: tok.principal }),
+    200,
+  );
+  assert.equal(deptSpend.department?.id, ids.cs);
+  assert.equal(deptSpend.department?.code, 'CS');
+
+  // Higher authorities (Principal, CDC, Admin) CAN download Approval & Budget reports
+  const principalApprovalReport = expectStatus(
+    await t.api('GET', `/api/reports/summary?financialYearId=${ids.fy}&reportType=approval-budget`, { token: tok.principal }),
+    200,
+  );
+  assert.equal(principalApprovalReport.canDownloadApprovalBudget, true);
+  assert.equal(principalApprovalReport.isHigherAuthority, true);
+
+  const cdcApprovalReport = expectStatus(
+    await t.api('GET', `/api/reports/summary?financialYearId=${ids.fy}&departmentId=${ids.cs}&reportType=approval-budget`, { token: tok.cdcGrant }),
+    200,
+  );
+  assert.equal(cdcApprovalReport.department?.id, ids.cs);
+  assert.equal(cdcApprovalReport.canDownloadApprovalBudget, true);
+
+  // HOD / regular members CANNOT download Approval & Budget reports (HTTP 403 Forbidden)
+  const headForbidden = await t.api('GET', `/api/reports/summary?financialYearId=${ids.fy}&reportType=approval-budget`, { token: tok.head });
+  expectStatus(headForbidden, 403);
+  assert.match(headForbidden.body?.error?.message ?? '', /restricted to Principal, CDC, Chairman and Vice President/i);
+
+  // HOD CAN download Requests report for their department
+  const headRequestsReport = expectStatus(
+    await t.api('GET', `/api/reports/summary?financialYearId=${ids.fy}&reportType=requests`, { token: tok.head }),
+    200,
+  );
+  assert.ok(Array.isArray(headRequestsReport.lineItems));
+  assert.ok(Array.isArray(headRequestsReport.register));
+
+  // HOD CAN download Issues report
+  const headIssuesReport = expectStatus(
+    await t.api('GET', `/api/reports/summary?financialYearId=${ids.fy}&reportType=issues`, { token: tok.head }),
+    200,
+  );
+  assert.ok(Array.isArray(headIssuesReport.issuesDetailed));
 });
 
 
