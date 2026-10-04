@@ -2,9 +2,11 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { requireRole } from '../auth.js';
 import { queryAll, withUser } from '../db.js';
-import { notFound } from '../errors.js';
+import { forbidden, notFound } from '../errors.js';
 import { generatePdfReport } from '../pdfReport.js';
 import { SECTIONS, assembleReport, renderReportHtml } from '../reporting.js';
+import { hasAnyRole } from '../roles.js';
+import { APPROVAL_BUDGET_ROLES } from './auth.js';
 import { loadDetail } from './requests.js';
 import { flag, intId, pagination, param } from '../validate.js';
 
@@ -97,9 +99,22 @@ reportsRouter.get('/dashboard', async (req, res) => {
 const DECIDED_FOR = ['APPROVED', 'PARTIALLY_APPROVED', 'FULFILMENT_PENDING', 'FULFILLED', 'CLOSED'];
 
 reportsRouter.get('/reports/by-budget-head', async (req, res) => {
-  const { financialYearId } = z.object({ financialYearId: intId.optional() }).parse(req.query);
+  const { financialYearId, departmentId } = z.object({
+    financialYearId: intId.optional(),
+    departmentId: intId.optional(),
+  }).parse(req.query);
+
   const body = await withUser(req.user.id, async (db) => {
     const year = await financialYear(db, financialYearId);
+    let dept = null;
+    if (departmentId) {
+      const { rows: dRows } = await db.query(
+        'SELECT department_id AS id, code, name FROM departments WHERE department_id = $1',
+        [departmentId],
+      );
+      dept = dRows[0] ?? null;
+    }
+
     const { rows } = await db.query(
       `SELECT bh.budget_head_id, bh.name, bh.head_type,
               count(*)::int AS requests,
@@ -110,12 +125,14 @@ reportsRouter.get('/reports/by-budget-head', async (req, res) => {
          FROM requests r
          JOIN budget_heads bh ON bh.budget_head_id = r.budget_head_id
         WHERE r.current_status <> 'DRAFT' AND r.financial_year_id = $1
+          AND ($3::int IS NULL OR r.department_id = $3)
         GROUP BY bh.budget_head_id, bh.name, bh.head_type
         ORDER BY requested DESC, bh.name`,
-      [year.id, DECIDED_FOR],
+      [year.id, DECIDED_FOR, departmentId ?? null],
     );
     return {
       financialYear: year.label,
+      department: dept,
       rows: rows.map((r) => ({
         budgetHead: { id: r.budget_head_id, name: r.name, headType: r.head_type },
         requests: r.requests,
@@ -135,7 +152,26 @@ reportsRouter.get('/reports/by-budget-head', async (req, res) => {
 // request its reader could not already open; the Principal's covers the
 // college, a requester's their own requests.
 reportsRouter.get('/reports/summary', async (req, res) => {
-  const { financialYearId } = z.object({ financialYearId: intId.optional() }).parse(req.query);
+  const { financialYearId, departmentId, reportType } = z.object({
+    financialYearId: intId.optional(),
+    departmentId: intId.optional(),
+    reportType: z.enum(['approval-budget', 'requests', 'issues']).optional(),
+  }).parse(req.query);
+
+  const isHigherAuthority = hasAnyRole(req.user, APPROVAL_BUDGET_ROLES);
+
+  // Approval & budget reports are restricted to Principal, CDC, Chairman, Vice President, Admin.
+  if (reportType === 'approval-budget' && !isHigherAuthority) {
+    throw forbidden('Approval & Budget Reports are restricted to Principal, CDC, Chairman and Vice President');
+  }
+
+  // A requester/HOD who is not higher authority cannot inspect another department's separate data.
+  if (!isHigherAuthority && departmentId && req.user.departmentId && departmentId !== req.user.departmentId) {
+    throw forbidden('Access restricted to your own department');
+  }
+
+  const targetDeptId = departmentId ?? (!isHigherAuthority ? req.user.departmentId : null);
+
   const body = await withUser(req.user.id, async (db) => {
     const { rows: fyRows } = await db.query(
       `SELECT financial_year_id AS id, label, start_date::text AS start_date, end_date::text AS end_date
@@ -147,15 +183,33 @@ reportsRouter.get('/reports/summary', async (req, res) => {
     const fy = year.id;
     const decided = DECIDED_FOR;
 
+    let dept = null;
+    if (targetDeptId) {
+      const { rows: dRows } = await db.query(
+        'SELECT department_id AS id, code, name FROM departments WHERE department_id = $1',
+        [targetDeptId],
+      );
+      dept = dRows[0] ?? null;
+    }
+
     // Submitted (non-draft) requests in the year, with their dimensions.
-    const BASE = `
+    const FROM_REQUESTS = `
       FROM requests r
       JOIN budget_heads bh         ON bh.budget_head_id = r.budget_head_id
       JOIN users u                 ON u.user_id = r.raised_by
       LEFT JOIN departments d      ON d.department_id = r.department_id
       LEFT JOIN courses c          ON c.course_id = r.course_id
-      LEFT JOIN workflow_stages ws ON ws.stage_id = r.current_stage_id
-     WHERE r.current_status <> 'DRAFT' AND r.financial_year_id = $1`;
+      LEFT JOIN workflow_stages ws ON ws.stage_id = r.current_stage_id`;
+
+    const WHERE_AGG = `
+      ${FROM_REQUESTS}
+     WHERE r.current_status <> 'DRAFT' AND r.financial_year_id = $1
+       AND ($3::int IS NULL OR r.department_id = $3)`;
+
+    const WHERE_BASE = `
+      ${FROM_REQUESTS}
+     WHERE r.current_status <> 'DRAFT' AND r.financial_year_id = $1
+       AND ($2::int IS NULL OR r.department_id = $2)`;
 
     const AGG = `
       count(*)::int AS requests,
@@ -167,23 +221,23 @@ reportsRouter.get('/reports/summary', async (req, res) => {
       COALESCE(sum(r.tentative_total_cost), 0) AS requested,
       COALESCE(sum(r.sanctioned_amount) FILTER (WHERE r.current_status::text = ANY($2::text[])), 0) AS sanctioned`;
 
-    const [heads, statuses, depts, stages, itemTypes, funding, monthly, provisions, ageing, register, issues] =
+    const [heads, statuses, depts, stages, itemTypes, funding, monthly, provisions, ageing, register, issuesCounts, lineItems, issuesDetailed] =
       await queryAll(db, [
         [`SELECT bh.budget_head_id, bh.code, bh.name, bh.head_type, ${AGG}
-            ${BASE} GROUP BY bh.budget_head_id, bh.code, bh.name, bh.head_type
-            ORDER BY requested DESC, bh.name`, [fy, decided]],
+            ${WHERE_AGG} GROUP BY bh.budget_head_id, bh.code, bh.name, bh.head_type
+            ORDER BY requested DESC, bh.name`, [fy, decided, targetDeptId ?? null]],
         [`SELECT r.current_status::text AS status, count(*)::int AS requests,
                  COALESCE(sum(r.tentative_total_cost), 0) AS requested,
                  COALESCE(sum(r.sanctioned_amount), 0) AS sanctioned
-            ${BASE} GROUP BY r.current_status ORDER BY requests DESC`, [fy]],
+            ${WHERE_BASE} GROUP BY r.current_status ORDER BY requests DESC`, [fy, targetDeptId ?? null]],
         [`SELECT COALESCE(d.name, 'Unassigned') AS name, d.code, ${AGG}
-            ${BASE} GROUP BY d.name, d.code ORDER BY requested DESC`, [fy, decided]],
+            ${WHERE_AGG} GROUP BY d.name, d.code ORDER BY requested DESC`, [fy, decided, targetDeptId ?? null]],
         [`SELECT ws.name AS stage, ws.code, count(*)::int AS requests,
                  COALESCE(sum(r.tentative_total_cost), 0) AS amount,
                  round(avg(EXTRACT(EPOCH FROM NOW() - COALESCE(r.submitted_at, r.created_at)) / 86400), 1) AS avg_days,
                  max(EXTRACT(DAY FROM NOW() - COALESCE(r.submitted_at, r.created_at)))::int AS max_days
-            ${BASE} AND left(r.current_status::text, 6) = 'UNDER_'
-            GROUP BY ws.name, ws.code, ws.stage_id ORDER BY ws.stage_id`, [fy]],
+            ${WHERE_BASE} AND left(r.current_status::text, 6) = 'UNDER_'
+            GROUP BY ws.name, ws.code, ws.stage_id ORDER BY ws.stage_id`, [fy, targetDeptId ?? null]],
         [`SELECT ri.item_type_snapshot::text AS item_type, count(*)::int AS lines,
                  COALESCE(sum(ri.requested_quantity), 0) AS requested_qty,
                  COALESCE(sum(ri.approved_quantity), 0) AS approved_qty,
@@ -191,32 +245,71 @@ reportsRouter.get('/reports/summary', async (req, res) => {
                  COALESCE(sum(ri.approved_amount), 0) AS approved
             FROM request_items ri JOIN requests r ON r.request_id = ri.request_id
            WHERE r.current_status <> 'DRAFT' AND r.financial_year_id = $1
-           GROUP BY ri.item_type_snapshot ORDER BY requested DESC`, [fy]],
+             AND ($2::int IS NULL OR r.department_id = $2)
+           GROUP BY ri.item_type_snapshot ORDER BY requested DESC`, [fy, targetDeptId ?? null]],
         [`SELECT COALESCE(c.funding_type::text, 'UNSPECIFIED') AS funding, ${AGG}
-            ${BASE} GROUP BY c.funding_type ORDER BY requested DESC`, [fy, decided]],
+            ${WHERE_AGG} GROUP BY c.funding_type ORDER BY requested DESC`, [fy, decided, targetDeptId ?? null]],
         [`SELECT to_char(date_trunc('month', COALESCE(r.submitted_at, r.created_at)), 'YYYY-MM') AS month, ${AGG}
-            ${BASE} GROUP BY 1 ORDER BY 1`, [fy, decided]],
+            ${WHERE_AGG} GROUP BY 1 ORDER BY 1`, [fy, decided, targetDeptId ?? null]],
         [`SELECT department_name, budget_head_name, allocated_amount, utilized_amount,
                  committed_amount, remaining_amount
             FROM v_department_budget_summary WHERE financial_year_id = $1
-           ORDER BY department_name, budget_head_name NULLS FIRST`, [fy]],
-        [`SELECT request_number, title, raised_by_name, current_status, current_stage_name,
-                 tentative_total_cost, days_pending, submitted_at
-            FROM v_pending_requests
-           WHERE financial_year_id = $1 AND current_status <> 'DRAFT' AND days_pending > 3
-           ORDER BY days_pending DESC, request_number`, [fy]],
-        [`SELECT r.request_number, r.title, r.current_status::text AS status, u.full_name AS raised_by,
+             AND ($2::int IS NULL OR department_id = $2)
+           ORDER BY department_name, budget_head_name NULLS FIRST`, [fy, targetDeptId ?? null]],
+        [`SELECT r.request_number, r.title, u.full_name AS raised_by_name, r.current_status,
+                 ws.name AS current_stage_name, r.tentative_total_cost,
+                 EXTRACT(DAY FROM NOW() - COALESCE(r.submitted_at, r.created_at))::INT AS days_pending,
+                 r.submitted_at
+            FROM requests r
+            JOIN users u ON u.user_id = r.raised_by
+            LEFT JOIN workflow_stages ws ON ws.stage_id = r.current_stage_id
+           WHERE r.financial_year_id = $1
+             AND r.current_status <> 'DRAFT'
+             AND EXTRACT(DAY FROM NOW() - COALESCE(r.submitted_at, r.created_at))::INT > 3
+             AND ($2::int IS NULL OR r.department_id = $2)
+           ORDER BY days_pending DESC, r.request_number`, [fy, targetDeptId ?? null]],
+        [`SELECT r.request_id, r.request_number, r.title, r.current_status::text AS status, u.full_name AS raised_by,
                  d.name AS department, bh.name AS budget_head, ws.name AS stage,
                  r.tentative_total_cost AS requested, r.sanctioned_amount AS sanctioned,
                  r.submitted_at, r.closed_at
-            ${BASE} ORDER BY r.submitted_at NULLS LAST, r.request_number`, [fy]],
-        [`SELECT status::text AS status, count(*)::int AS n FROM issues
-           WHERE $1::date IS NULL OR (created_at >= $1::date AND created_at < $2::date + 1)
-           GROUP BY status ORDER BY n DESC`, [year.start_date, year.end_date]],
+            ${WHERE_BASE} ORDER BY r.submitted_at NULLS LAST, r.request_number`, [fy, targetDeptId ?? null]],
+        [`SELECT i.status::text AS status, count(*)::int AS n
+            FROM issues i
+            JOIN users u ON u.user_id = i.raised_by
+           WHERE ($1::date IS NULL OR (i.created_at >= $1::date AND i.created_at < $2::date + 1))
+             AND ($3::int IS NULL OR u.department_id = $3)
+           GROUP BY i.status ORDER BY n DESC`, [year.start_date, year.end_date, targetDeptId ?? null]],
+        [`SELECT ri.request_item_id, ri.request_id, r.request_number, r.title AS request_title,
+                 bi.name AS item_name, bi.unit, ri.item_type_snapshot::text AS item_type,
+                 ri.requested_quantity, ri.approved_quantity,
+                 ri.estimated_unit_cost, ri.estimated_total, ri.approved_amount,
+                 ri.item_status::text AS item_status, ri.remarks
+            FROM request_items ri
+            JOIN requests r        ON r.request_id = ri.request_id
+            JOIN budget_items bi   ON bi.budget_item_id = ri.budget_item_id
+           WHERE r.current_status <> 'DRAFT'
+             AND r.financial_year_id = $1
+             AND ($2::int IS NULL OR r.department_id = $2)
+           ORDER BY r.request_number, bi.name`, [fy, targetDeptId ?? null]],
+        [`SELECT i.issue_id, i.issue_number, i.title, i.description, i.status::text AS status,
+                 i.created_at, i.updated_at, i.escalated_at, i.resolved_at,
+                 u.full_name AS raised_by_name, d.name AS department_name, d.code AS department_code,
+                 at.full_name AS assigned_to_name, et.full_name AS escalated_to_name
+            FROM issues i
+            JOIN users u            ON u.user_id = i.raised_by
+            LEFT JOIN departments d ON d.department_id = u.department_id
+            LEFT JOIN users at      ON at.user_id = i.assigned_to
+            LEFT JOIN users et      ON et.user_id = i.escalated_to
+           WHERE ($1::date IS NULL OR (i.created_at >= $1::date AND i.created_at < $2::date + 1))
+             AND ($3::int IS NULL OR u.department_id = $3)
+           ORDER BY i.created_at DESC, i.issue_number`, [year.start_date, year.end_date, targetDeptId ?? null]],
       ]);
 
     return {
       financialYear: { id: fy, label: year.label, startDate: year.start_date, endDate: year.end_date },
+      department: dept,
+      isHigherAuthority,
+      canDownloadApprovalBudget: isHigherAuthority,
       generatedAt: new Date().toISOString(),
       generatedBy: { id: req.user.id, name: req.user.name, roles: req.user.roles },
       byBudgetHead: heads.rows.map((r) => ({
@@ -244,11 +337,43 @@ reportsRouter.get('/reports/summary', async (req, res) => {
         daysPending: r.days_pending, submittedAt: r.submitted_at,
       })),
       register: register.rows.map((r) => ({
-        requestNumber: r.request_number, title: r.title, status: r.status, raisedBy: r.raised_by,
+        id: r.request_id, requestNumber: r.request_number, title: r.title, status: r.status, raisedBy: r.raised_by,
         department: r.department, budgetHead: r.budget_head, stage: r.stage,
         requested: r.requested, sanctioned: r.sanctioned, submittedAt: r.submitted_at, closedAt: r.closed_at,
       })),
-      issues: issues.rows,
+      lineItems: lineItems.rows.map((r) => ({
+        id: r.request_item_id,
+        requestId: r.request_id,
+        requestNumber: r.request_number,
+        requestTitle: r.request_title,
+        itemName: r.item_name,
+        unit: r.unit,
+        itemType: r.item_type,
+        requestedQuantity: r.requested_quantity,
+        approvedQuantity: r.approved_quantity,
+        estimatedUnitCost: r.estimated_unit_cost,
+        estimatedTotal: r.estimated_total,
+        approvedAmount: r.approved_amount,
+        itemStatus: r.item_status,
+        remarks: r.remarks,
+      })),
+      issues: issuesCounts.rows,
+      issuesDetailed: issuesDetailed.rows.map((r) => ({
+        id: r.issue_id,
+        issueNumber: r.issue_number,
+        title: r.title,
+        description: r.description,
+        status: r.status,
+        raisedBy: r.raised_by_name,
+        department: r.department_name,
+        departmentCode: r.department_code,
+        assignedTo: r.assigned_to_name,
+        escalatedTo: r.escalated_to_name,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+        escalatedAt: r.escalated_at,
+        resolvedAt: r.resolved_at,
+      })),
     };
   });
   res.json(body);

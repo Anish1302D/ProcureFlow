@@ -105,16 +105,24 @@ authRouter.get('/me', requireAuth, async (req, res) => {
 });
 
 
+export const APPROVAL_BUDGET_ROLES = [
+  'PRINCIPAL', 'CHAIRMAN', 'VICE_PRESIDENT',
+  'CDC_MEMBER', 'CDC_GRANT_MEMBER', 'CDC_NON_GRANT_MEMBER', 'ADMIN',
+];
+
 async function describe(userId) {
   const { rows } = await anonQuery(
-    `SELECT u.user_id, u.email, u.full_name,
+    `SELECT u.user_id, u.email, u.full_name, u.department_id,
+            d.name AS department_name, d.code AS department_code,
             ARRAY(SELECT r.code FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id
                    WHERE ur.user_id = u.user_id ORDER BY r.code) AS roles,
             COALESCE((SELECT json_agg(json_build_object('stageId', ws.stage_id, 'code', ws.code,
                                                         'name', ws.name) ORDER BY ws.sequence_no)
                         FROM stage_approvers sa JOIN workflow_stages ws ON ws.stage_id = sa.stage_id
                        WHERE sa.user_id = u.user_id), '[]') AS stages
-       FROM users u WHERE u.user_id = $1`,
+       FROM users u
+       LEFT JOIN departments d ON d.department_id = u.department_id
+      WHERE u.user_id = $1`,
     [userId],
   );
   const u = rows[0];
@@ -123,6 +131,9 @@ async function describe(userId) {
     id: u.user_id,
     email: u.email,
     name: u.full_name,
+    departmentId: u.department_id,
+    departmentName: u.department_name,
+    departmentCode: u.department_code,
     roles: u.roles,
     stages: u.stages,
     // Hints for showing and hiding UI. The server enforces every one of these
@@ -133,6 +144,7 @@ async function describe(userId) {
       viewInventory: hasAnyRole(user, INVENTORY_READER_ROLES),
       viewAudit: u.roles.includes('ADMIN'),
       approve: u.stages.length > 0,
+      downloadApprovalBudget: hasAnyRole(user, APPROVAL_BUDGET_ROLES),
     },
   };
 }

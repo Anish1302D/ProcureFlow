@@ -17,7 +17,7 @@ export function issueToken(userId) {
 
 export async function loadUser(userId) {
   const { rows } = await anonQuery(
-    `SELECT u.user_id, u.email, u.full_name,
+    `SELECT u.user_id, u.email, u.full_name, u.department_id,
             ARRAY(SELECT r.code FROM user_roles ur
                     JOIN roles r ON r.role_id = ur.role_id
                    WHERE ur.user_id = u.user_id
@@ -27,8 +27,8 @@ export async function loadUser(userId) {
     [userId],
   );
   if (!rows[0]) return null;
-  const { user_id, email, full_name, roles } = rows[0];
-  return { id: user_id, email, name: full_name, roles };
+  const { user_id, email, full_name, department_id, roles } = rows[0];
+  return { id: user_id, email, name: full_name, departmentId: department_id, roles };
 }
 
 export async function requireAuth(req, _res, next) {

@@ -43,6 +43,7 @@ export const NAV = {
       { id: 'faculty-dashboard', label: 'Dashboard', icon: GraduationCap },
       { id: 'faculty-requests', label: 'My requests & issues', icon: FileText },
       { id: 'budget-provisions', label: 'Department budget', icon: Wallet },
+      { id: 'reports', label: 'Reports', icon: BarChart3 },
     ] },
   ],
   admin: [

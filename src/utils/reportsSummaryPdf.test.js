@@ -163,3 +163,96 @@ test('reportsSummaryPdf builds a valid multi-page institutional PDF with all sec
   const magic = Buffer.from(output).subarray(0, 8).toString('utf8');
   assert.ok(magic.startsWith('%PDF-1.'), 'PDF magic header valid');
 });
+
+test('departmentRequestsPdf generates valid PDF for department requisitions and line items', async () => {
+  const { generateDepartmentRequestsPdf } = await import('./departmentRequestsPdf.js');
+  const deptData = {
+    financialYear: { id: 1, label: '2026-27', startDate: '2026-04-01', endDate: '2027-03-31' },
+    department: { id: 2, code: 'CS', name: 'Computer Science' },
+    generatedAt: '2026-10-04T12:00:00.000Z',
+    generatedBy: { id: '00000000-0000-0000-0000-000000000002', name: 'Dr. A. Deshpande (Head, CS)', roles: ['HEAD'] },
+    register: [
+      {
+        id: 'req-1',
+        requestNumber: 'REQ-2026-0001',
+        title: 'Workstation Computers',
+        status: 'APPROVED',
+        raisedBy: 'Dr. A. Deshpande',
+        department: 'Computer Science',
+        budgetHead: 'IT Equipment',
+        stage: 'Principal Review',
+        requested: 300000,
+        sanctioned: 300000,
+        submittedAt: '2026-06-10T09:00:00Z',
+        closedAt: '2026-06-15T15:00:00Z',
+      },
+    ],
+    lineItems: [
+      {
+        id: 'item-1',
+        requestId: 'req-1',
+        requestNumber: 'REQ-2026-0001',
+        itemName: 'Dell Core i7 Workstation',
+        unit: 'piece',
+        itemType: 'CAPITAL',
+        requestedQuantity: 5,
+        approvedQuantity: 5,
+        estimatedUnitCost: 60000,
+        estimatedTotal: 300000,
+        approvedAmount: 300000,
+        itemStatus: 'APPROVED',
+        remarks: 'Procured for lab 3',
+      },
+    ],
+    byStage: [
+      { code: 'PRINCIPAL', stage: 'Principal Review', requests: 1, amount: 300000, avgDays: 2.5, maxDays: 4 },
+    ],
+  };
+
+  const doc = generateDepartmentRequestsPdf(deptData);
+  assert.ok(doc, 'document created');
+  const pages = doc.internal.getNumberOfPages();
+  assert.ok(pages >= 1, 'at least 1 page generated');
+  const output = doc.output('arraybuffer');
+  assert.ok(output.byteLength > 1500, 'sufficient PDF bytes');
+  assert.ok(Buffer.from(output).subarray(0, 8).toString('utf8').startsWith('%PDF-1.'));
+});
+
+test('issuesReportPdf generates valid PDF for campus issues and maintenance logs', async () => {
+  const { generateIssuesReportPdf } = await import('./issuesReportPdf.js');
+  const issuesData = {
+    financialYear: { id: 1, label: '2026-27', startDate: '2026-04-01', endDate: '2027-03-31' },
+    department: { id: 2, code: 'CS', name: 'Computer Science' },
+    generatedAt: '2026-10-04T12:00:00.000Z',
+    generatedBy: { id: '00000000-0000-0000-0000-000000000002', name: 'Dr. A. Deshpande (Head, CS)', roles: ['HEAD'] },
+    issuesDetailed: [
+      {
+        id: 'iss-1',
+        issueNumber: 'ISS-0001',
+        title: 'Projector display flickering in Room 102',
+        description: 'HDMI connection is unstable and projector bulb dims intermittently.',
+        status: 'RESOLVED',
+        raisedBy: 'Prof. K. Kulkarni',
+        department: 'Computer Science',
+        departmentCode: 'CS',
+        assignedTo: 'Estate Office',
+        escalatedTo: null,
+        createdAt: '2026-07-01T10:00:00Z',
+        updatedAt: '2026-07-03T11:00:00Z',
+        escalatedAt: null,
+        resolvedAt: '2026-07-03T11:00:00Z',
+      },
+    ],
+    issues: [
+      { status: 'RESOLVED', n: 1 },
+    ],
+  };
+
+  const doc = generateIssuesReportPdf(issuesData);
+  assert.ok(doc, 'document created');
+  const pages = doc.internal.getNumberOfPages();
+  assert.ok(pages >= 1, 'at least 1 page generated');
+  const output = doc.output('arraybuffer');
+  assert.ok(output.byteLength > 1500, 'sufficient PDF bytes');
+  assert.ok(Buffer.from(output).subarray(0, 8).toString('utf8').startsWith('%PDF-1.'));
+});
