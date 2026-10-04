@@ -126,15 +126,22 @@ function notifyRequestAsync({ request, actorId, action, comments, rejectionReaso
       if (!actor) return;
 
       // Resolve the requester (person who raised the request)
-      const { rows: requesterRows } = await pool.query(
-        'SELECT full_name, email FROM users WHERE user_id = $1', [request.raisedBy?.id],
+      const requesterId = request.raisedBy?.id || request.raised_by || (
+        request.id ? (await pool.query('SELECT raised_by FROM requests WHERE request_id = $1', [request.id])).then((r) => r.rows[0]?.raised_by) : null
       );
-      const requester = requesterRows[0];
+      let requester = null;
+      if (requesterId) {
+        const { rows: requesterRows } = await pool.query(
+          'SELECT user_id, full_name, email FROM users WHERE user_id = $1', [requesterId],
+        );
+        requester = requesterRows[0] || null;
+      }
 
       const principal = await resolvePrincipal();
       const now = new Date();
 
       if (action === 'SUBMITTED') {
+        // Notify Principal / Stage Approvers of new submission
         const emailData = buildRequestStatusEmail({
           request: { ...request, requesterEmail: requester?.email },
           recipientEmail: principal.email,
@@ -155,9 +162,76 @@ function notifyRequestAsync({ request, actorId, action, comments, rejectionReaso
           pendingSince: now,
           pendingDays: 0,
         });
-
         await sendMail(emailData);
-      } else if (['APPROVE', 'PARTIAL_APPROVE', 'REJECT', 'ESCALATE', 'FORWARD', 'RETURN', 'RESUBMIT'].includes(action)) {
+
+        // Notify the requester that submission succeeded
+        if (requester?.email) {
+          const requesterEmailData = buildRequestStatusEmail({
+            request: { ...request, requesterEmail: requester.email },
+            recipientEmail: requester.email,
+            recipientName: requester.full_name,
+            notificationType: 'REQUEST SUBMITTED',
+            emailAction: 'Request Submitted Successfully',
+            eventDescription:
+              `Your financial request "${request.title}" has been submitted and is now awaiting review.`,
+            decision: 'PENDING REVIEW',
+            approverName: null,
+            approverRole: null,
+            decisionDate: null,
+            actionRequired: 'No action required at this time. You will be notified when a decision is recorded.',
+            ctaText: 'View Request',
+            workflowStage: request.stage?.name || 'Submitted',
+            nextStage: 'Committee / Principal Review',
+            pendingSince: now,
+            pendingDays: 0,
+          });
+          await sendMail(requesterEmailData);
+        }
+      } else if (action === 'RESUBMIT') {
+        // Notify Principal / Stage Approvers of resubmission
+        const resubmitEmailData = buildRequestStatusEmail({
+          request: { ...request, requesterEmail: requester?.email },
+          recipientEmail: principal.email,
+          recipientName: principal.name,
+          notificationType: 'RESUBMITTED',
+          emailAction: 'Request Resubmitted by Requester',
+          eventDescription: `Financial request "${request.title}" has been resubmitted by ${actor.full_name} and is now awaiting review.`,
+          decision: 'PENDING REVIEW',
+          approverName: actor.full_name,
+          approverRole: 'Requester',
+          decisionDate: now,
+          actionRequired: 'Please review the updated request.',
+          ctaText: 'Review Request',
+          workflowStage: request.stage?.name || request.status,
+          nextStage: request.stage?.name || request.status,
+          pendingSince: now,
+          pendingDays: 0,
+        });
+        await sendMail(resubmitEmailData);
+
+        // Notify the requester that resubmission succeeded
+        if (requester?.email) {
+          const requesterResubmitEmail = buildRequestStatusEmail({
+            request: { ...request, requesterEmail: requester.email },
+            recipientEmail: requester.email,
+            recipientName: requester.full_name,
+            notificationType: 'RESUBMITTED',
+            emailAction: 'Request Resubmitted Successfully',
+            eventDescription: `Your financial request "${request.title}" has been resubmitted and is now awaiting review.`,
+            decision: 'RESUBMITTED',
+            approverName: actor.full_name,
+            approverRole: 'Requester',
+            decisionDate: now,
+            actionRequired: 'No action required at this time.',
+            ctaText: 'View Request',
+            workflowStage: request.stage?.name || request.status,
+            nextStage: request.stage?.name || request.status,
+            pendingSince: now,
+            pendingDays: 0,
+          });
+          await sendMail(requesterResubmitEmail);
+        }
+      } else if (['APPROVE', 'PARTIAL_APPROVE', 'REJECT', 'ESCALATE', 'FORWARD', 'RETURN'].includes(action)) {
         const typeMap = {
           APPROVE: 'APPROVAL',
           PARTIAL_APPROVE: 'PARTIAL APPROVAL',
@@ -165,7 +239,6 @@ function notifyRequestAsync({ request, actorId, action, comments, rejectionReaso
           ESCALATE: 'ESCALATION',
           FORWARD: 'ESCALATION',
           RETURN: 'CORRECTION REQUESTED',
-          RESUBMIT: 'RESUBMITTED',
         };
         const actionMap = {
           APPROVE: 'Request Fully Approved',
@@ -174,7 +247,6 @@ function notifyRequestAsync({ request, actorId, action, comments, rejectionReaso
           ESCALATE: 'Request Escalated to Next Stage',
           FORWARD: 'Request Forwarded to Next Stage',
           RETURN: 'Request Sent Back for Correction',
-          RESUBMIT: 'Request Resubmitted by Requester',
         };
         const descriptionMap = {
           APPROVE: `Your financial request "${request.title}" has been fully approved by ${actor.full_name}.`,
@@ -183,7 +255,6 @@ function notifyRequestAsync({ request, actorId, action, comments, rejectionReaso
           ESCALATE: `Your financial request "${request.title}" has been escalated to the next review stage by ${actor.full_name}.`,
           FORWARD: `Your financial request "${request.title}" has been forwarded to the next review stage by ${actor.full_name}.`,
           RETURN: `Your financial request "${request.title}" has been returned for correction by ${actor.full_name}.`,
-          RESUBMIT: `Financial request "${request.title}" has been resubmitted by ${actor.full_name}.`,
         };
 
         // Notify BOTH CDC members on entering CDC stage
@@ -238,11 +309,14 @@ function notifyRequestAsync({ request, actorId, action, comments, rejectionReaso
           }
         }
 
-        // Notify requester / principal
+        // Notify the requester (member/HOD) at the email configured in User Management
+        const recipientEmail = requester?.email || principal.email;
+        const recipientName = requester?.full_name || requester?.name || principal.name;
+
         const emailData = buildRequestStatusEmail({
           request: { ...request, requesterEmail: requester?.email },
-          recipientEmail: principal.email,
-          recipientName: requester?.full_name || principal.name,
+          recipientEmail,
+          recipientName,
           notificationType: typeMap[action] || 'NOTIFICATION',
           emailAction: actionMap[action] || 'Request Updated',
           eventDescription: descriptionMap[action] || `Request status updated.`,
@@ -261,6 +335,31 @@ function notifyRequestAsync({ request, actorId, action, comments, rejectionReaso
         });
 
         await sendMail(emailData);
+
+        // Keep Principal informed if Principal was neither the actor nor the requester
+        if (principal?.email && principal.email !== recipientEmail && principal.email !== actor.email) {
+          const principalEmailData = buildRequestStatusEmail({
+            request: { ...request, requesterEmail: requester?.email },
+            recipientEmail: principal.email,
+            recipientName: principal.name,
+            notificationType: typeMap[action] || 'NOTIFICATION',
+            emailAction: actionMap[action] || 'Request Updated',
+            eventDescription: `Financial request "${request.title}" was ${actionMap[action]?.toLowerCase() || 'updated'} by ${actor.full_name}.`,
+            decision: typeMap[action] || 'UPDATED',
+            approverName: actor.full_name,
+            approverRole: request.stage?.name || 'Approver',
+            decisionDate: now,
+            approvalRemarks: comments || null,
+            rejectionReason: rejectionReason || null,
+            actionRequired: 'No action required.',
+            ctaText: 'View Request',
+            workflowStage: request.stage?.name || request.status,
+            nextStage: request.status,
+            pendingSince: request.submittedAt || request.createdAt,
+            pendingDays: Math.floor((now - new Date(request.submittedAt || request.createdAt)) / 86400000),
+          });
+          await sendMail(principalEmailData);
+        }
       }
     } catch (err) {
       console.error('[requests] Failed to send request notification email:', err.message);
