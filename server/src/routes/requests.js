@@ -69,14 +69,16 @@ async function resolvePrincipal() {
   try {
     const { rows } = await pool.query(
       `SELECT u.full_name, u.email FROM users u
-         JOIN user_roles ur ON ur.user_id = u.user_id
-         JOIN roles r ON r.role_id = ur.role_id
-        WHERE r.code = 'PRINCIPAL' AND u.is_active
+         LEFT JOIN user_roles ur ON ur.user_id = u.user_id
+         LEFT JOIN roles r ON r.role_id = ur.role_id
+         LEFT JOIN stage_approvers sa ON sa.user_id = u.user_id
+         LEFT JOIN workflow_stages ws ON ws.stage_id = sa.stage_id
+        WHERE (r.code = 'PRINCIPAL' OR ws.code = 'PRINCIPAL') AND u.is_active
         LIMIT 1`,
     );
     if (rows.length > 0) {
       name = rows[0].full_name;
-      email = config.principalEmail || rows[0].email;
+      email = rows[0].email || config.principalEmail;
     }
   } catch { /* use defaults */ }
   return { email, name };
@@ -189,7 +191,11 @@ function notifyRequestAsync({ request, actorId, action, comments, rejectionReaso
             );
             for (const pc of pcRows) approversToNotify.push({ name: pc.full_name, email: pc.email });
           }
-          if (approversToNotify.length === 0 && principal?.email) {
+          if (
+            principal?.email &&
+            principal.email.toLowerCase() !== requester?.email?.toLowerCase() &&
+            !approversToNotify.some((a) => a.email.toLowerCase() === principal.email.toLowerCase())
+          ) {
             approversToNotify.push({ name: principal.name, email: principal.email });
           }
 
@@ -208,7 +214,9 @@ function notifyRequestAsync({ request, actorId, action, comments, rejectionReaso
                 approverName: null,
                 approverRole: null,
                 decisionDate: null,
-                actionRequired: 'Please review this request and take the appropriate action.',
+                actionRequired: approver.email.toLowerCase() === principal?.email?.toLowerCase() && request.stage?.code === 'PURCHASE_COMMITTEE'
+                  ? 'A new request has been submitted for college review. You will also be prompted to record your decision when it reaches your stage.'
+                  : 'Please review this request and take the appropriate action.',
                 ctaText: 'Review Request',
                 workflowStage: request.stage?.name || 'Submitted',
                 nextStage: request.stage?.name || 'Review',
@@ -304,7 +312,7 @@ function notifyRequestAsync({ request, actorId, action, comments, rejectionReaso
         };
 
         // 1. Notify Principal if request was forwarded to Principal review (e.g. from Purchase Committee)
-        if (request.status === 'UNDER_PRINCIPAL_REVIEW' && principal?.email && actor.email !== principal.email) {
+        if (request.status === 'UNDER_PRINCIPAL_REVIEW' && principal?.email && actor.email?.toLowerCase() !== principal.email.toLowerCase()) {
           try {
             const principalReviewEmail = buildRequestStatusEmail({
               request: { ...request, requesterEmail: requester?.email },
@@ -443,7 +451,12 @@ function notifyRequestAsync({ request, actorId, action, comments, rejectionReaso
         }
 
         // 5. Keep Principal informed if Principal was neither the actor nor the requester and stage is not already principal review
-        if (principal?.email && principal.email !== recipientEmail && principal.email !== actor.email && request.status !== 'UNDER_PRINCIPAL_REVIEW') {
+        if (
+          principal?.email &&
+          principal.email.toLowerCase() !== recipientEmail?.toLowerCase() &&
+          principal.email.toLowerCase() !== actor.email?.toLowerCase() &&
+          request.status !== 'UNDER_PRINCIPAL_REVIEW'
+        ) {
           try {
             const principalEmailData = buildRequestStatusEmail({
               request: { ...request, requesterEmail: requester?.email },

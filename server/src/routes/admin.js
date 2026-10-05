@@ -141,6 +141,23 @@ adminRouter.post('/users', async (req, res) => {
       [userId, body.roleIds],
     );
 
+    if (body.roleIds && body.roleIds.length) {
+      await db.query(
+        `INSERT INTO stage_approvers (stage_id, user_id, role_id)
+         SELECT ws.stage_id, $1, r.role_id
+           FROM roles r
+           JOIN workflow_stages ws ON (
+             (r.code = 'PURCHASE_COMMITTEE' AND ws.code = 'PURCHASE_COMMITTEE') OR
+             (r.code = 'PRINCIPAL' AND ws.code = 'PRINCIPAL') OR
+             (r.code IN ('CDC_GRANT_MEMBER', 'CDC_NON_GRANT_MEMBER', 'CDC_MEMBER') AND ws.code = 'CDC') OR
+             (r.code IN ('CHAIRMAN', 'VICE_PRESIDENT') AND ws.code = 'FINAL_AUTHORITY')
+           )
+          WHERE r.role_id = ANY($2::int[])
+         ON CONFLICT (stage_id, user_id) DO NOTHING`,
+        [userId, body.roleIds],
+      );
+    }
+
     return userId;
   });
 
@@ -211,6 +228,23 @@ adminRouter.patch('/users/:id', async (req, res) => {
         await db.query(
           `INSERT INTO user_roles (user_id, role_id)
            SELECT $1, unnest($2::int[]) ON CONFLICT DO NOTHING`,
+          [userId, body.roleIds],
+        );
+      }
+      await db.query('DELETE FROM stage_approvers WHERE user_id = $1', [userId]);
+      if (body.roleIds.length) {
+        await db.query(
+          `INSERT INTO stage_approvers (stage_id, user_id, role_id)
+           SELECT ws.stage_id, $1, r.role_id
+             FROM roles r
+             JOIN workflow_stages ws ON (
+               (r.code = 'PURCHASE_COMMITTEE' AND ws.code = 'PURCHASE_COMMITTEE') OR
+               (r.code = 'PRINCIPAL' AND ws.code = 'PRINCIPAL') OR
+               (r.code IN ('CDC_GRANT_MEMBER', 'CDC_NON_GRANT_MEMBER', 'CDC_MEMBER') AND ws.code = 'CDC') OR
+               (r.code IN ('CHAIRMAN', 'VICE_PRESIDENT') AND ws.code = 'FINAL_AUTHORITY')
+             )
+            WHERE r.role_id = ANY($2::int[])
+           ON CONFLICT (stage_id, user_id) DO NOTHING`,
           [userId, body.roleIds],
         );
       }

@@ -181,14 +181,16 @@ issuesRouter.post('/', async (req, res) => {
       try {
         const { rows: principalRows } = await pool.query(
           `SELECT u.full_name, u.email FROM users u
-             JOIN user_roles ur ON ur.user_id = u.user_id
-             JOIN roles r ON r.role_id = ur.role_id
-            WHERE r.code = 'PRINCIPAL' AND u.is_active
+             LEFT JOIN user_roles ur ON ur.user_id = u.user_id
+             LEFT JOIN roles r ON r.role_id = ur.role_id
+             LEFT JOIN stage_approvers sa ON sa.user_id = u.user_id
+             LEFT JOIN workflow_stages ws ON ws.stage_id = sa.stage_id
+            WHERE (r.code = 'PRINCIPAL' OR ws.code = 'PRINCIPAL') AND u.is_active
             LIMIT 1`,
         );
         if (principalRows.length > 0) {
           principalName = principalRows[0].full_name;
-          principalEmail = config.principalEmail || principalRows[0].email;
+          principalEmail = principalRows[0].email || config.principalEmail;
         }
       } catch (dbErr) {
         console.warn('[issues] Principal lookup failed, using config fallback:', dbErr.message);
