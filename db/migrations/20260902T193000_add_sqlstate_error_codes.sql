@@ -1,4 +1,4 @@
--- Add explicit SQLSTATE codes to the workflow functions.
++-- Add explicit SQLSTATE codes to the workflow functions.
 --
 -- WHY
 -- These functions previously raised errors with plain messages, so an API
