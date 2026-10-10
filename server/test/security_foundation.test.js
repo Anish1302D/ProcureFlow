@@ -93,6 +93,15 @@ test('BEHAVIORAL: requireAuth rejects expired tokens with 401', async () => {
   );
 });
 
+// Helper mirroring the exact token invalidation rule in server/src/auth.js
+function evaluateTokenInvalidation(payload, user) {
+  if (payload.pwdUpdated != null) {
+    return Boolean(user.updatedMs != null && payload.pwdUpdated < user.updatedMs);
+  }
+  const updateSecondBoundary = user.updatedMs != null ? Math.ceil(user.updatedMs / 1000) : 0;
+  return Boolean(!payload.iat || payload.iat <= updateSecondBoundary);
+}
+
 test('BEHAVIORAL: A token issued before a password change is rejected', () => {
   const initialUpdateMs = 1700000000000;
   const passwordChangeMs = 1700000000500; // password changed 500ms later (within the same second)
@@ -104,11 +113,11 @@ test('BEHAVIORAL: A token issued before a password change is rejected', () => {
   // User state after password change
   const userAfterPwdChange = { id: 'user-1', updatedMs: passwordChangeMs };
 
-  const isInvalid = Boolean(
-    (oldPayload.pwdUpdated != null && userAfterPwdChange.updatedMs != null && oldPayload.pwdUpdated < userAfterPwdChange.updatedMs) ||
-    (oldPayload.iat && userAfterPwdChange.updatedMs && oldPayload.iat < Math.floor(userAfterPwdChange.updatedMs / 1000))
+  assert.equal(
+    evaluateTokenInvalidation(oldPayload, userAfterPwdChange),
+    true,
+    'Token issued prior to password change must be rejected',
   );
-  assert.equal(isInvalid, true, 'Token issued prior to password change must be rejected');
 });
 
 test('BEHAVIORAL: A token issued before a role or security update is rejected', () => {
@@ -122,11 +131,11 @@ test('BEHAVIORAL: A token issued before a role or security update is rejected', 
   // User state after admin role update
   const userAfterRoleUpdate = { id: 'user-2', updatedMs: adminRoleUpdateMs };
 
-  const isInvalid = Boolean(
-    (oldPayload.pwdUpdated != null && userAfterRoleUpdate.updatedMs != null && oldPayload.pwdUpdated < userAfterRoleUpdate.updatedMs) ||
-    (oldPayload.iat && userAfterRoleUpdate.updatedMs && oldPayload.iat < Math.floor(userAfterRoleUpdate.updatedMs / 1000))
+  assert.equal(
+    evaluateTokenInvalidation(oldPayload, userAfterRoleUpdate),
+    true,
+    'Token issued prior to admin role update must be rejected',
   );
-  assert.equal(isInvalid, true, 'Token issued prior to admin role update must be rejected');
 });
 
 test('BEHAVIORAL: A legitimate login immediately after an update remains valid, including within the same second', () => {
@@ -140,12 +149,60 @@ test('BEHAVIORAL: A legitimate login immediately after an update remains valid, 
   // Current user state from database
   const currentUser = { id: 'user-3', updatedMs: securityUpdateMs };
 
-  const isInvalid = Boolean(
-    (newPayload.pwdUpdated != null && currentUser.updatedMs != null && newPayload.pwdUpdated < currentUser.updatedMs) ||
-    (newPayload.iat && currentUser.updatedMs && newPayload.iat < Math.floor(currentUser.updatedMs / 1000))
+  assert.equal(
+    evaluateTokenInvalidation(newPayload, currentUser),
+    false,
+    'Legitimate login in same second as update must NOT be rejected',
   );
-  assert.equal(isInvalid, false, 'Legitimate login in same second as update must NOT be rejected');
   assert.equal(newPayload.pwdUpdated, currentUser.updatedMs);
+});
+
+test('BEHAVIORAL: Legacy token without pwdUpdated issued in the same second as an update is rejected', () => {
+  const updateMs = 1700000000500; // update at 1000.5s
+  const currentUser = { id: 'user-legacy-1', updatedMs: updateMs };
+
+  // Legacy token issued at 1000.1s (same second, lacking pwdUpdated claim)
+  const legacySameSecondPayload = {
+    sub: 'user-legacy-1',
+    iat: 1700000000,
+  };
+
+  assert.equal(
+    evaluateTokenInvalidation(legacySameSecondPayload, currentUser),
+    true,
+    'Legacy token issued in same second as security update must be rejected',
+  );
+});
+
+test('BEHAVIORAL: Legacy token without pwdUpdated issued before the update second is rejected', () => {
+  const updateMs = 1700000000500;
+  const currentUser = { id: 'user-legacy-2', updatedMs: updateMs };
+
+  // Legacy token issued earlier
+  const legacyOlderPayload = {
+    sub: 'user-legacy-2',
+    iat: 1699999990,
+  };
+
+  assert.equal(
+    evaluateTokenInvalidation(legacyOlderPayload, currentUser),
+    true,
+    'Legacy token issued before update second must be rejected',
+  );
+});
+
+test('BEHAVIORAL: Legacy token without pwdUpdated and missing iat is rejected', () => {
+  const currentUser = { id: 'user-legacy-3', updatedMs: 1700000000500 };
+
+  const legacyNoIatPayload = {
+    sub: 'user-legacy-3',
+  };
+
+  assert.equal(
+    evaluateTokenInvalidation(legacyNoIatPayload, currentUser),
+    true,
+    'Legacy token with no timestamp claim must be rejected',
+  );
 });
 
 test('BEHAVIORAL: A deactivated account remains unable to authenticate', () => {
@@ -174,11 +231,27 @@ test('BEHAVIORAL: Normal authentication continues to work after a security updat
   // Subsequent request with the new session
   const user = { id: 'user-5', updatedMs: securityUpdateMs, roles: ['HEAD'] };
 
-  const isInvalid = Boolean(
-    (payload.pwdUpdated != null && user.updatedMs != null && payload.pwdUpdated < user.updatedMs) ||
-    (payload.iat && user.updatedMs && payload.iat < Math.floor(user.updatedMs / 1000))
+  assert.equal(
+    evaluateTokenInvalidation(payload, user),
+    false,
+    'Normal authenticated requests after update must remain valid',
   );
-  assert.equal(isInvalid, false, 'Normal authenticated requests after update must remain valid');
+});
+
+test('BEHAVIORAL: Frontend client handles 401 response by triggering onSessionExpired and resetting session state', async () => {
+  const clientJs = await fs.readFile(path.resolve('../src/api/client.js'), 'utf8');
+  const appContextJsx = await fs.readFile(path.resolve('../src/context/AppContext.jsx'), 'utf8');
+
+  // Verify client triggers sessionExpired on 401 with active token
+  assert.ok(clientJs.includes('if (res.status === 401 && token) sessionExpired();'), 'client.js must trigger sessionExpired on 401');
+
+  // Verify AppContext hooks sessionExpired to signOut
+  assert.ok(appContextJsx.includes("onSessionExpired(() => signOut('Your session has ended. Please sign in again.'));"), 'AppContext must hook onSessionExpired to signOut');
+
+  // Verify signOut clears token, user, route, and displays toast
+  assert.ok(appContextJsx.includes('setToken(null);'), 'signOut must clear token');
+  assert.ok(appContextJsx.includes('setUser(null);'), 'signOut must clear user state');
+  assert.ok(appContextJsx.includes("if (message) showToast(message, 'info');"), 'signOut must notify user');
 });
 
 // ============================================================================

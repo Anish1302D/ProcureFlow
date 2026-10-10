@@ -65,12 +65,16 @@ export async function requireAuth(req, _res, next) {
     throw new HttpError(401, 'Account not found or disabled');
   }
   // Invalidate tokens issued prior to the user's last password or credential update.
-  if (payload.pwdUpdated != null && user.updatedMs != null) {
-    if (payload.pwdUpdated < user.updatedMs) {
+  if (payload.pwdUpdated != null) {
+    if (user.updatedMs != null && payload.pwdUpdated < user.updatedMs) {
       throw new HttpError(401, 'Your session has expired due to a security update. Please sign in again.');
     }
-  } else if (payload.iat && user.updatedMs != null) {
-    if (payload.iat < Math.floor(user.updatedMs / 1000)) {
+  } else {
+    // Legacy tokens without the required security-version claim (pwdUpdated) cannot
+    // reliably establish sub-second validity against security updates. Require
+    // reauthentication whenever the token was issued at or before the update second boundary.
+    const updateSecondBoundary = user.updatedMs != null ? Math.ceil(user.updatedMs / 1000) : 0;
+    if (!payload.iat || payload.iat <= updateSecondBoundary) {
       throw new HttpError(401, 'Your session has expired due to a security update. Please sign in again.');
     }
   }
