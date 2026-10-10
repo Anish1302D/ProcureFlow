@@ -14,6 +14,19 @@ const loginSchema = z.object({
   password: z.string().min(1).max(200),
 });
 
+// Global IP rate limiter to protect against credential stuffing across accounts.
+// 60 attempts per 15 minutes per IP allows shared campus networks while blocking automated attacks.
+const loginIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator(req.ip),
+  handler: (_req, _res, next) => {
+    next(new HttpError(429, 'Too many sign-in attempts from this network. Try again later.'));
+  },
+});
+
 // Ten attempts per quarter hour for each address from each client. Keyed on
 // both, so one person mistyping cannot lock out a shared college network.
 const loginLimiter = rateLimit({
@@ -32,14 +45,16 @@ const loginLimiter = rateLimit({
 // response time alone would reveal which addresses have accounts.
 const DUMMY_HASH = bcrypt.hashSync('not-a-real-password', 12);
 
-authRouter.post('/login', loginLimiter, async (req, res) => {
+authRouter.post('/login', loginIpLimiter, loginLimiter, async (req, res) => {
   const { email, password } = loginSchema.parse(req.body);
 
   // Passwords are compared here, in the API, rather than with crypt() in SQL:
   // that would send the plaintext to the database, where statement logging
   // could record it. pgcrypto's bcrypt hashes are standard $2a$ hashes.
   const { rows } = await anonQuery(
-    'SELECT user_id, password_hash FROM users WHERE email = $1 AND is_active',
+    `SELECT user_id, password_hash,
+            (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint AS updated_ms
+       FROM users WHERE email = $1 AND is_active`,
     [email],
   );
   const account = rows[0];
@@ -62,7 +77,10 @@ authRouter.post('/login', loginLimiter, async (req, res) => {
     ),
   );
 
-  res.json({ token: issueToken(account.user_id), user: await describe(account.user_id) });
+  res.json({
+    token: issueToken(account.user_id, account.updated_ms),
+    user: await describe(account.user_id),
+  });
 });
 
 // Signing out is the client discarding its token; there is no server session.
@@ -70,13 +88,30 @@ authRouter.post('/logout', requireAuth, (_req, res) => {
   res.status(204).end();
 });
 
-// Self-service password change. Requires knowing the current password.
-const changePasswordSchema = z.object({
-  currentPassword: z.string().min(1).max(200),
-  newPassword: z.string().min(8).max(200),
+// Five password change attempts per quarter hour per user/IP.
+const changePasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => `${ipKeyGenerator(req.ip)}|${req.user?.id || ''}`,
+  handler: (_req, _res, next) => {
+    next(new HttpError(429, 'Too many password change attempts. Try again in 15 minutes.'));
+  },
 });
 
-authRouter.post('/change-password', requireAuth, async (req, res) => {
+// Self-service password change. Requires knowing the current password.
+const changePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1, 'Current password is required').max(200),
+    newPassword: z.string().min(8, 'New password must be at least 8 characters').max(200),
+  })
+  .refine((v) => v.currentPassword !== v.newPassword, {
+    message: 'New password must be different from current password',
+    path: ['newPassword'],
+  });
+
+authRouter.post('/change-password', requireAuth, changePasswordLimiter, async (req, res) => {
   const { currentPassword, newPassword } = changePasswordSchema.parse(req.body);
 
   const { rows } = await anonQuery(
