@@ -62,6 +62,7 @@ jobs:
           --health-retries 10
 
     env:
+      NODE_ENV: test
       # The suite rewrites the database name to spc_api_test; only the
       # credentials and host matter here.
       DATABASE_URL: postgresql://app_user:ci_app_user_password@localhost:5432/spc_approval

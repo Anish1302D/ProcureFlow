@@ -16,13 +16,13 @@ const loginSchema = z.object({
 
 // Global IP rate limiter to protect against credential stuffing across accounts.
 // 60 attempts per 15 minutes per IP allows shared campus networks while blocking automated attacks.
-const loginIpLimiter = rateLimit({
+export const loginIpLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 60,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   keyGenerator: (req) => ipKeyGenerator(req.ip),
-  skip: (req) => process.env.NODE_ENV === 'test' || ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.ip),
+  skip: () => process.env.NODE_ENV === 'test',
   handler: (_req, _res, next) => {
     next(new HttpError(429, 'Too many sign-in attempts from this network. Try again later.'));
   },
@@ -30,7 +30,7 @@ const loginIpLimiter = rateLimit({
 
 // Ten attempts per quarter hour for each address from each client. Keyed on
 // both, so one person mistyping cannot lock out a shared college network.
-const loginLimiter = rateLimit({
+export const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 10,
   standardHeaders: 'draft-8',

@@ -14,6 +14,28 @@ process.env.SIGNING_SECRET = process.env.SIGNING_SECRET || 'test-signing-secret-
 const { config } = await import('../src/config.js');
 const { issueToken, requireAuth, requireRole } = await import('../src/auth.js');
 const { HttpError, forbidden, conflict, unprocessable } = await import('../src/errors.js');
+const { loginIpLimiter, loginLimiter } = await import('../src/routes/auth.js');
+const { ipKeyGenerator } = await import('express-rate-limit');
+
+function invokeLimiter(limiter, req) {
+  return new Promise((resolve, reject) => {
+    const headers = {};
+    const res = {
+      setHeader: (k, v) => { headers[k.toLowerCase()] = v; },
+      getHeader: (k) => headers[k.toLowerCase()],
+      append: (k, v) => {
+        const key = k.toLowerCase();
+        headers[key] = (headers[key] ? headers[key] + ', ' : '') + v;
+      },
+      status: () => res,
+      send: () => res,
+    };
+    limiter(req, res, (err) => {
+      if (err) reject(err);
+      else resolve(headers);
+    });
+  });
+}
 
 // ============================================================================
 // 1. BACKEND HTTP SECURITY HEADERS (BEHAVIORAL)
@@ -534,7 +556,7 @@ test('SECURITY: changePasswordSchema rejects identical current and new passwords
   assert.equal(validResult.success, true);
 });
 
-test('SECURITY: Auth routes implement brute-force rate limiters', async () => {
+test('SECURITY: Auth routes implement brute-force rate limiters without loopback exemption', async () => {
   const authRoutesCode = await fs.readFile(path.resolve('src/routes/auth.js'), 'utf8');
   assert.ok(authRoutesCode.includes('loginIpLimiter'));
   assert.ok(authRoutesCode.includes('limit: 60'));
@@ -542,6 +564,113 @@ test('SECURITY: Auth routes implement brute-force rate limiters', async () => {
   assert.ok(authRoutesCode.includes('limit: 10'));
   assert.ok(authRoutesCode.includes('changePasswordLimiter'));
   assert.ok(authRoutesCode.includes('limit: 5'));
+  // Regression check: ensure loopback exemption has been completely removed
+  assert.ok(!authRoutesCode.includes("'127.0.0.1'"), 'auth.js must not contain loopback exemption for rate limiting');
+  assert.ok(!authRoutesCode.includes("'::1'"), 'auth.js must not contain IPv6 loopback exemption for rate limiting');
+  assert.ok(authRoutesCode.includes("skip: () => process.env.NODE_ENV === 'test'"));
+});
+
+test('BEHAVIORAL: Global login limiter is bypassed in NODE_ENV=test', async () => {
+  const prevEnv = process.env.NODE_ENV;
+  const testIp = '198.51.100.1';
+  try {
+    process.env.NODE_ENV = 'test';
+    // Send 65 requests (> 60 limit). All must succeed without 429 when NODE_ENV === 'test'.
+    for (let i = 0; i < 65; i++) {
+      await invokeLimiter(loginIpLimiter, { ip: testIp, headers: {} });
+    }
+  } finally {
+    process.env.NODE_ENV = prevEnv;
+    loginIpLimiter.resetKey(ipKeyGenerator(testIp));
+  }
+});
+
+test('BEHAVIORAL: Loopback requests (127.0.0.1 and ::1) are NOT exempt when NODE_ENV=production', async () => {
+  const prevEnv = process.env.NODE_ENV;
+  const loopbackIps = ['127.0.0.1', '::1'];
+  try {
+    process.env.NODE_ENV = 'production';
+    for (const ip of loopbackIps) {
+      loginIpLimiter.resetKey(ipKeyGenerator(ip));
+      // First call receives draft-8 headers proving it is tracked and not skipped
+      const firstHeaders = await invokeLimiter(loginIpLimiter, { ip, headers: {} });
+      assert.ok(firstHeaders.ratelimit || firstHeaders['ratelimit-policy'], `Loopback ${ip} must be tracked in production`);
+
+      // Complete 60 allowed requests
+      for (let i = 1; i < 60; i++) {
+        await invokeLimiter(loginIpLimiter, { ip, headers: {} });
+      }
+
+      // 61st attempt must be rejected with 429 HttpError
+      await assert.rejects(
+        () => invokeLimiter(loginIpLimiter, { ip, headers: {} }),
+        (err) => err instanceof HttpError && err.status === 429 && err.message.includes('Too many sign-in attempts from this network'),
+        `Loopback ${ip} must be blocked on attempt 61 in production`,
+      );
+    }
+  } finally {
+    process.env.NODE_ENV = prevEnv;
+    for (const ip of loopbackIps) {
+      loginIpLimiter.resetKey(ipKeyGenerator(ip));
+    }
+  }
+});
+
+test('BEHAVIORAL: Global limiter rejects excessive login attempts from external IPs in production', async () => {
+  const prevEnv = process.env.NODE_ENV;
+  const targetIp = '203.0.113.88';
+  try {
+    process.env.NODE_ENV = 'production';
+    loginIpLimiter.resetKey(ipKeyGenerator(targetIp));
+
+    for (let i = 0; i < 60; i++) {
+      await invokeLimiter(loginIpLimiter, { ip: targetIp, headers: {} });
+    }
+
+    await assert.rejects(
+      () => invokeLimiter(loginIpLimiter, { ip: targetIp, headers: {} }),
+      (err) => err instanceof HttpError && err.status === 429 && err.message.includes('Too many sign-in attempts from this network'),
+      'Global limiter must reject 61st attempt in production',
+    );
+  } finally {
+    process.env.NODE_ENV = prevEnv;
+    loginIpLimiter.resetKey(ipKeyGenerator(targetIp));
+  }
+});
+
+test('BEHAVIORAL: Per-IP/email limiter remains active and isolates accounts', async () => {
+  const prevEnv = process.env.NODE_ENV;
+  const ip = '198.51.100.42';
+  const emailA = 'student-a@spcollege.edu';
+  const emailB = 'student-b@spcollege.edu';
+  const reqA = { ip, headers: {}, body: { email: emailA } };
+  const reqB = { ip, headers: {}, body: { email: emailB } };
+
+  try {
+    process.env.NODE_ENV = 'production';
+    loginLimiter.resetKey(`${ipKeyGenerator(ip)}|${emailA}`);
+    loginLimiter.resetKey(`${ipKeyGenerator(ip)}|${emailB}`);
+
+    // Account A sends 10 attempts
+    for (let i = 0; i < 10; i++) {
+      await invokeLimiter(loginLimiter, reqA);
+    }
+
+    // Account A 11th attempt must be rejected
+    await assert.rejects(
+      () => invokeLimiter(loginLimiter, reqA),
+      (err) => err instanceof HttpError && err.status === 429 && err.message.includes('Too many sign-in attempts. Try again in a few minutes.'),
+      'Per-IP/email limiter must reject 11th attempt for account A',
+    );
+
+    // Account B from the same IP must still be allowed (not throttled by account A)
+    const headersB = await invokeLimiter(loginLimiter, reqB);
+    assert.ok(headersB.ratelimit || headersB['ratelimit-policy'], 'Account B must succeed and receive rate limit headers');
+  } finally {
+    process.env.NODE_ENV = prevEnv;
+    loginLimiter.resetKey(`${ipKeyGenerator(ip)}|${emailA}`);
+    loginLimiter.resetKey(`${ipKeyGenerator(ip)}|${emailB}`);
+  }
 });
 
 // ============================================================================
