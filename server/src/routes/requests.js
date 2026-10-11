@@ -4,7 +4,7 @@ import { requireRole } from '../auth.js';
 import { config } from '../config.js';
 import { pool, queryAll, withUser } from '../db.js';
 import { buildRequestStatusEmail } from '../emailTemplates.js';
-import { conflict, forbidden, notFound, unprocessable } from '../errors.js';
+import { HttpError, conflict, forbidden, notFound, unprocessable } from '../errors.js';
 import { sendMail } from '../mailer.js';
 import { REQUESTER_ROLES } from '../roles.js';
 import { seal, verifySeal } from '../signing.js';
@@ -1207,7 +1207,7 @@ requestsRouter.post('/:id/actions', async (req, res) => {
 
     // Explicit server-side staffed-stage authorization check.
     if (!stageRows[0].staffed_here) {
-      throw forbidden('You are not authorised to act on this request at its current stage');
+      throw new HttpError(403, 'You are not authorised to act on this request at its current stage', { code: 'SP004' });
     }
 
     if (stageCode === 'PURCHASE_COMMITTEE' && ['APPROVE', 'PARTIAL_APPROVE'].includes(dbAction)) {

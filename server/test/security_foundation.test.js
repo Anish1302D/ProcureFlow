@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
-import express from 'express';
 import helmet from 'helmet';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
@@ -15,7 +14,6 @@ process.env.SIGNING_SECRET = process.env.SIGNING_SECRET || 'test-signing-secret-
 const { config } = await import('../src/config.js');
 const { issueToken, requireAuth, requireRole } = await import('../src/auth.js');
 const { HttpError, forbidden, conflict, unprocessable } = await import('../src/errors.js');
-const { hasAnyRole } = await import('../src/roles.js');
 
 // ============================================================================
 // 1. BACKEND HTTP SECURITY HEADERS (BEHAVIORAL)
@@ -370,7 +368,7 @@ test('BEHAVIORAL: Non-admin cross-department budget provision is rejected with 4
 test('BEHAVIORAL: Action on unstaffed stage is rejected with 403', () => {
   function validateStageAction({ staffed_here, stageCode, dbAction, amount }) {
     if (!staffed_here) {
-      throw forbidden('You are not authorised to act on this request at its current stage');
+      throw new HttpError(403, 'You are not authorised to act on this request at its current stage', { code: 'SP004' });
     }
     const PRINCIPAL_DECIDES_UPTO = 50000;
     if (stageCode === 'PURCHASE_COMMITTEE' && ['APPROVE', 'PARTIAL_APPROVE'].includes(dbAction)) {
@@ -389,7 +387,7 @@ test('BEHAVIORAL: Action on unstaffed stage is rejected with 403', () => {
   // 1. Unstaffed stage action
   assert.throws(
     () => validateStageAction({ staffed_here: false, stageCode: 'PRINCIPAL', dbAction: 'APPROVE', amount: 30000 }),
-    (err) => err instanceof HttpError && err.status === 403 && err.message.includes('You are not authorised to act on this request at its current stage'),
+    (err) => err instanceof HttpError && err.status === 403 && err.code === 'SP004' && err.message.includes('You are not authorised to act on this request at its current stage'),
   );
 
   // 2. Purchase committee attempting final approval

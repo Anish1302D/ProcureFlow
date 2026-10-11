@@ -22,6 +22,7 @@ const loginIpLimiter = rateLimit({
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   keyGenerator: (req) => ipKeyGenerator(req.ip),
+  skip: (req) => process.env.NODE_ENV === 'test' || ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.ip),
   handler: (_req, _res, next) => {
     next(new HttpError(429, 'Too many sign-in attempts from this network. Try again later.'));
   },
