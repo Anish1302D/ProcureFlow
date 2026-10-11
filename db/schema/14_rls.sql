@@ -237,13 +237,23 @@ CREATE POLICY requests_approver_update ON requests
             )
         )
         AND NOT (
-            requests.current_status IN ('APPROVED', 'PARTIALLY_APPROVED')
+            requests.current_status IN ('APPROVED', 'PARTIALLY_APPROVED', 'REJECTED')
             AND requests.tentative_total_cost > app_get_config_numeric('workflow.threshold.principal_max', 50000)
             AND EXISTS (
                 SELECT 1 FROM stage_approvers sa
                 JOIN workflow_stages ws ON ws.stage_id = sa.stage_id
                 WHERE sa.user_id = app_current_user_id()
                   AND ws.code = 'PRINCIPAL'
+            )
+        )
+        AND NOT (
+            requests.current_status IN ('APPROVED', 'PARTIALLY_APPROVED', 'REJECTED')
+            AND requests.tentative_total_cost > app_get_config_numeric('workflow.threshold.cdc_max', 500000)
+            AND EXISTS (
+                SELECT 1 FROM stage_approvers sa
+                JOIN workflow_stages ws ON ws.stage_id = sa.stage_id
+                WHERE sa.user_id = app_current_user_id()
+                  AND ws.code = 'CDC'
             )
         )
     );

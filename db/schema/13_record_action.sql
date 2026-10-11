@@ -126,8 +126,23 @@ BEGIN
             USING ERRCODE = 'SP005';
     END IF;
 
-    IF v_stage_code = 'PRINCIPAL' AND p_action IN ('APPROVE', 'PARTIAL_APPROVE') AND v_req.tentative_total_cost > v_principal_max THEN
-        RAISE EXCEPTION 'Principal cannot final-approve requests exceeding ₹%', v_principal_max
+    IF v_stage_code = 'PRINCIPAL' AND p_action IN ('APPROVE', 'PARTIAL_APPROVE', 'REJECT') AND v_req.tentative_total_cost > v_principal_max THEN
+        RAISE EXCEPTION 'Principal performs review and forward only for requests exceeding ₹% and cannot approve or reject; forward to deciding authority instead', v_principal_max
+            USING ERRCODE = 'SP005';
+    END IF;
+
+    IF v_stage_code = 'PRINCIPAL' AND p_action = 'ESCALATE' AND v_req.tentative_total_cost <= v_principal_max THEN
+        RAISE EXCEPTION 'Requests up to ₹% must be decided by the Principal and cannot be escalated', v_principal_max
+            USING ERRCODE = 'SP005';
+    END IF;
+
+    IF v_stage_code = 'CDC' AND p_action IN ('APPROVE', 'PARTIAL_APPROVE', 'REJECT') AND v_req.tentative_total_cost > v_cdc_max THEN
+        RAISE EXCEPTION 'CDC cannot decide requests exceeding ₹%; Chairman and Vice Chairman hold the final authority', v_cdc_max
+            USING ERRCODE = 'SP005';
+    END IF;
+
+    IF v_stage_code = 'CDC' AND p_action = 'ESCALATE' THEN
+        RAISE EXCEPTION 'CDC holds the decision at this amount and cannot escalate'
             USING ERRCODE = 'SP005';
     END IF;
 
@@ -146,8 +161,8 @@ BEGIN
             USING ERRCODE = 'SP007';
     END IF;
 
-    IF p_action = 'RETURN' AND v_stage_code NOT IN ('PURCHASE_COMMITTEE', 'PRINCIPAL') THEN
-        RAISE EXCEPTION 'Only Purchase Committee and Principal can return a request for correction'
+    IF p_action = 'RETURN' AND v_stage_code NOT IN ('PURCHASE_COMMITTEE', 'PRINCIPAL', 'CDC', 'FINAL_AUTHORITY') THEN
+        RAISE EXCEPTION 'Stage % cannot return a request for correction', v_stage_code
             USING ERRCODE = 'SP005';
     END IF;
 
@@ -304,33 +319,19 @@ BEGIN
         UPDATE approval_actions SET new_status = v_new_status WHERE action_id = v_action_id;
 
     ELSIF v_stage_code = 'FINAL_AUTHORITY' AND p_action IN ('APPROVE', 'PARTIAL_APPROVE') THEN
-        SELECT COUNT(DISTINCT sa.role_id) INTO v_final_count
-        FROM approval_actions aa
-        JOIN stage_approvers sa ON sa.user_id = aa.performed_by AND sa.stage_id = v_final_stage_id
-        JOIN roles r ON r.role_id = sa.role_id
-        WHERE aa.request_id = p_request_id
-          AND aa.stage_id = v_final_stage_id
-          AND aa.action IN ('APPROVE', 'PARTIAL_APPROVE')
-          AND r.code IN ('CHAIRMAN', 'VICE_PRESIDENT');
+        SELECT count(*),
+               count(*) FILTER (WHERE item_status = 'APPROVED'),
+               count(*) FILTER (WHERE item_status = 'REJECTED')
+          INTO v_total, v_approved, v_rejected
+        FROM request_items WHERE request_id = p_request_id;
 
-        IF v_final_count >= 2 THEN
-            SELECT count(*),
-                   count(*) FILTER (WHERE item_status = 'APPROVED'),
-                   count(*) FILTER (WHERE item_status = 'REJECTED')
-              INTO v_total, v_approved, v_rejected
-            FROM request_items WHERE request_id = p_request_id;
-
-            v_new_status := CASE
-                WHEN v_total = 0 THEN 'APPROVED'
-                WHEN v_rejected = v_total THEN 'REJECTED'
-                WHEN v_approved = v_total THEN 'APPROVED'
-                ELSE 'PARTIALLY_APPROVED'
-            END::request_status;
-            v_new_stage := v_final_stage_id;
-        ELSE
-            v_new_status := 'UNDER_FINAL_AUTHORITY_REVIEW';
-            v_new_stage := v_final_stage_id;
-        END IF;
+        v_new_status := CASE
+            WHEN v_total = 0 THEN 'APPROVED'
+            WHEN v_rejected = v_total THEN 'REJECTED'
+            WHEN v_approved = v_total THEN 'APPROVED'
+            ELSE 'PARTIALLY_APPROVED'
+        END::request_status;
+        v_new_stage := v_final_stage_id;
         UPDATE approval_actions SET new_status = v_new_status WHERE action_id = v_action_id;
 
     ELSIF v_new_status IS NULL THEN

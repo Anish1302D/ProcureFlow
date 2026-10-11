@@ -28,5 +28,6 @@ INSERT INTO schema_migrations (filename) VALUES
     ('20260929T120000_fix_return_action_and_resubmit_seal.sql'),
     ('20260929T130000_course_funding_type.sql'),
     ('20261011T120000_add_user_token_version.sql'),
-    ('20261011T200000_config_driven_system.sql')
+    ('20261011T200000_config_driven_system.sql'),
+    ('20261011T220000_approval_workflow_and_user_mgmt_corrections.sql')
 ON CONFLICT (filename) DO NOTHING;

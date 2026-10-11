@@ -39,9 +39,9 @@ const rolePill = (role) => (
 // Modal — add / edit a user
 // ---------------------------------------------------------------------------
 
-const BLANK = { email: '', fullName: '', password: '', roleIds: [], isActive: true };
+const BLANK = { email: '', fullName: '', password: '', departmentId: null, roleIds: [], isActive: true };
 
-function UserModal({ user, roles, onClose, onSaved }) {
+function UserModal({ user, roles, departments = [], onClose, onSaved }) {
   const isEdit = Boolean(user);
   const { showToast } = useApp();
   const [form, setForm] = useState(
@@ -50,6 +50,7 @@ function UserModal({ user, roles, onClose, onSaved }) {
           email: user.email,
           fullName: user.name,
           password: '',
+          departmentId: user.departmentId ?? null,
           roleIds: user.roles.map((r) => r.id),
           isActive: user.isActive,
         }
@@ -81,6 +82,7 @@ function UserModal({ user, roles, onClose, onSaved }) {
       const body = {
         email: form.email.trim().toLowerCase(),
         fullName: form.fullName.trim(),
+        departmentId: form.departmentId ? Number(form.departmentId) : null,
         roleIds: form.roleIds,
         isActive: form.isActive,
       };
@@ -170,6 +172,23 @@ function UserModal({ user, roles, onClose, onSaved }) {
               value={form.password}
               onChange={(e) => set({ password: e.target.value })}
             />
+          </div>
+
+          {/* Department picker */}
+          <div>
+            <label className={labelCls}>Department (optional)</label>
+            <select
+              className={inputCls}
+              value={form.departmentId ?? ''}
+              onChange={(e) => set({ departmentId: e.target.value ? Number(e.target.value) : null })}
+            >
+              <option value="">No Department Assigned</option>
+              {departments.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name} ({d.code} — {d.fundingType})
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Role picker */}
@@ -275,6 +294,7 @@ export const UserManagement = () => {
   const { run } = useAction();
   const users = useApi('/api/admin/users');
   const roles = useApi('/api/admin/roles');
+  const departments = useApi('/api/admin/departments');
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(null); // null | 'create' | <user object>
 
@@ -303,6 +323,8 @@ export const UserManagement = () => {
     return (
       u.name.toLowerCase().includes(q) ||
       u.email.toLowerCase().includes(q) ||
+      (u.departmentName && u.departmentName.toLowerCase().includes(q)) ||
+      (u.departmentCode && u.departmentCode.toLowerCase().includes(q)) ||
       u.roles.some((r) => r.name.toLowerCase().includes(q))
     );
   });
@@ -334,7 +356,7 @@ export const UserManagement = () => {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
             className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-gray-200 bg-white text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400"
-            placeholder="Search by name, email, or role…"
+            placeholder="Search by name, email, department, or role…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -358,6 +380,7 @@ export const UserManagement = () => {
                 <thead>
                   <tr className="border-b border-gray-100 text-gray-400 font-semibold uppercase tracking-wider text-[10px]">
                     <th className="py-3 px-4">Name / Email</th>
+                    <th className="py-3 px-4">Department</th>
                     <th className="py-3 px-4">Roles</th>
                     <th className="py-3 px-4 text-center">Status</th>
                     <th className="py-3 px-4 text-center">Added</th>
@@ -380,6 +403,16 @@ export const UserManagement = () => {
                             <p className="text-gray-400 text-[11px]">{user.email}</p>
                           </div>
                         </div>
+                      </td>
+                      <td className="py-3.5 px-4">
+                        {user.departmentName ? (
+                          <div>
+                            <span className="font-semibold text-gray-800 text-xs">{user.departmentName}</span>
+                            <span className="ml-1 text-[10px] text-gray-400">({user.departmentCode})</span>
+                          </div>
+                        ) : (
+                          <span className="text-gray-400 italic text-[11px]">None</span>
+                        )}
                       </td>
                       <td className="py-3.5 px-4">
                         <div className="flex flex-wrap gap-1">
@@ -451,6 +484,7 @@ export const UserManagement = () => {
         <UserModal
           user={modal === 'create' ? null : modal}
           roles={roles.data ?? []}
+          departments={departments.data ?? []}
           onClose={() => setModal(null)}
           onSaved={closeModal}
         />

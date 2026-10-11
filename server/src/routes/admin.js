@@ -18,9 +18,23 @@ const BCRYPT_ROUNDS = 12;
 // Helpers
 // ---------------------------------------------------------------------------
 
+const ALLOWED_INSTITUTIONAL_ROLES = [
+  'HEAD',
+  'ACTIVITY_INCHARGE',
+  'PURCHASE_COMMITTEE',
+  'PRINCIPAL',
+  'CDC_MEMBER',
+  'CDC_GRANT_MEMBER',
+  'CDC_NON_GRANT_MEMBER',
+  'CHAIRMAN',
+  'VICE_PRESIDENT',
+  'ADMIN',
+];
+
 async function userDetail(userId) {
   const { rows } = await anonQuery(
     `SELECT u.user_id, u.email, u.full_name, u.is_active, u.created_at, u.updated_at,
+            u.department_id, d.name AS department_name, d.code AS department_code,
             COALESCE(
               json_agg(
                 json_build_object('id', r.role_id, 'code', r.code, 'name', r.name)
@@ -29,10 +43,11 @@ async function userDetail(userId) {
               '[]'
             ) AS roles
        FROM users u
+       LEFT JOIN departments d ON d.department_id = u.department_id
        LEFT JOIN user_roles ur ON ur.user_id = u.user_id
        LEFT JOIN roles r       ON r.role_id  = ur.role_id
       WHERE u.user_id = $1
-      GROUP BY u.user_id`,
+      GROUP BY u.user_id, d.name, d.code`,
     [userId],
   );
   if (!rows[0]) return null;
@@ -44,6 +59,9 @@ async function userDetail(userId) {
     isActive: u.is_active,
     createdAt: u.created_at,
     updatedAt: u.updated_at,
+    departmentId: u.department_id,
+    departmentName: u.department_name,
+    departmentCode: u.department_code,
     roles: u.roles,
   };
 }
@@ -51,11 +69,27 @@ async function userDetail(userId) {
 async function validateRoleIds(db, roleIds) {
   if (!roleIds.length) return;
   const { rows } = await db.query(
-    'SELECT role_id FROM roles WHERE role_id = ANY($1::int[])',
+    'SELECT role_id, code FROM roles WHERE role_id = ANY($1::int[])',
     [roleIds],
   );
   if (rows.length !== roleIds.length) {
     throw new HttpError(422, 'One or more role IDs are invalid');
+  }
+  for (const r of rows) {
+    if (!ALLOWED_INSTITUTIONAL_ROLES.includes(r.code)) {
+      throw new HttpError(422, `Role '${r.code}' is not an allowed institutional role`);
+    }
+  }
+}
+
+async function validateDepartmentId(db, departmentId) {
+  if (departmentId === null || departmentId === undefined) return;
+  const { rows } = await db.query(
+    'SELECT department_id FROM departments WHERE department_id = $1',
+    [departmentId],
+  );
+  if (!rows.length) {
+    throw new HttpError(422, 'Department ID does not exist');
   }
 }
 
@@ -65,6 +99,7 @@ async function validateRoleIds(db, roleIds) {
 adminRouter.get('/users', async (_req, res) => {
   const { rows } = await anonQuery(
     `SELECT u.user_id, u.email, u.full_name, u.is_active, u.created_at, u.updated_at,
+            u.department_id, d.name AS department_name, d.code AS department_code,
             COALESCE(
               json_agg(
                 json_build_object('id', r.role_id, 'code', r.code, 'name', r.name)
@@ -73,9 +108,10 @@ adminRouter.get('/users', async (_req, res) => {
               '[]'
             ) AS roles
        FROM users u
+       LEFT JOIN departments d ON d.department_id = u.department_id
        LEFT JOIN user_roles ur ON ur.user_id = u.user_id
        LEFT JOIN roles r       ON r.role_id  = ur.role_id
-      GROUP BY u.user_id
+      GROUP BY u.user_id, d.name, d.code
       ORDER BY u.full_name`,
   );
   res.json(rows.map((u) => ({
@@ -85,6 +121,9 @@ adminRouter.get('/users', async (_req, res) => {
     isActive: u.is_active,
     createdAt: u.created_at,
     updatedAt: u.updated_at,
+    departmentId: u.department_id,
+    departmentName: u.department_name,
+    departmentCode: u.department_code,
     roles: u.roles,
   })));
 });
@@ -111,6 +150,7 @@ const createUserSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
   fullName: z.string().trim().min(2).max(200),
   password: z.string().min(8).max(200),
+  departmentId: z.number().int().positive().nullable().optional(),
   roleIds: z.array(z.number().int().positive()).min(1, 'Assign at least one role'),
   isActive: z.boolean().default(true),
 });
@@ -127,12 +167,13 @@ adminRouter.post('/users', async (req, res) => {
     );
     if (dup.rowCount) throw conflict('A user with this email already exists');
 
+    await validateDepartmentId(db, body.departmentId);
     await validateRoleIds(db, body.roleIds);
 
     const { rows } = await db.query(
-      `INSERT INTO users (email, full_name, password_hash, is_active)
-       VALUES ($1, $2, $3, $4) RETURNING user_id`,
-      [body.email, body.fullName, hash, body.isActive],
+      `INSERT INTO users (email, full_name, password_hash, department_id, is_active)
+       VALUES ($1, $2, $3, $4, $5) RETURNING user_id`,
+      [body.email, body.fullName, hash, body.departmentId ?? null, body.isActive],
     );
     const userId = rows[0].user_id;
 
@@ -159,6 +200,22 @@ adminRouter.post('/users', async (req, res) => {
       );
     }
 
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
+       VALUES ('user', $1::text, $2::uuid, 'CREATE', $3::jsonb)`,
+      [
+        userId,
+        req.user.id,
+        JSON.stringify({
+          email: body.email,
+          fullName: body.fullName,
+          departmentId: body.departmentId ?? null,
+          roleIds: body.roleIds,
+          isActive: body.isActive,
+        }),
+      ],
+    );
+
     return userId;
   });
 
@@ -166,13 +223,14 @@ adminRouter.post('/users', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// PATCH /api/admin/users/:id  —  edit name/email/password/roles/active status
+// PATCH /api/admin/users/:id  —  edit name/email/password/department/roles/active status
 // ---------------------------------------------------------------------------
 const updateUserSchema = z
   .object({
     email: z.string().trim().toLowerCase().email().max(254).optional(),
     fullName: z.string().trim().min(2).max(200).optional(),
     password: z.string().min(8).max(200).optional(),
+    departmentId: z.number().int().positive().nullable().optional(),
     roleIds: z.array(z.number().int().positive()).min(1).optional(),
     isActive: z.boolean().optional(),
   })
@@ -191,9 +249,20 @@ adminRouter.patch('/users/:id', async (req, res) => {
 
   await withUser(req.user.id, async (db) => {
     const existing = await db.query(
-      'SELECT user_id FROM users WHERE user_id = $1', [userId],
+      `SELECT u.user_id, u.email, u.full_name, u.department_id, u.is_active,
+              COALESCE(array_agg(ur.role_id) FILTER (WHERE ur.role_id IS NOT NULL), '{}') AS role_ids
+         FROM users u
+         LEFT JOIN user_roles ur ON ur.user_id = u.user_id
+        WHERE u.user_id = $1
+        GROUP BY u.user_id`,
+      [userId],
     );
     if (!existing.rowCount) throw notFound('User not found');
+    const beforeUser = existing.rows[0];
+
+    if (body.departmentId !== undefined) {
+      await validateDepartmentId(db, body.departmentId);
+    }
 
     if (body.email) {
       const dup = await db.query(
@@ -249,6 +318,7 @@ adminRouter.patch('/users/:id', async (req, res) => {
     if (body.email !== undefined) push('email', body.email);
     if (body.fullName !== undefined) push('full_name', body.fullName);
     if (hash !== undefined) push('password_hash', hash);
+    if (body.departmentId !== undefined) push('department_id', body.departmentId);
     if (body.isActive !== undefined) push('is_active', body.isActive);
 
     if (sets.length || body.roleIds !== undefined) {
@@ -301,6 +371,40 @@ adminRouter.patch('/users/:id', async (req, res) => {
         );
       }
     }
+
+    const afterRes = await db.query(
+      `SELECT u.user_id, u.email, u.full_name, u.department_id, u.is_active,
+              COALESCE(array_agg(ur.role_id) FILTER (WHERE ur.role_id IS NOT NULL), '{}') AS role_ids
+         FROM users u
+         LEFT JOIN user_roles ur ON ur.user_id = u.user_id
+        WHERE u.user_id = $1
+        GROUP BY u.user_id`,
+      [userId],
+    );
+    const afterUser = afterRes.rows[0];
+
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, before_json, after_json)
+       VALUES ('user', $1::text, $2::uuid, 'UPDATE', $3::jsonb, $4::jsonb)`,
+      [
+        userId,
+        req.user.id,
+        JSON.stringify({
+          email: beforeUser.email,
+          fullName: beforeUser.full_name,
+          departmentId: beforeUser.department_id,
+          roleIds: beforeUser.role_ids,
+          isActive: beforeUser.is_active,
+        }),
+        JSON.stringify({
+          email: afterUser.email,
+          fullName: afterUser.full_name,
+          departmentId: afterUser.department_id,
+          roleIds: afterUser.role_ids,
+          isActive: afterUser.is_active,
+        }),
+      ],
+    );
   });
 
   res.json(await userDetail(userId));
@@ -352,6 +456,12 @@ adminRouter.delete('/users/:id', async (req, res) => {
       }
       throw err;
     }
+
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
+       VALUES ('user', $1::text, $2::uuid, 'DEACTIVATE', jsonb_build_object('isActive', false))`,
+      [userId, req.user.id],
+    );
   });
 
   res.status(204).end();
@@ -381,6 +491,12 @@ adminRouter.post('/users/:id/reactivate', async (req, res) => {
       }
       throw err;
     }
+
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
+       VALUES ('user', $1::text, $2::uuid, 'REACTIVATE', jsonb_build_object('isActive', true))`,
+      [userId, req.user.id],
+    );
   });
 
   res.json(await userDetail(userId));

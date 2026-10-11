@@ -38,22 +38,26 @@ const EDITABLE_STATUSES = ['DRAFT', 'AWAITING_RESUBMISSION'];
  * Mirrors fn_record_action's stage restrictions so the UI never offers a
  * button the database will refuse. The database remains the authority.
  */
-async function actionsAt(stageCode, isFinalStage, amount) {
+export async function actionsAt(stageCode, _isFinalStage, amount) {
   if (stageCode === 'PURCHASE_COMMITTEE') {
-    // Validity review only — never a decision on the money.
-    return ['ESCALATE', 'RETURN', 'REJECT'];
+    // Review and verification only — never final approval or financial decision.
+    return ['ESCALATE', 'RETURN'];
   }
   if (stageCode === 'PRINCIPAL') {
     const { principalMax } = await configService.getThresholds();
     return amount <= principalMax
       ? ['APPROVE', 'PARTIAL_APPROVE', 'REJECT', 'RETURN']
-      : ['ESCALATE', 'REJECT', 'RETURN'];
+      : ['ESCALATE', 'RETURN'];
   }
-  // CDC and the Chairman/Vice Chairman decide, and there is nowhere above them
-  // to send a request: the Principal already chose which of the two holds the
-  // decision, from the amount. Only the committee and the Principal may return
-  // a request for correction.
-  return ['APPROVE', 'PARTIAL_APPROVE', 'REJECT'];
+  if (stageCode === 'CDC') {
+    // CDC decides requests above principalMax up to cdcMax
+    return ['APPROVE', 'PARTIAL_APPROVE', 'REJECT', 'RETURN'];
+  }
+  if (stageCode === 'FINAL_AUTHORITY') {
+    // Chairman and Vice Chairman decide requests above cdcMax
+    return ['APPROVE', 'PARTIAL_APPROVE', 'REJECT', 'RETURN'];
+  }
+  return [];
 }
 
 // ---------------------------------------------------------------------------
@@ -552,9 +556,7 @@ const attachmentRow = (r) => ({
 // Stages two people decide together, and the two roles that must each record a
 // decision before the request moves on (docs/plan/decisions.md). Order matters
 // only for display; either may act first.
-const JOINT_STAGE_ROLES = {
-  FINAL_AUTHORITY: ['CHAIRMAN', 'VICE_PRESIDENT'],
-};
+const JOINT_STAGE_ROLES = {};
 
 /**
  * Who has and has not yet decided at a two-person stage, so the UI can show
@@ -1216,23 +1218,27 @@ requestsRouter.post('/:id/actions', async (req, res) => {
     }
     if (stageCode === 'PRINCIPAL') {
       const { principalMax } = await configService.getThresholds();
-      if (['APPROVE', 'PARTIAL_APPROVE'].includes(dbAction) && amount > principalMax) {
+      if (['APPROVE', 'PARTIAL_APPROVE', 'REJECT'].includes(dbAction) && amount > principalMax) {
         throw unprocessable(
-          `Requests above ₹${principalMax.toLocaleString('en-IN')} are decided by CDC or the Chairman and Vice Chairman; forward it instead`);
+          `Principal performs review and forward only for requests above ₹${principalMax.toLocaleString('en-IN')}; forward to the deciding authority instead`);
       }
       if (dbAction === 'ESCALATE' && amount <= principalMax) {
         throw unprocessable(
           `Requests up to ₹${principalMax.toLocaleString('en-IN')} must be decided by the Principal and cannot be escalated`);
       }
     }
-    if (dbAction === 'RETURN' && !['PURCHASE_COMMITTEE', 'PRINCIPAL'].includes(stageCode)) {
-      throw unprocessable('Only the Purchase Committee and the Principal can return a request for correction');
+    if (stageCode === 'CDC') {
+      const { cdcMax } = await configService.getThresholds();
+      if (['APPROVE', 'PARTIAL_APPROVE', 'REJECT'].includes(dbAction) && amount > cdcMax) {
+        throw unprocessable(
+          `Requests above ₹${cdcMax.toLocaleString('en-IN')} must be decided by Chairman and Vice Chairman`);
+      }
+      if (dbAction === 'ESCALATE') {
+        throw unprocessable('CDC holds the decision at this amount; it cannot pass the request further up');
+      }
     }
-    // The Principal referred the request to whoever the amount says decides
-    // it, so CDC has nowhere to pass it: above ₹5,00,000 it would never have
-    // reached them.
-    if (dbAction === 'ESCALATE' && stageCode === 'CDC') {
-      throw unprocessable('CDC holds the decision at this amount; it cannot pass the request further up');
+    if (dbAction === 'RETURN' && !['PURCHASE_COMMITTEE', 'PRINCIPAL', 'CDC', 'FINAL_AUTHORITY'].includes(stageCode)) {
+      throw unprocessable('Only review stages can return a request for correction');
     }
 
     const decisions = await buildDecisions(db, requestId, body);

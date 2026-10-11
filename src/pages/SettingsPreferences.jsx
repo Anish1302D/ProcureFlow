@@ -19,7 +19,7 @@ const STAGE_COLORS = [
 ];
 
 export const SettingsPreferences = () => {
-  const { user, showToast } = useApp();
+  const { user, showToast, setActivePage } = useApp();
   const isAdmin = user?.roles?.includes('ADMIN');
 
   const stagesApi = useApi('/api/workflow/stages');
@@ -332,7 +332,7 @@ export const SettingsPreferences = () => {
               : 'border-transparent text-gray-500 hover:text-gray-900'
           }`}
         >
-          <GitMerge className="w-4 h-4" /> Approval Thresholds
+          <GitMerge className="w-4 h-4" /> Approval Configuration
         </button>
         <button
           type="button"
@@ -354,7 +354,7 @@ export const SettingsPreferences = () => {
               : 'border-transparent text-gray-500 hover:text-gray-900'
           }`}
         >
-          <Settings className="w-4 h-4" /> System Flags &amp; Institutional Info
+          <Settings className="w-4 h-4" /> Registration Settings &amp; System Flags
         </button>
         <button
           type="button"
@@ -685,6 +685,16 @@ export const SettingsPreferences = () => {
                     When enabled, faculty members and activity in-charges can register from the sign-in screen.
                     Only non-privileged requisition roles (HEAD, ACTIVITY_INCHARGE) are granted. Administrative and approver roles cannot be self-registered under any circumstances.
                   </p>
+                  <p className="text-[11px] text-gray-500 max-w-xl leading-relaxed mt-1">
+                    <strong>Note:</strong> Disabling public self-registration does not prevent administrators from creating or managing institutional accounts at any time.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setActivePage('user-management')}
+                    className="mt-2 text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+                  >
+                    Go to User Management &rarr;
+                  </button>
                 </div>
                 <button
                   type="button"
