@@ -2,23 +2,24 @@ import React, { useState } from 'react';
 import { ArrowRight, Loader2, Lock } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
-// Demo accounts from db/seed/03_users_and_approvers.sql.
-// Shown on every build so evaluators can try each role.
-const DEMO = {
-  password: 'ChangeMe#2026',
-  accounts: [
-    ['Head, Computer Science', 'head.cs@spcollege.edu'],
-    ['Activity In-charge', 'incharge@spcollege.edu'],
-    ['Purchase Committee', 'pc1@spcollege.edu'],
-    ['Principal', 'principal@spcollege.edu'],
-    ['CDC (Grant)', 'cdc.grant@spcollege.edu'],
-    ['CDC (Non-Grant)', 'cdc.nongrant@spcollege.edu'],
-    ['Chairman', 'chairman@spcollege.edu'],
-    ['Vice President', 'vp@spcollege.edu'],
-    ['Clerk', 'clerk@spcollege.edu'],
-    ['Administrator', 'admin@spcollege.edu'],
-  ],
-};
+// Development-only demo accounts for local debugging.
+// Completely stripped from production builds by Vite dead-code elimination.
+const DEV_DEMO = import.meta.env.DEV
+  ? {
+      accounts: [
+        ['Head, Computer Science', 'head.cs@spcollege.edu'],
+        ['Activity In-charge', 'incharge@spcollege.edu'],
+        ['Purchase Committee', 'pc1@spcollege.edu'],
+        ['Principal', 'principal@spcollege.edu'],
+        ['CDC (Grant)', 'cdc.grant@spcollege.edu'],
+        ['CDC (Non-Grant)', 'cdc.nongrant@spcollege.edu'],
+        ['Chairman', 'chairman@spcollege.edu'],
+        ['Vice President', 'vp@spcollege.edu'],
+        ['Clerk', 'clerk@spcollege.edu'],
+        ['Administrator', 'admin@spcollege.edu'],
+      ],
+    }
+  : null;
 
 export const Login = () => {
   const { signIn, showToast } = useApp();
@@ -82,17 +83,19 @@ export const Login = () => {
           <p className="text-[11px] text-gray-400 text-center">Forgotten your password? Ask the college administrator to reset it.</p>
         </form>
 
-        <div className="rounded-2xl border border-dashed border-amber-300 bg-amber-50/60 p-4 space-y-2">
-            <p className="text-[11px] font-semibold text-amber-800 uppercase tracking-wider">Quick login — click any role to sign in</p>
+        {import.meta.env.DEV && DEV_DEMO && (
+          <div className="rounded-2xl border border-dashed border-amber-300 bg-amber-50/60 p-4 space-y-2">
+            <p className="text-[11px] font-semibold text-amber-800 uppercase tracking-wider">Dev quick fill — select role to fill email</p>
             <div className="flex flex-wrap gap-1.5">
-              {DEMO.accounts.map(([label, address]) => (
-                <button key={address} disabled={busy} onClick={() => submit(null, { email: address, password: DEMO.password })}
+              {DEV_DEMO.accounts.map(([label, address]) => (
+                <button key={address} type="button" disabled={busy} onClick={() => setEmail(address)}
                   className="px-2.5 py-1 rounded-lg bg-white border border-amber-200 text-[11px] font-semibold text-gray-700 hover:border-amber-400 disabled:opacity-50">
                   {label}
                 </button>
               ))}
             </div>
           </div>
+        )}
       </div>
 
       <div className="max-w-6xl w-full mx-auto flex flex-col sm:flex-row items-center justify-between text-xs text-gray-400 border-t border-gray-200 pt-4">

@@ -65,7 +65,7 @@ export async function sendMail({ to, cc, subject, html }) {
       console.warn(`[mailer] Resend failed: ${resendErr.message}`);
       if (resendErr.message?.includes('testing emails')) {
         console.warn(
-          `[mailer] Account restriction: Resend with onboarding@resend.dev only permits sending to the account owner (protonedge01@gmail.com). ` +
+          `[mailer] Account restriction: Resend with onboarding@resend.dev only permits sending to the verified account owner. ` +
           `To deliver to external addresses like ${to}, verify a custom domain on resend.com/domains or provide BREVO_API_KEY.`
         );
       }
@@ -93,6 +93,10 @@ export async function sendMail({ to, cc, subject, html }) {
 }
 
 async function _sendViaBrevo({ to, cc, subject, html }) {
+  const senderEmail = config.brevoSenderEmail || config.smtp.user;
+  if (!senderEmail) {
+    throw new Error('Missing sender email configuration: set BREVO_SENDER_EMAIL or SMTP_USER in environment');
+  }
   const toList = (Array.isArray(to) ? to : to.split(',')).map((e) => ({ email: e.trim() }));
   const ccList = cc ? (Array.isArray(cc) ? cc : cc.split(',')).map((e) => ({ email: e.trim() })) : undefined;
   const res = await fetch('https://api.brevo.com/v3/smtp/email', {
@@ -105,7 +109,7 @@ async function _sendViaBrevo({ to, cc, subject, html }) {
     body: JSON.stringify({
       sender: {
         name: 'SP College Workflow',
-        email: config.brevoSenderEmail || config.smtp.user || 'protonedge01@gmail.com',
+        email: senderEmail,
       },
       to: toList,
       cc: ccList,

@@ -89,6 +89,7 @@ CREATE TABLE users (
     full_name      TEXT NOT NULL,
     password_hash  TEXT NOT NULL,
     is_active      BOOLEAN NOT NULL DEFAULT TRUE,
+    token_version  INTEGER NOT NULL DEFAULT 1,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

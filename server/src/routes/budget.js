@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { requireRole } from '../auth.js';
 import { withUser } from '../db.js';
-import { notFound } from '../errors.js';
+import { forbidden, notFound } from '../errors.js';
 import { amount, intId, param } from '../validate.js';
 
 export const budgetRouter = Router();
@@ -132,6 +132,16 @@ budgetRouter.get('/budget-provisions/:id', async (req, res) => {
 // budget_provisions_write policy confines a head to their own department.
 budgetRouter.post('/budget-provisions', requireRole('HEAD', 'ADMIN'), async (req, res) => {
   const body = provisionInput.parse(req.body);
+
+  const isAdmin = req.user.roles.includes('ADMIN');
+  if (!isAdmin) {
+    if (!req.user.departmentId) {
+      throw forbidden('You are not assigned to a department');
+    }
+    if (body.departmentId !== req.user.departmentId) {
+      throw forbidden('Only the head of this department can declare its budget provision');
+    }
+  }
 
   const detail = await withUser(req.user.id, async (db) => {
     const { rows } = await db.query(
