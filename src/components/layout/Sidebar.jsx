@@ -51,6 +51,7 @@ export const NAV = {
       { id: 'admin-dashboard', label: 'Dashboard', icon: LayoutDashboard },
       { id: 'user-management', label: 'User management', icon: Users },
       { id: 'master-data', label: 'Departments & courses', icon: BookOpen },
+      { id: 'settings', label: 'System configuration', icon: Settings },
       { id: 'budget-provisions', label: 'Departmental budgets', icon: Wallet },
       { id: 'requests-all', label: 'All requests', icon: FileText },
       { id: 'non-financial-requests', label: 'Faculty issues', icon: AlertCircle, badge: 'issues' },

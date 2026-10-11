@@ -39,6 +39,8 @@ DECLARE
     v_final_stage_id     INTEGER;
     v_cdc_count          INTEGER;
     v_final_count        INTEGER;
+    v_principal_max      NUMERIC;
+    v_cdc_max            NUMERIC;
 BEGIN
     IF app_current_user_id() IS NOT NULL
        AND p_actor_id IS DISTINCT FROM app_current_user_id() THEN
@@ -114,14 +116,18 @@ BEGIN
         END IF;
     END IF;
 
+    -- Load dynamic thresholds from authoritative configuration
+    v_principal_max := app_get_config_numeric('workflow.threshold.principal_max', 50000);
+    v_cdc_max       := app_get_config_numeric('workflow.threshold.cdc_max', 500000);
+
     -- Specific Stage Restrictions
     IF v_stage_code = 'PURCHASE_COMMITTEE' AND p_action IN ('APPROVE', 'PARTIAL_APPROVE') THEN
         RAISE EXCEPTION 'Purchase Committee performs validity review only and cannot approve requests'
             USING ERRCODE = 'SP005';
     END IF;
 
-    IF v_stage_code = 'PRINCIPAL' AND p_action IN ('APPROVE', 'PARTIAL_APPROVE') AND v_req.tentative_total_cost > 50000 THEN
-        RAISE EXCEPTION 'Principal cannot final-approve requests exceeding ₹50,000'
+    IF v_stage_code = 'PRINCIPAL' AND p_action IN ('APPROVE', 'PARTIAL_APPROVE') AND v_req.tentative_total_cost > v_principal_max THEN
+        RAISE EXCEPTION 'Principal cannot final-approve requests exceeding ₹%', v_principal_max
             USING ERRCODE = 'SP005';
     END IF;
 
@@ -180,7 +186,7 @@ BEGIN
         v_new_status := 'UNDER_PRINCIPAL_REVIEW';
 
     ELSIF v_stage_code = 'PRINCIPAL' AND p_action = 'ESCALATE' THEN
-        IF v_req.tentative_total_cost <= 500000 THEN
+        IF v_req.tentative_total_cost <= v_cdc_max THEN
             v_new_stage  := v_cdc_stage_id;
             v_new_status := 'UNDER_CDC_REVIEW';
         ELSE
@@ -277,7 +283,7 @@ BEGIN
 
     -- Evaluate multi-approver completion for CDC and Final Authority
     IF v_stage_code = 'CDC' AND p_action IN ('APPROVE', 'PARTIAL_APPROVE', 'ESCALATE') THEN
-        IF v_req.tentative_total_cost <= 500000 THEN
+        IF v_req.tentative_total_cost <= v_cdc_max THEN
             SELECT count(*),
                    count(*) FILTER (WHERE item_status = 'APPROVED'),
                    count(*) FILTER (WHERE item_status = 'REJECTED')

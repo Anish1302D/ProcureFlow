@@ -4,7 +4,8 @@ import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 import { issueToken, requireAuth } from '../auth.js';
 import { anonQuery, withUser } from '../db.js';
-import { HttpError } from '../errors.js';
+import { configService } from '../configService.js';
+import { HttpError, conflict } from '../errors.js';
 import { REQUESTER_ROLES, ISSUE_MANAGER_ROLES, INVENTORY_READER_ROLES, hasAnyRole } from '../roles.js';
 
 export const authRouter = Router();
@@ -12,6 +13,14 @@ export const authRouter = Router();
 const loginSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
   password: z.string().min(1).max(200),
+});
+
+const registerSchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  fullName: z.string().trim().min(2).max(200),
+  password: z.string().min(8, 'Password must be at least 8 characters').max(200),
+  departmentId: z.number().int().positive().optional().nullable(),
+  role: z.enum(['HEAD', 'ACTIVITY_INCHARGE']).optional().default('HEAD'),
 });
 
 // Global IP rate limiter to protect against credential stuffing across accounts.
@@ -99,6 +108,73 @@ authRouter.post('/login', loginIpLimiter, loginLimiter, async (req, res) => {
 // Signing out is the client discarding its token; there is no server session.
 authRouter.post('/logout', requireAuth, (_req, res) => {
   res.status(204).end();
+});
+
+// ---------------------------------------------------------------------------
+// Public self-registration (controlled by dynamic configuration flag)
+// ---------------------------------------------------------------------------
+authRouter.get('/registration-status', async (_req, res) => {
+  const enabled = await configService.isSelfRegistrationEnabled();
+  res.json({ enabled });
+});
+
+authRouter.post('/register', loginIpLimiter, async (req, res) => {
+  const enabled = await configService.isSelfRegistrationEnabled();
+  if (!enabled) {
+    throw new HttpError(403, 'Self-registration is currently disabled by administrator');
+  }
+
+  // Prevent privilege escalation or arbitrary role assignment
+  if (req.body?.roles || req.body?.roleIds) {
+    throw new HttpError(400, 'Direct role assignment is prohibited during self-registration');
+  }
+
+  const { email, fullName, password, departmentId, role } = registerSchema.parse(req.body);
+
+  const dup = await anonQuery('SELECT 1 FROM users WHERE email = $1', [email]);
+  if (dup.rowCount) {
+    throw conflict('An account with this email already exists');
+  }
+
+  if (departmentId) {
+    const deptCheck = await anonQuery('SELECT 1 FROM departments WHERE department_id = $1', [departmentId]);
+    if (!deptCheck.rowCount) {
+      throw new HttpError(422, 'Selected department does not exist');
+    }
+  }
+
+  const assignedRoleCode = role === 'ACTIVITY_INCHARGE' ? 'ACTIVITY_INCHARGE' : 'HEAD';
+  const roleRow = await anonQuery('SELECT role_id FROM roles WHERE code = $1', [assignedRoleCode]);
+  if (!roleRow.rowCount) {
+    throw new HttpError(500, 'Assigned role not found');
+  }
+  const roleId = roleRow.rows[0].role_id;
+
+  const passwordHash = await bcrypt.hash(password, 12);
+
+  const { rows: userRows } = await anonQuery(
+    `INSERT INTO users (email, full_name, password_hash, department_id, is_active, token_version)
+     VALUES ($1, $2, $3, $4, TRUE, 1)
+     RETURNING user_id`,
+    [email, fullName, passwordHash, departmentId ?? null],
+  );
+  const newUserId = userRows[0].user_id;
+
+  await anonQuery(
+    `INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+    [newUserId, roleId],
+  );
+
+  await anonQuery(
+    `INSERT INTO audit_logs (entity_type, entity_id, action, after_json)
+     VALUES ('user', $1::text, 'SELF_REGISTER', jsonb_build_object('ip', $2::text, 'role', $3::text))`,
+    [newUserId, req.ip, assignedRoleCode],
+  );
+
+  res.status(201).json({
+    token: issueToken(newUserId, 1),
+    user: await describe(newUserId),
+  });
 });
 
 // Five password change attempts per quarter hour per user/IP.

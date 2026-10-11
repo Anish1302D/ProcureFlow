@@ -150,6 +150,19 @@ CREATE TABLE budget_items (
 
 CREATE INDEX budget_items_head_idx ON budget_items(budget_head_id);
 
+CREATE TABLE system_configurations (
+    config_id    SERIAL PRIMARY KEY,
+    key          TEXT NOT NULL UNIQUE,
+    value        JSONB NOT NULL,
+    description  TEXT,
+    category     TEXT NOT NULL DEFAULT 'general',
+    is_secret    BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_by   UUID REFERENCES users(user_id) ON DELETE SET NULL
+);
+
+CREATE INDEX system_configurations_category_idx ON system_configurations(category);
+
 -- Workflow engine: configurable stages, per-stage approvers, amount-based routing.
 -- Roles are data; adding a CDC member is INSERT INTO stage_approvers, not a code change.
 
@@ -175,9 +188,10 @@ CREATE TABLE stage_routing_rules (
 
 -- Users who can act at a given stage. A stage may have many approvers.
 CREATE TABLE stage_approvers (
-    stage_id  INTEGER NOT NULL REFERENCES workflow_stages(stage_id) ON DELETE CASCADE,
-    user_id   UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-    role_id   INTEGER REFERENCES roles(role_id),
+    stage_id              INTEGER NOT NULL REFERENCES workflow_stages(stage_id) ON DELETE CASCADE,
+    user_id               UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    role_id               INTEGER REFERENCES roles(role_id),
+    member_classification TEXT DEFAULT 'TEACHING' CHECK (member_classification IS NULL OR member_classification IN ('TEACHING', 'NON_TEACHING')),
     PRIMARY KEY (stage_id, user_id)
 );
 
@@ -1612,7 +1626,9 @@ INSERT INTO schema_migrations (filename) VALUES
     ('20260902T180000_baseline.sql'),
     ('20260902T193000_add_sqlstate_error_codes.sql'),
     ('20260911T120000_backend_rls_fixes.sql'),
-    ('20260912T090000_indian_number_format.sql')
+    ('20260912T090000_indian_number_format.sql'),
+    ('20261011T120000_add_user_token_version.sql'),
+    ('20261011T200000_config_driven_system.sql')
 ON CONFLICT (filename) DO NOTHING;
 
 -- Seed minimum viable roles and the workflow stages.
@@ -1630,16 +1646,30 @@ INSERT INTO roles (code, name, description) VALUES
     ('CDC_GRANT_MEMBER',     'CDC Grant Member',      'Grant-side CDC authority'),
     ('CDC_NON_GRANT_MEMBER', 'CDC Non-Grant Member',  'Non-grant CDC authority'),
     ('CHAIRMAN',             'Chairman',              'Final authority'),
-    ('VICE_PRESIDENT',       'Vice President',        'Final authority'),
+    ('VICE_PRESIDENT',       'Vice Chairman',         'Final authority'),
     ('ADMIN',                'Administrator',         'System administration')
 ON CONFLICT (code) DO NOTHING;
 
 INSERT INTO workflow_stages (code, name, sequence_no, is_final) VALUES
-    ('PURCHASE_COMMITTEE', 'Purchase Committee', 1, FALSE),
-    ('PRINCIPAL',          'Principal',          2, FALSE),
-    ('CDC',                'CDC',                3, FALSE),
-    ('FINAL_AUTHORITY',    'Chairman + VP',      4, TRUE)
+    ('PURCHASE_COMMITTEE', 'Purchase Committee',       1, FALSE),
+    ('PRINCIPAL',          'Principal',                2, FALSE),
+    ('CDC',                'CDC',                      3, FALSE),
+    ('FINAL_AUTHORITY',    'Chairman & Vice Chairman', 4, TRUE)
 ON CONFLICT (code) DO NOTHING;
+
+-- Default non-secret business configurations
+INSERT INTO system_configurations (key, value, description, category, is_secret) VALUES
+    ('workflow.threshold.principal_max', '50000'::jsonb, 'Maximum request amount decided finally by Principal (₹50,000). Requests above this escalate.', 'approval_workflow', FALSE),
+    ('workflow.threshold.cdc_max', '500000'::jsonb, 'Maximum request amount decided by CDC (₹5,00,000). Requests above this escalate to Chairman.', 'approval_workflow', FALSE),
+    ('self_registration.enabled', 'false'::jsonb, 'Whether public user self-registration is enabled. Default false.', 'feature_flags', FALSE),
+    ('roles.vice_chairman.title', '"Vice Chairman"'::jsonb, 'Institutional title for Vice Chairman role', 'institutional', FALSE),
+    ('cdc.teaching_members_limit', '3'::jsonb, 'Maximum number of teaching faculty members on the College Development Committee', 'institutional', FALSE),
+    ('cdc.non_teaching_members_limit', '1'::jsonb, 'Maximum number of non-teaching staff members on the College Development Committee', 'institutional', FALSE),
+    ('budget.warn_utilization_percent', '85'::jsonb, 'Budget utilization threshold percentage at which warnings are displayed', 'budget', FALSE),
+    ('institution.name', '"S.P. College"'::jsonb, 'Official institution name', 'institutional', FALSE),
+    ('institution.system_name', '"College Procurement & Approval Workflow System"'::jsonb, 'Institutional workflow system title', 'institutional', FALSE),
+    ('institution.support_email', '"support@spcollege.edu.in"'::jsonb, 'Institutional system support email address', 'institutional', FALSE)
+ON CONFLICT (key) DO NOTHING;
 
 -- Amount-based routing rules. NULL max_amount = no upper bound.
 INSERT INTO stage_routing_rules (stage_id, min_amount, max_amount)

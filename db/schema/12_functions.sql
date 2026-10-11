@@ -1,6 +1,33 @@
 -- Helper functions the app can call so complex writes are one round-trip
 -- and stay consistent even if two users act concurrently.
 
+-- Helper functions for querying dynamic configuration values in SQL
+CREATE OR REPLACE FUNCTION app_get_config_numeric(p_key TEXT, p_default NUMERIC)
+RETURNS NUMERIC
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT COALESCE(
+        (SELECT (value#>>'{}')::NUMERIC FROM system_configurations WHERE key = p_key),
+        p_default
+    );
+$$;
+
+CREATE OR REPLACE FUNCTION app_get_config_bool(p_key TEXT, p_default BOOLEAN)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT COALESCE(
+        (SELECT (value#>>'{}')::BOOLEAN FROM system_configurations WHERE key = p_key),
+        p_default
+    );
+$$;
+
 -- Picks the workflow stage a request should enter (Purchase Committee for validity review).
 CREATE OR REPLACE FUNCTION fn_route_stage(p_amount NUMERIC)
 RETURNS INTEGER AS $$

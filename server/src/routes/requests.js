@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { requireRole } from '../auth.js';
 import { config } from '../config.js';
+import { configService } from '../configService.js';
 import { pool, queryAll, withUser } from '../db.js';
 import { buildRequestStatusEmail } from '../emailTemplates.js';
 import { HttpError, conflict, forbidden, notFound, unprocessable } from '../errors.js';
@@ -24,10 +25,9 @@ const NOT_CARRYABLE = ['REJECTED', 'CLOSED', 'FULFILLED', 'CARRIED_FORWARD'];
 const ATTACH_CLOSED = ['CLOSED', 'CARRIED_FORWARD'];
 const isUnderReview = (status) => status.startsWith('UNDER_');
 
-// The bands the Principal's authority turns on (docs/plan/decisions.md):
-// up to ₹50,000 the Principal decides, above it the decision belongs to CDC
-// or — past ₹5,00,000 — to the Chairman and Vice Chairman jointly.
-const PRINCIPAL_DECIDES_UPTO = 50000;
+// The bands the Principal's authority turns on (authoritative configuration):
+// up to principal_max the Principal decides, above it the decision belongs to CDC
+// or — past cdc_max — to the Chairman and Vice Chairman.
 
 // Where a requester may still change the request: a draft nobody has seen, or
 // one an approver has sent back for correction.
@@ -38,13 +38,14 @@ const EDITABLE_STATUSES = ['DRAFT', 'AWAITING_RESUBMISSION'];
  * Mirrors fn_record_action's stage restrictions so the UI never offers a
  * button the database will refuse. The database remains the authority.
  */
-function actionsAt(stageCode, isFinalStage, amount) {
+async function actionsAt(stageCode, isFinalStage, amount) {
   if (stageCode === 'PURCHASE_COMMITTEE') {
     // Validity review only — never a decision on the money.
     return ['ESCALATE', 'RETURN', 'REJECT'];
   }
   if (stageCode === 'PRINCIPAL') {
-    return amount <= PRINCIPAL_DECIDES_UPTO
+    const { principalMax } = await configService.getThresholds();
+    return amount <= principalMax
       ? ['APPROVE', 'PARTIAL_APPROVE', 'REJECT', 'RETURN']
       : ['ESCALATE', 'REJECT', 'RETURN'];
   }
@@ -1214,13 +1215,14 @@ requestsRouter.post('/:id/actions', async (req, res) => {
       throw unprocessable('Purchase Committee performs validity review only and cannot approve requests');
     }
     if (stageCode === 'PRINCIPAL') {
-      if (['APPROVE', 'PARTIAL_APPROVE'].includes(dbAction) && amount > PRINCIPAL_DECIDES_UPTO) {
+      const { principalMax } = await configService.getThresholds();
+      if (['APPROVE', 'PARTIAL_APPROVE'].includes(dbAction) && amount > principalMax) {
         throw unprocessable(
-          `Requests above ₹${PRINCIPAL_DECIDES_UPTO.toLocaleString('en-IN')} are decided by CDC or the Chairman and Vice Chairman; forward it instead`);
+          `Requests above ₹${principalMax.toLocaleString('en-IN')} are decided by CDC or the Chairman and Vice Chairman; forward it instead`);
       }
-      if (dbAction === 'ESCALATE' && amount <= PRINCIPAL_DECIDES_UPTO) {
+      if (dbAction === 'ESCALATE' && amount <= principalMax) {
         throw unprocessable(
-          `Requests up to ₹${PRINCIPAL_DECIDES_UPTO.toLocaleString('en-IN')} must be decided by the Principal and cannot be escalated`);
+          `Requests up to ₹${principalMax.toLocaleString('en-IN')} must be decided by the Principal and cannot be escalated`);
       }
     }
     if (dbAction === 'RETURN' && !['PURCHASE_COMMITTEE', 'PRINCIPAL'].includes(stageCode)) {

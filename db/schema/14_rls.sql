@@ -238,7 +238,7 @@ CREATE POLICY requests_approver_update ON requests
         )
         AND NOT (
             requests.current_status IN ('APPROVED', 'PARTIALLY_APPROVED')
-            AND requests.tentative_total_cost > 50000
+            AND requests.tentative_total_cost > app_get_config_numeric('workflow.threshold.principal_max', 50000)
             AND EXISTS (
                 SELECT 1 FROM stage_approvers sa
                 JOIN workflow_stages ws ON ws.stage_id = sa.stage_id
@@ -487,3 +487,14 @@ CREATE POLICY request_versions_insert ON request_versions
         app_has_role('ADMIN')
         OR app_can_see_request(request_id)
     );
+
+-- System configurations are readable by anyone, modifiable only by ADMIN.
+ALTER TABLE system_configurations ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY system_configurations_read ON system_configurations
+    FOR SELECT USING (TRUE);
+
+CREATE POLICY system_configurations_admin_write ON system_configurations
+    FOR ALL
+    USING (app_has_role('ADMIN'))
+    WITH CHECK (app_has_role('ADMIN'));

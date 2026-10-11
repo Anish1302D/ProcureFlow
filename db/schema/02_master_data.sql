@@ -79,3 +79,16 @@ CREATE TABLE budget_items (
 );
 
 CREATE INDEX budget_items_head_idx ON budget_items(budget_head_id);
+
+CREATE TABLE system_configurations (
+    config_id    SERIAL PRIMARY KEY,
+    key          TEXT NOT NULL UNIQUE,
+    value        JSONB NOT NULL,
+    description  TEXT,
+    category     TEXT NOT NULL DEFAULT 'general',
+    is_secret    BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_by   UUID REFERENCES users(user_id) ON DELETE SET NULL
+);
+
+CREATE INDEX system_configurations_category_idx ON system_configurations(category);

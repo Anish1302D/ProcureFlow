@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireRole } from '../auth.js';
+import { configService } from '../configService.js';
 import { anonQuery, withUser } from '../db.js';
 import { HttpError, conflict, notFound } from '../errors.js';
 
@@ -542,4 +543,220 @@ adminRouter.delete('/courses/:id', async (req, res) => {
   });
   res.status(204).end();
 });
+
+// ---------------------------------------------------------------------------
+// GET /api/admin/config  —  view all non-secret business configurations
+// ---------------------------------------------------------------------------
+adminRouter.get('/config', async (_req, res) => {
+  const configs = await configService.getAll();
+  res.json(configs);
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /api/admin/config  —  update business configurations (admin only)
+// ---------------------------------------------------------------------------
+adminRouter.patch('/config', async (req, res) => {
+  const updates = req.body?.settings ?? req.body;
+  if (!updates || typeof updates !== 'object') {
+    throw new HttpError(400, 'Invalid request body; expected configuration updates object');
+  }
+  const result = await configService.updateMultiple(updates, req.user.id);
+  res.json({
+    message: 'Configuration updated successfully',
+    updated: result,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/admin/stages  —  view workflow stages with assigned approvers
+// ---------------------------------------------------------------------------
+adminRouter.get('/stages', async (_req, res) => {
+  const { rows } = await anonQuery(
+    `SELECT ws.stage_id, ws.code, ws.name, ws.sequence_no, ws.is_final,
+            COALESCE(
+              json_agg(
+                json_build_object(
+                  'userId', u.user_id,
+                  'name', u.full_name,
+                  'email', u.email,
+                  'roleId', r.role_id,
+                  'roleCode', r.code,
+                  'roleName', r.name,
+                  'memberClassification', sa.member_classification
+                ) ORDER BY u.full_name
+              ) FILTER (WHERE u.user_id IS NOT NULL),
+              '[]'
+            ) AS approvers
+       FROM workflow_stages ws
+       LEFT JOIN stage_approvers sa ON sa.stage_id = ws.stage_id
+       LEFT JOIN users u ON u.user_id = sa.user_id
+       LEFT JOIN roles r ON r.role_id = sa.role_id
+      GROUP BY ws.stage_id
+      ORDER BY ws.sequence_no`,
+  );
+  res.json(rows.map((s) => ({
+    id: s.stage_id,
+    code: s.code,
+    name: s.name,
+    sequence: s.sequence_no,
+    isFinal: s.is_final,
+    approvers: s.approvers,
+  })));
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/admin/stages/:stageCode/approvers  —  assign approver to a stage
+// ---------------------------------------------------------------------------
+const assignApproverSchema = z.object({
+  userId: z.string().uuid(),
+  roleId: z.number().int().positive().optional(),
+  memberClassification: z.enum(['TEACHING', 'NON_TEACHING']).optional(),
+});
+
+adminRouter.post('/stages/:stageCode/approvers', async (req, res) => {
+  const stageCode = req.params.stageCode.toUpperCase();
+  const { userId, roleId, memberClassification } = assignApproverSchema.parse(req.body);
+
+  const { rows: stageRows } = await anonQuery(
+    'SELECT stage_id, code, name FROM workflow_stages WHERE code = $1',
+    [stageCode]
+  );
+  if (!stageRows[0]) throw notFound(`Workflow stage '${stageCode}' not found`);
+  const stage = stageRows[0];
+
+  const { rows: userRows } = await anonQuery(
+    'SELECT user_id, full_name, email, is_active FROM users WHERE user_id = $1',
+    [userId]
+  );
+  if (!userRows[0]) throw notFound('User not found');
+  if (!userRows[0].is_active) throw new HttpError(400, 'Cannot assign an inactive user as a stage approver');
+
+  await withUser(req.user.id, async (db) => {
+    let resolvedRoleId = roleId;
+
+    if (stageCode === 'CDC') {
+      const classification = memberClassification ?? 'TEACHING';
+      const { teachingLimit, nonTeachingLimit } = await configService.getCdcLimits();
+
+      const { rows: currentCdc } = await db.query(
+        `SELECT sa.member_classification, count(*) AS cnt
+           FROM stage_approvers sa
+          WHERE sa.stage_id = $1 AND sa.user_id <> $2
+          GROUP BY sa.member_classification`,
+        [stage.stage_id, userId]
+      );
+      const counts = Object.fromEntries(currentCdc.map((r) => [r.member_classification, Number(r.cnt)]));
+
+      if (classification === 'TEACHING' && (counts['TEACHING'] || 0) >= teachingLimit) {
+        throw new HttpError(422, `CDC teaching member limit reached (maximum ${teachingLimit} teaching members allowed)`);
+      }
+      if (classification === 'NON_TEACHING' && (counts['NON_TEACHING'] || 0) >= nonTeachingLimit) {
+        throw new HttpError(422, `CDC non-teaching member limit reached (maximum ${nonTeachingLimit} non-teaching members allowed)`);
+      }
+
+      if (!resolvedRoleId) {
+        const { rows: defRole } = await db.query(
+          "SELECT role_id FROM roles WHERE code = 'CDC_GRANT_MEMBER'"
+        );
+        resolvedRoleId = defRole[0]?.role_id;
+      }
+    } else if (stageCode === 'PRINCIPAL') {
+      if (!resolvedRoleId) {
+        const { rows: defRole } = await db.query("SELECT role_id FROM roles WHERE code = 'PRINCIPAL'");
+        resolvedRoleId = defRole[0]?.role_id;
+      }
+    } else if (stageCode === 'PURCHASE_COMMITTEE') {
+      if (!resolvedRoleId) {
+        const { rows: defRole } = await db.query("SELECT role_id FROM roles WHERE code = 'PURCHASE_COMMITTEE'");
+        resolvedRoleId = defRole[0]?.role_id;
+      }
+    } else if (stageCode === 'FINAL_AUTHORITY') {
+      if (!resolvedRoleId) {
+        const { rows: defRole } = await db.query("SELECT role_id FROM roles WHERE code = 'CHAIRMAN'");
+        resolvedRoleId = defRole[0]?.role_id;
+      }
+    }
+
+    if (resolvedRoleId) {
+      const { rows: rRows } = await db.query('SELECT role_id, code FROM roles WHERE role_id = $1', [resolvedRoleId]);
+      if (!rRows[0]) throw new HttpError(422, 'Invalid role ID');
+
+      await db.query(
+        'INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+        [userId, resolvedRoleId]
+      );
+    }
+
+    await db.query(
+      `INSERT INTO stage_approvers (stage_id, user_id, role_id, member_classification)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (stage_id, user_id) DO UPDATE SET
+         role_id = EXCLUDED.role_id,
+         member_classification = EXCLUDED.member_classification`,
+      [stage.stage_id, userId, resolvedRoleId, memberClassification ?? 'TEACHING']
+    );
+
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
+       VALUES ($1, $2, $3, $4, $5::jsonb)`,
+      [
+        'stage_approver',
+        `${stageCode}:${userId}`,
+        req.user.id,
+        'ASSIGN',
+        JSON.stringify({ stageCode, userId, roleId: resolvedRoleId, memberClassification: memberClassification ?? 'TEACHING' }),
+      ]
+    );
+  });
+
+  res.status(201).json({ message: `Approver assigned to ${stage.name}` });
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /api/admin/stages/:stageCode/approvers/:userId  —  remove approver
+// ---------------------------------------------------------------------------
+adminRouter.delete('/stages/:stageCode/approvers/:userId', async (req, res) => {
+  const stageCode = req.params.stageCode.toUpperCase();
+  const { userId } = req.params;
+
+  const { rows: stageRows } = await anonQuery(
+    'SELECT stage_id, code, name FROM workflow_stages WHERE code = $1',
+    [stageCode]
+  );
+  if (!stageRows[0]) throw notFound(`Workflow stage '${stageCode}' not found`);
+  const stage = stageRows[0];
+
+  await withUser(req.user.id, async (db) => {
+    if (stageCode === 'PRINCIPAL') {
+      const { rows: countRows } = await db.query(
+        'SELECT count(*) AS cnt FROM stage_approvers WHERE stage_id = $1 AND user_id <> $2',
+        [stage.stage_id, userId]
+      );
+      if (Number(countRows[0]?.cnt || 0) === 0) {
+        throw new HttpError(400, 'Cannot remove the last Principal approver. The Principal stage must remain staffed.');
+      }
+    }
+
+    const { rowCount } = await db.query(
+      'DELETE FROM stage_approvers WHERE stage_id = $1 AND user_id = $2',
+      [stage.stage_id, userId]
+    );
+    if (!rowCount) throw notFound('User is not assigned to this stage');
+
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
+       VALUES ($1, $2, $3, $4, $5::jsonb)`,
+      [
+        'stage_approver',
+        `${stageCode}:${userId}`,
+        req.user.id,
+        'REMOVE',
+        JSON.stringify({ stageCode, userId }),
+      ]
+    );
+  });
+
+  res.status(204).end();
+});
+
 
