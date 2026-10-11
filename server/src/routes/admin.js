@@ -251,6 +251,7 @@ adminRouter.patch('/users/:id', async (req, res) => {
     if (body.isActive !== undefined) push('is_active', body.isActive);
 
     if (sets.length || body.roleIds !== undefined) {
+      sets.push('token_version = COALESCE(token_version, 1) + 1');
       push('updated_at', new Date());
       vals.push(userId);
       await db.query(
@@ -323,7 +324,7 @@ adminRouter.delete('/users/:id', async (req, res) => {
     }
 
     const { rowCount } = await db.query(
-      `UPDATE users SET is_active = FALSE, updated_at = NOW()
+      `UPDATE users SET is_active = FALSE, token_version = COALESCE(token_version, 1) + 1, updated_at = NOW()
         WHERE user_id = $1`,
       [userId],
     );
@@ -341,7 +342,7 @@ adminRouter.post('/users/:id/reactivate', async (req, res) => {
 
   await withUser(req.user.id, async (db) => {
     const { rowCount } = await db.query(
-      `UPDATE users SET is_active = TRUE, updated_at = NOW()
+      `UPDATE users SET is_active = TRUE, token_version = COALESCE(token_version, 1) + 1, updated_at = NOW()
         WHERE user_id = $1`,
       [userId],
     );

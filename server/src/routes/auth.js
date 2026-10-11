@@ -52,8 +52,7 @@ authRouter.post('/login', loginIpLimiter, loginLimiter, async (req, res) => {
   // that would send the plaintext to the database, where statement logging
   // could record it. pgcrypto's bcrypt hashes are standard $2a$ hashes.
   const { rows } = await anonQuery(
-    `SELECT user_id, password_hash,
-            (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint AS updated_ms
+    `SELECT user_id, password_hash, COALESCE(token_version, 1) AS token_version
        FROM users WHERE email = $1 AND is_active`,
     [email],
   );
@@ -78,7 +77,7 @@ authRouter.post('/login', loginIpLimiter, loginLimiter, async (req, res) => {
   );
 
   res.json({
-    token: issueToken(account.user_id, account.updated_ms),
+    token: issueToken(account.user_id, account.token_version),
     user: await describe(account.user_id),
   });
 });
@@ -127,7 +126,7 @@ authRouter.post('/change-password', requireAuth, changePasswordLimiter, async (r
   const newHash = await bcrypt.hash(newPassword, 12);
   await withUser(req.user.id, (db) =>
     db.query(
-      'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE user_id = $2',
+      'UPDATE users SET password_hash = $1, token_version = COALESCE(token_version, 1) + 1, updated_at = NOW() WHERE user_id = $2',
       [newHash, req.user.id],
     ),
   );

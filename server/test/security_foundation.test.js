@@ -94,146 +94,145 @@ test('BEHAVIORAL: requireAuth rejects expired tokens with 401', async () => {
 });
 
 // Helper mirroring the exact token invalidation rule in server/src/auth.js
-function evaluateTokenInvalidation(payload, user) {
-  if (payload.pwdUpdated != null) {
-    return Boolean(user.updatedMs != null && payload.pwdUpdated < user.updatedMs);
+function validateTokenSession(payload, user) {
+  const tokenVer = payload.tokenVersion ?? payload.v;
+  if (tokenVer == null) {
+    throw new HttpError(401, 'Your session has expired due to a security update. Please sign in again.');
   }
-  const updateSecondBoundary = user.updatedMs != null ? Math.ceil(user.updatedMs / 1000) : 0;
-  return Boolean(!payload.iat || payload.iat <= updateSecondBoundary);
+  if (!user) {
+    throw new HttpError(401, 'Account not found or disabled');
+  }
+  if (Number(tokenVer) !== user.tokenVersion) {
+    throw new HttpError(401, 'Your session has expired due to a security update. Please sign in again.');
+  }
+  return true;
 }
 
-test('BEHAVIORAL: A token issued before a password change is rejected', () => {
-  const initialUpdateMs = 1700000000000;
-  const passwordChangeMs = 1700000000500; // password changed 500ms later (within the same second)
+test('BEHAVIORAL: An old token is rejected even when timestamps would collide with security update', () => {
+  // User starts at token_version 1
+  const initialVersion = 1;
+  const collidingTimestamp = 1700000000000;
 
-  // Token issued prior to password change
-  const oldToken = issueToken('user-1', initialUpdateMs);
+  // Token issued prior to update with initial version
+  const oldToken = issueToken('user-collision', initialVersion);
   const oldPayload = jwt.verify(oldToken, config.jwtSecret);
 
-  // User state after password change
-  const userAfterPwdChange = { id: 'user-1', updatedMs: passwordChangeMs };
+  // Security update increments token_version to 2, but has identical/colliding timestamp
+  const userAfterSecurityUpdate = {
+    id: 'user-collision',
+    tokenVersion: 2,
+    updatedMs: collidingTimestamp,
+  };
 
-  assert.equal(
-    evaluateTokenInvalidation(oldPayload, userAfterPwdChange),
-    true,
+  assert.throws(
+    () => validateTokenSession(oldPayload, userAfterSecurityUpdate),
+    (err) => err instanceof HttpError && err.status === 401 && err.message.includes('session has expired due to a security update'),
+    'Old token must be rejected by version mismatch even if timestamps collide',
+  );
+});
+
+test('BEHAVIORAL: A token issued before a password change is rejected via token_version increment', () => {
+  // Token issued with version 1
+  const oldToken = issueToken('user-pwd', 1);
+  const oldPayload = jwt.verify(oldToken, config.jwtSecret);
+
+  // Password change atomically increments user token_version to 2
+  const userAfterPwdChange = { id: 'user-pwd', tokenVersion: 2 };
+
+  assert.throws(
+    () => validateTokenSession(oldPayload, userAfterPwdChange),
+    (err) => err instanceof HttpError && err.status === 401,
     'Token issued prior to password change must be rejected',
   );
 });
 
-test('BEHAVIORAL: A token issued before a role or security update is rejected', () => {
-  const initialUpdateMs = 1700000000000;
-  const adminRoleUpdateMs = 1700000000800; // admin updated role 800ms later (within the same second)
-
-  // Token issued prior to admin update
-  const oldToken = issueToken('user-2', initialUpdateMs);
+test('BEHAVIORAL: A token issued before a role or security update is rejected via token_version increment', () => {
+  // Token issued with version 1
+  const oldToken = issueToken('user-admin-update', 1);
   const oldPayload = jwt.verify(oldToken, config.jwtSecret);
 
-  // User state after admin role update
-  const userAfterRoleUpdate = { id: 'user-2', updatedMs: adminRoleUpdateMs };
+  // Admin updates roles, atomically incrementing user token_version to 2
+  const userAfterRoleUpdate = { id: 'user-admin-update', tokenVersion: 2 };
 
-  assert.equal(
-    evaluateTokenInvalidation(oldPayload, userAfterRoleUpdate),
-    true,
+  assert.throws(
+    () => validateTokenSession(oldPayload, userAfterRoleUpdate),
+    (err) => err instanceof HttpError && err.status === 401,
     'Token issued prior to admin role update must be rejected',
   );
 });
 
-test('BEHAVIORAL: A legitimate login immediately after an update remains valid, including within the same second', () => {
-  const securityUpdateMs = 1700000000500;
-  // Login happens immediately after the update within the exact same second
-  const loginAccountUpdatedMs = securityUpdateMs;
+test('BEHAVIORAL: A legitimate fresh login after an update receives the current version and works immediately', () => {
+  const currentDbVersion = 5;
 
-  const newToken = issueToken('user-3', loginAccountUpdatedMs);
-  const newPayload = jwt.verify(newToken, config.jwtSecret);
+  // Fresh login receives current version from database
+  const freshToken = issueToken('user-fresh-login', currentDbVersion);
+  const freshPayload = jwt.verify(freshToken, config.jwtSecret);
 
-  // Current user state from database
-  const currentUser = { id: 'user-3', updatedMs: securityUpdateMs };
+  const currentUser = { id: 'user-fresh-login', tokenVersion: currentDbVersion };
 
-  assert.equal(
-    evaluateTokenInvalidation(newPayload, currentUser),
-    false,
-    'Legitimate login in same second as update must NOT be rejected',
+  assert.equal(freshPayload.tokenVersion, currentDbVersion);
+  assert.equal(freshPayload.v, currentDbVersion);
+  assert.doesNotThrow(
+    () => validateTokenSession(freshPayload, currentUser),
+    'Fresh token matching current database version must be accepted immediately',
   );
-  assert.equal(newPayload.pwdUpdated, currentUser.updatedMs);
 });
 
-test('BEHAVIORAL: Legacy token without pwdUpdated issued in the same second as an update is rejected', () => {
-  const updateMs = 1700000000500; // update at 1000.5s
-  const currentUser = { id: 'user-legacy-1', updatedMs: updateMs };
+test('BEHAVIORAL: Legacy token without token_version claim is rejected according to migration policy', () => {
+  const currentUser = { id: 'user-legacy-1', tokenVersion: 1 };
 
-  // Legacy token issued at 1000.1s (same second, lacking pwdUpdated claim)
-  const legacySameSecondPayload = {
+  // Legacy token without tokenVersion or v claim
+  const legacyPayload = {
     sub: 'user-legacy-1',
     iat: 1700000000,
   };
 
-  assert.equal(
-    evaluateTokenInvalidation(legacySameSecondPayload, currentUser),
-    true,
-    'Legacy token issued in same second as security update must be rejected',
+  assert.throws(
+    () => validateTokenSession(legacyPayload, currentUser),
+    (err) => err instanceof HttpError && err.status === 401 && err.message.includes('session has expired due to a security update'),
+    'Legacy tokens without security-version claim must require reauthentication',
   );
 });
 
-test('BEHAVIORAL: Legacy token without pwdUpdated issued before the update second is rejected', () => {
-  const updateMs = 1700000000500;
-  const currentUser = { id: 'user-legacy-2', updatedMs: updateMs };
+test('BEHAVIORAL: Legacy token with old timestamp claim but no version is rejected', () => {
+  const currentUser = { id: 'user-legacy-2', tokenVersion: 1 };
 
-  // Legacy token issued earlier
-  const legacyOlderPayload = {
+  const legacyWithOldTimestamp = {
     sub: 'user-legacy-2',
-    iat: 1699999990,
+    pwdUpdated: 1700000000000,
+    iat: 1700000000,
   };
 
-  assert.equal(
-    evaluateTokenInvalidation(legacyOlderPayload, currentUser),
-    true,
-    'Legacy token issued before update second must be rejected',
-  );
-});
-
-test('BEHAVIORAL: Legacy token without pwdUpdated and missing iat is rejected', () => {
-  const currentUser = { id: 'user-legacy-3', updatedMs: 1700000000500 };
-
-  const legacyNoIatPayload = {
-    sub: 'user-legacy-3',
-  };
-
-  assert.equal(
-    evaluateTokenInvalidation(legacyNoIatPayload, currentUser),
-    true,
-    'Legacy token with no timestamp claim must be rejected',
+  assert.throws(
+    () => validateTokenSession(legacyWithOldTimestamp, currentUser),
+    (err) => err instanceof HttpError && err.status === 401,
+    'Legacy token without version claim must not bypass revocation',
   );
 });
 
 test('BEHAVIORAL: A deactivated account remains unable to authenticate', () => {
   // If account is deactivated, loadUser returns null (WHERE is_active is false)
   const deactivatedUser = null;
-  const validToken = issueToken('user-4', Date.now());
-  assert.ok(validToken, 'Token was issued');
-
-  // Verify rejection pattern when account is disabled
-  const checkAccount = (user) => {
-    if (!user) throw new HttpError(401, 'Account not found or disabled');
-  };
+  const validToken = issueToken('user-deactivated', 1);
+  const payload = jwt.verify(validToken, config.jwtSecret);
 
   assert.throws(
-    () => checkAccount(deactivatedUser),
+    () => validateTokenSession(payload, deactivatedUser),
     (err) => err instanceof HttpError && err.status === 401 && err.message.includes('Account not found or disabled'),
   );
 });
 
 test('BEHAVIORAL: Normal authentication continues to work after a security update', () => {
-  const securityUpdateMs = 1700000000500;
-  // User signs in after update
-  const token = issueToken('user-5', securityUpdateMs);
+  const newVersion = 3;
+  // User signs in after update, gets newVersion
+  const token = issueToken('user-active', newVersion);
   const payload = jwt.verify(token, config.jwtSecret);
 
   // Subsequent request with the new session
-  const user = { id: 'user-5', updatedMs: securityUpdateMs, roles: ['HEAD'] };
+  const user = { id: 'user-active', tokenVersion: newVersion, roles: ['HEAD'] };
 
-  assert.equal(
-    evaluateTokenInvalidation(payload, user),
-    false,
+  assert.doesNotThrow(
+    () => validateTokenSession(payload, user),
     'Normal authenticated requests after update must remain valid',
   );
 });
