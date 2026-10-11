@@ -117,6 +117,14 @@ jobs:
             exit 1
           fi
 
+      # -------------------------------------------------------------------------
+      # Migration verification: verify that db/migrations/ upgrades an existing
+      # database correctly and idempotently on a pre-migration schema.
+      # -------------------------------------------------------------------------
+      - name: Verify token_version migration against PostgreSQL
+        working-directory: server
+        run: npm run test:migration
+
   # -------------------------------------------------------------------------
   # Dependency audit. Advisory for the frontend, enforced for the server.
   # -------------------------------------------------------------------------
