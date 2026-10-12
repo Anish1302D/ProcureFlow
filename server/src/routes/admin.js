@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { z } from 'zod';
@@ -144,22 +145,28 @@ adminRouter.get('/roles', async (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /api/admin/users  —  create a new user
+// POST /api/admin/users  —  invite a new user with single-use setup token
 // ---------------------------------------------------------------------------
 const createUserSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
   fullName: z.string().trim().min(2).max(200),
-  password: z.string().min(8).max(200),
   departmentId: z.number().int().positive().nullable().optional(),
   roleIds: z.array(z.number().int().positive()).min(1, 'Assign at least one role'),
-  isActive: z.boolean().default(true),
+  isActive: z.boolean().optional(),
 });
 
 adminRouter.post('/users', async (req, res) => {
   const body = createUserSchema.parse(req.body);
-  // Hash before opening the transaction — bcrypt is CPU-bound and slow;
-  // holding a DB connection while it runs would waste pool capacity.
-  const hash = await bcrypt.hash(body.password, BCRYPT_ROUNDS);
+
+  // Generate an unusable placeholder password hash so unactivated accounts cannot log in.
+  const randomPlaceholder = crypto.randomBytes(16).toString('hex');
+  const initialPasswordHash = `$2a$12$unusable.placeholder.setup.required.${randomPlaceholder}`;
+
+  // Issue a short-lived (24h) cryptographically random setup token.
+  // The raw token is NEVER logged or stored in the database — only its SHA-256 hash.
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
   const created = await withUser(req.user.id, async (db) => {
     const dup = await db.query(
@@ -170,10 +177,11 @@ adminRouter.post('/users', async (req, res) => {
     await validateDepartmentId(db, body.departmentId);
     await validateRoleIds(db, body.roleIds);
 
+    // Accounts start unactivated (is_active = FALSE) until the invitee completes password setup.
     const { rows } = await db.query(
-      `INSERT INTO users (email, full_name, password_hash, department_id, is_active)
-       VALUES ($1, $2, $3, $4, $5) RETURNING user_id`,
-      [body.email, body.fullName, hash, body.departmentId ?? null, body.isActive],
+      `INSERT INTO users (email, full_name, password_hash, department_id, is_active, token_version)
+       VALUES ($1, $2, $3, $4, FALSE, 1) RETURNING user_id`,
+      [body.email, body.fullName, initialPasswordHash, body.departmentId ?? null],
     );
     const userId = rows[0].user_id;
 
@@ -201,6 +209,12 @@ adminRouter.post('/users', async (req, res) => {
     }
 
     await db.query(
+      `INSERT INTO account_setup_tokens (user_id, token_hash, expires_at)
+       VALUES ($1, $2, $3)`,
+      [userId, tokenHash, expiresAt],
+    );
+
+    await db.query(
       `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
        VALUES ('user', $1::text, $2::uuid, 'CREATE', $3::jsonb)`,
       [
@@ -211,7 +225,7 @@ adminRouter.post('/users', async (req, res) => {
           fullName: body.fullName,
           departmentId: body.departmentId ?? null,
           roleIds: body.roleIds,
-          isActive: body.isActive,
+          isActive: false,
         }),
       ],
     );
@@ -219,8 +233,55 @@ adminRouter.post('/users', async (req, res) => {
     return userId;
   });
 
-  res.status(201).json(await userDetail(created));
+  const detail = await userDetail(created);
+  res.status(201).json({
+    ...detail,
+    setupToken: rawToken,
+    setupUrl: `/setup-account?token=${rawToken}`,
+    expiresAt: expiresAt.toISOString(),
+    emailDelivery: 'UNCONFIGURED',
+    message: 'User created. Outbound email delivery is unconfigured in this environment. Provide the setup link directly to the invited institutional member.',
+  });
 });
+
+// ---------------------------------------------------------------------------
+// POST /api/admin/users/:id/setup-token  —  generate new setup link for a user
+// ---------------------------------------------------------------------------
+adminRouter.post('/users/:id/setup-token', async (req, res) => {
+  const userId = req.params.id;
+  const user = await userDetail(userId);
+  if (!user) throw notFound('User not found');
+
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+  await withUser(req.user.id, async (db) => {
+    await db.query(
+      'UPDATE account_setup_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL',
+      [userId],
+    );
+    await db.query(
+      'INSERT INTO account_setup_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)',
+      [userId, tokenHash, expiresAt],
+    );
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
+       VALUES ('user', $1::text, $2::uuid, 'SETUP_TOKEN_ISSUED', jsonb_build_object('expiresAt', $3::text))`,
+      [userId, req.user.id, expiresAt.toISOString()],
+    );
+  });
+
+  res.json({
+    userId,
+    setupToken: rawToken,
+    setupUrl: `/setup-account?token=${rawToken}`,
+    expiresAt: expiresAt.toISOString(),
+    emailDelivery: 'UNCONFIGURED',
+    message: 'New setup token generated. Outbound email delivery is unconfigured in this environment. Provide the setup link directly to the invited institutional member.',
+  });
+});
+
 
 // ---------------------------------------------------------------------------
 // PATCH /api/admin/users/:id  —  edit name/email/password/department/roles/active status

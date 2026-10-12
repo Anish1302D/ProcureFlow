@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  Check, ChevronDown, Edit2, Loader2, Plus, Search,
+  Check, ChevronDown, Copy, Edit2, KeyRound, Loader2, Plus, Search,
   ShieldCheck, Trash2, UserCheck, UserX, X,
 } from 'lucide-react';
 import { api } from '../api/client';
@@ -71,8 +71,6 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
   const save = async () => {
     if (!form.email.trim()) return showToast('Email is required', 'error');
     if (!form.fullName.trim()) return showToast('Full name is required', 'error');
-    if (!isEdit && form.password.length < 8)
-      return showToast('Password must be at least 8 characters', 'error');
     if (isEdit && form.password && form.password.length < 8)
       return showToast('New password must be at least 8 characters', 'error');
     if (!form.roleIds.length) return showToast('Assign at least one role', 'error');
@@ -84,19 +82,19 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
         fullName: form.fullName.trim(),
         departmentId: form.departmentId ? Number(form.departmentId) : null,
         roleIds: form.roleIds,
-        isActive: form.isActive,
       };
-      if (form.password) body.password = form.password;
 
       if (isEdit) {
+        body.isActive = form.isActive;
+        if (form.password) body.password = form.password;
         await api(`/api/admin/users/${user.id}`, { method: 'PATCH', body });
         showToast(`${form.fullName} updated`, 'success');
+        onSaved();
       } else {
-        body.password = form.password;
-        await api('/api/admin/users', { method: 'POST', body });
-        showToast(`${form.fullName} created`, 'success');
+        const res = await api('/api/admin/users', { method: 'POST', body });
+        showToast(`${form.fullName} invited`, 'success');
+        onSaved(res);
       }
-      onSaved();
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
@@ -120,12 +118,12 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
         <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100">
           <div>
             <h2 className="text-base font-bold text-gray-900">
-              {isEdit ? 'Edit user' : 'Add new user'}
+              {isEdit ? 'Edit user' : 'Invite new user'}
             </h2>
             <p className="text-xs text-gray-400 mt-0.5">
               {isEdit
-                ? 'Leave password blank to keep the current one.'
-                : 'Passwords are stored securely with bcrypt hashing.'}
+                ? 'Leave password blank to keep current password.'
+                : 'Invited members activate their account via single-use setup link.'}
             </p>
           </div>
           <button
@@ -160,19 +158,29 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
             />
           </div>
 
-          {/* Password */}
-          <div>
-            <label className={labelCls}>
-              Password {isEdit ? '(leave blank to keep current)' : '*'}
-            </label>
-            <input
-              type="password"
-              className={inputCls}
-              placeholder={isEdit ? 'Enter new password to change…' : 'Min. 8 characters'}
-              value={form.password}
-              onChange={(e) => set({ password: e.target.value })}
-            />
-          </div>
+          {/* Password (edit only) or Setup link notice (create) */}
+          {isEdit ? (
+            <div>
+              <label className={labelCls}>Password (leave blank to keep current)</label>
+              <input
+                type="password"
+                className={inputCls}
+                placeholder="Enter new password to change…"
+                value={form.password}
+                onChange={(e) => set({ password: e.target.value })}
+              />
+            </div>
+          ) : (
+            <div className="rounded-xl bg-indigo-50/70 border border-indigo-100 p-3.5 space-y-1">
+              <p className="text-xs font-semibold text-indigo-950 flex items-center gap-1.5">
+                <KeyRound className="w-4 h-4 text-indigo-600" /> Secure Setup Link Activation
+              </p>
+              <p className="text-[11px] text-indigo-800 leading-relaxed">
+                A single-use, 24-hour setup link will be generated. The invited institutional member will set their own password on activation.
+              </p>
+            </div>
+          )}
+
 
           {/* Department picker */}
           <div>
@@ -286,21 +294,111 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
 }
 
 // ---------------------------------------------------------------------------
+// Modal — Account activation & setup link
+// ---------------------------------------------------------------------------
+
+function ActivationLinkModal({ data, onClose }) {
+  const [copied, setCopied] = useState(false);
+  const fullUrl = `${window.location.origin}${data.setupUrl}`;
+
+  const copy = () => {
+    navigator.clipboard.writeText(fullUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2500);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/40 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-4">
+        <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+          <div className="flex items-center gap-2 text-indigo-600">
+            <KeyRound className="w-5 h-5" />
+            <h2 className="text-base font-bold text-gray-900">Account Activation Link</h2>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="space-y-2">
+          <p className="text-xs text-gray-600">
+            One-time activation link for <span className="font-bold text-gray-900">{data.fullName || data.name}</span> (<span className="text-gray-500">{data.email}</span>):
+          </p>
+          <div className="flex items-center gap-2 p-2.5 rounded-xl bg-gray-50 border border-gray-200">
+            <input
+              readOnly
+              value={fullUrl}
+              className="bg-transparent text-xs text-gray-800 font-mono flex-1 outline-none select-all"
+            />
+            <button
+              onClick={copy}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                copied ? 'bg-emerald-600 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+              }`}
+            >
+              {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              {copied ? 'Copied!' : 'Copy'}
+            </button>
+          </div>
+        </div>
+
+        <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-900 space-y-1">
+          <p className="font-semibold flex items-center gap-1.5">
+            <ShieldCheck className="w-4 h-4 text-amber-700" />
+            Institutional Notice
+          </p>
+          <p className="text-[11px] text-amber-800 leading-relaxed">
+            Outbound email delivery is unconfigured in this environment. Provide this single-use setup link directly to the invited institutional member. The token expires in 24 hours.
+          </p>
+        </div>
+
+        <div className="flex justify-end pt-2">
+          <button
+            onClick={onClose}
+            className="px-5 py-2 rounded-lg text-xs font-semibold bg-gray-900 hover:bg-gray-800 text-white"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
 export const UserManagement = () => {
-  const { refresh } = useApp();
+  const { refresh, showToast } = useApp();
   const { run } = useAction();
   const users = useApi('/api/admin/users');
   const roles = useApi('/api/admin/roles');
   const departments = useApi('/api/admin/departments');
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(null); // null | 'create' | <user object>
+  const [activationModal, setActivationModal] = useState(null); // null | { ... }
 
-  const closeModal = () => {
+  const closeModal = (createdRes) => {
     setModal(null);
+    users.reload();
     refresh();
+    if (createdRes?.setupUrl) {
+      setActivationModal(createdRes);
+    }
+  };
+
+  const handleGenerateSetupToken = async (user) => {
+    try {
+      const res = await api(`/api/admin/users/${user.id}/setup-token`, { method: 'POST' });
+      setActivationModal({ ...user, ...res });
+      showToast(`New setup link created for ${user.name}`, 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
   };
 
   const handleDeactivate = async (user) => {
@@ -440,6 +538,13 @@ export const UserManagement = () => {
                       <td className="py-3.5 px-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
                           <button
+                            onClick={() => handleGenerateSetupToken(user)}
+                            className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                            title="Generate / view activation link"
+                          >
+                            <KeyRound className="w-3.5 h-3.5" />
+                          </button>
+                          <button
                             onClick={() => setModal(user)}
                             className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
                             title="Edit user"
@@ -479,7 +584,7 @@ export const UserManagement = () => {
         </div>
       </div>
 
-      {/* Modal */}
+      {/* User Modal */}
       {modal && (
         <UserModal
           user={modal === 'create' ? null : modal}
@@ -489,6 +594,15 @@ export const UserManagement = () => {
           onSaved={closeModal}
         />
       )}
+
+      {/* Activation Link Modal */}
+      {activationModal && (
+        <ActivationLinkModal
+          data={activationModal}
+          onClose={() => setActivationModal(null)}
+        />
+      )}
     </>
+
   );
 };

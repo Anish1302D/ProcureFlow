@@ -50,9 +50,12 @@ export async function actionsAt(stageCode, _isFinalStage, amount) {
       : ['ESCALATE', 'RETURN'];
   }
   if (stageCode === 'CDC') {
-    // CDC decides requests above principalMax up to cdcMax
-    return ['APPROVE', 'PARTIAL_APPROVE', 'REJECT', 'RETURN'];
+    const { cdcMax } = await configService.getThresholds();
+    return amount <= cdcMax
+      ? ['APPROVE', 'PARTIAL_APPROVE', 'REJECT', 'RETURN']
+      : ['ESCALATE', 'RETURN'];
   }
+
   if (stageCode === 'FINAL_AUTHORITY') {
     // Chairman and Vice Chairman decide requests above cdcMax
     return ['APPROVE', 'PARTIAL_APPROVE', 'REJECT', 'RETURN'];

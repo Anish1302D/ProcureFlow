@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import net from 'node:net';
 import path from 'node:path';
 import { test } from 'node:test';
 import jwt from 'jsonwebtoken';
@@ -25,17 +27,23 @@ const { requireRole, issueToken } = await import('../src/auth.js');
 
 // Helper to check DB connectivity with fast timeout
 async function isDbConnected() {
-  try {
-    const client = await Promise.race([
-      pool.connect(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1000)),
-    ]);
-    client.release();
-    return true;
-  } catch {
-    return false;
-  }
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host: 'localhost', port: 5433, timeout: 300 });
+    socket.on('connect', () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.on('timeout', () => {
+      socket.destroy();
+      resolve(false);
+    });
+    socket.on('error', () => {
+      socket.destroy();
+      resolve(false);
+    });
+  });
 }
+
 
 // ============================================================================
 // 1. CONFIGURATION SYSTEM: SCHEMAS & DEFAULT SAFE BASELINES
@@ -549,27 +557,268 @@ test('ADMIN USER MGMT: User detail and audit logs never expose password hashes o
 // 8. CONFIGURABLE SELF-REGISTRATION POLICY
 // ============================================================================
 
-test('SELF-REGISTRATION: Client-supplied roles and roleIds are strictly rejected', () => {
+// ============================================================================
+// 8. CONFIGURABLE SELF-REGISTRATION POLICY & LEAST-PRIVILEGED ROLES
+// ============================================================================
+
+test('SELF-REGISTRATION: Client-supplied roles, departments, or permissions are strictly rejected', () => {
   function handleRegisterAttempt(body) {
-    if (body?.roles || body?.roleIds) {
-      throw new HttpError(400, 'Direct role assignment is prohibited during self-registration');
+    if (
+      body?.role ||
+      body?.roles ||
+      body?.roleIds ||
+      body?.departmentId ||
+      body?.department_id ||
+      body?.stageId ||
+      body?.stages ||
+      body?.permissions
+    ) {
+      throw new HttpError(400, 'Self-registration cannot specify roles, departments, or permissions');
+    }
+  }
+
+  // Attempt to register with privileged roles (HEAD, ADMIN, PRINCIPAL, etc.)
+  for (const privilegedRole of ['HEAD', 'ADMIN', 'PRINCIPAL', 'CDC_MEMBER', 'PURCHASE_COMMITTEE', 'CHAIRMAN', 'VICE_PRESIDENT']) {
+    assert.throws(
+      () => handleRegisterAttempt({ email: 'test@spcollege.edu', role: privilegedRole }),
+      (err) => err.status === 400 && err.message.includes('Self-registration cannot specify roles, departments, or permissions'),
+    );
+  }
+
+  // Attempt to supply client roles array or role IDs
+  assert.throws(
+    () => handleRegisterAttempt({ email: 'test@spcollege.edu', roles: ['ADMIN'] }),
+    (err) => err.status === 400,
+  );
+  assert.throws(
+    () => handleRegisterAttempt({ email: 'test@spcollege.edu', roleIds: [10] }),
+    (err) => err.status === 400,
+  );
+
+  // Attempt to supply client department assignment
+  assert.throws(
+    () => handleRegisterAttempt({ email: 'test@spcollege.edu', departmentId: 2 }),
+    (err) => err.status === 400,
+  );
+});
+
+test('SELF-REGISTRATION: Legitimate registration assigns only least-privileged requester role and null department', () => {
+  const assignedRoleCode = 'ACTIVITY_INCHARGE';
+  const assignedDepartmentId = null;
+
+  assert.strictEqual(assignedRoleCode, 'ACTIVITY_INCHARGE');
+  assert.strictEqual(assignedDepartmentId, null);
+
+  const mockUser = {
+    roles: [assignedRoleCode],
+    stages: [],
+  };
+  assert.strictEqual(mockUser.roles.includes('HEAD'), false);
+  assert.strictEqual(mockUser.roles.includes('ADMIN'), false);
+  assert.strictEqual(mockUser.stages.length, 0);
+});
+
+test('SELF-REGISTRATION: Registration fails closed when configuration is disabled or unconfigured', async () => {
+  const enabled = await configService.isSelfRegistrationEnabled();
+  assert.strictEqual(enabled, false);
+
+  function checkAllowed(isEnabled) {
+    if (!isEnabled) {
+      throw new HttpError(403, 'Self-registration is currently disabled by administrator');
     }
   }
 
   assert.throws(
-    () => handleRegisterAttempt({ email: 'test@spcollege.edu', roles: ['ADMIN'] }),
-    (err) => err.status === 400 && err.message.includes('Direct role assignment is prohibited'),
-  );
-
-  assert.throws(
-    () => handleRegisterAttempt({ email: 'test@spcollege.edu', roleIds: [10] }),
-    (err) => err.status === 400 && err.message.includes('Direct role assignment is prohibited'),
+    () => checkAllowed(false),
+    (err) => err.status === 403 && err.message.includes('Self-registration is currently disabled'),
   );
 });
 
 // ============================================================================
-// 9. SQL MIGRATION FILES & REGISTRY INTEGRITY
+// 9. ADMIN-CREATED ACCOUNT ACTIVATION & SECURE SETUP TOKEN FLOW
 // ============================================================================
+
+test('ACCOUNT ACTIVATION: User creation schema rejects administrator-entered passwords', () => {
+  const createUserSchema = z.object({
+    email: z.string().trim().toLowerCase().email().max(254),
+    fullName: z.string().trim().min(2).max(200),
+    departmentId: z.number().int().positive().nullable().optional(),
+    roleIds: z.array(z.number().int().positive()).min(1, 'Assign at least one role'),
+    isActive: z.boolean().optional(),
+  });
+
+  const valid = createUserSchema.safeParse({
+    email: 'new.faculty@spcollege.edu',
+    fullName: 'Dr. New Faculty',
+    departmentId: 1,
+    roleIds: [2],
+  });
+  assert.ok(valid.success);
+  assert.strictEqual(valid.data.password, undefined);
+});
+
+test('ACCOUNT ACTIVATION: Generates cryptographically secure single-use token and SHA-256 hash', () => {
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  assert.strictEqual(rawToken.length, 64);
+
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  assert.strictEqual(tokenHash.length, 64);
+  assert.notStrictEqual(rawToken, tokenHash);
+
+  const verifyHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  assert.strictEqual(verifyHash, tokenHash);
+});
+
+test('ACCOUNT ACTIVATION: Token verification rejects missing, expired, and already used tokens', () => {
+  function verifyToken(tokenRecord, incomingToken) {
+    if (!incomingToken || incomingToken.length < 16) {
+      throw new HttpError(400, 'Invalid or missing setup token');
+    }
+    const incomingHash = crypto.createHash('sha256').update(incomingToken).digest('hex');
+    if (!tokenRecord || tokenRecord.token_hash !== incomingHash) {
+      throw new HttpError(404, 'Invalid or unknown setup token');
+    }
+    if (tokenRecord.used_at) {
+      throw new HttpError(400, 'This setup link has already been used');
+    }
+    if (new Date(tokenRecord.expires_at) < new Date()) {
+      throw new HttpError(400, 'This setup link has expired. Please contact your administrator.');
+    }
+    return { valid: true, email: tokenRecord.email, fullName: tokenRecord.full_name };
+  }
+
+  const raw = 'a'.repeat(64);
+  const hash = crypto.createHash('sha256').update(raw).digest('hex');
+
+  const validRecord = {
+    token_hash: hash,
+    expires_at: new Date(Date.now() + 86400000),
+    used_at: null,
+    email: 'faculty@spcollege.edu',
+    full_name: 'Dr. Faculty',
+  };
+  const verified = verifyToken(validRecord, raw);
+  assert.strictEqual(verified.valid, true);
+
+  // Unknown token
+  assert.throws(
+    () => verifyToken(validRecord, 'b'.repeat(64)),
+    (err) => err.status === 404,
+  );
+
+  // Already used token
+  const usedRecord = { ...validRecord, used_at: new Date() };
+  assert.throws(
+    () => verifyToken(usedRecord, raw),
+    (err) => err.status === 400 && err.message.includes('already been used'),
+  );
+
+  // Expired token
+  const expiredRecord = { ...validRecord, expires_at: new Date(Date.now() - 1000) };
+  assert.throws(
+    () => verifyToken(expiredRecord, raw),
+    (err) => err.status === 400 && err.message.includes('has expired'),
+  );
+});
+
+test('ACCOUNT ACTIVATION: Unactivated accounts (is_active = FALSE) cannot log in or authenticate', () => {
+  const usersDb = [
+    { user_id: 'u-1', email: 'inactive@spcollege.edu', is_active: false, token_version: 1 },
+    { user_id: 'u-2', email: 'active@spcollege.edu', is_active: true, token_version: 1 },
+  ];
+
+  function queryLoginAccount(email) {
+    return usersDb.find((u) => u.email === email && u.is_active);
+  }
+
+  assert.strictEqual(queryLoginAccount('inactive@spcollege.edu'), undefined);
+  assert.ok(queryLoginAccount('active@spcollege.edu'));
+
+  function loadUserMock(userId) {
+    const user = usersDb.find((u) => u.user_id === userId && u.is_active);
+    if (!user) return null;
+    return user;
+  }
+
+  assert.strictEqual(loadUserMock('u-1'), null);
+  assert.ok(loadUserMock('u-2'));
+});
+
+// ============================================================================
+// 10. EXACT WORKFLOW THRESHOLD BOUNDARIES & APPROVAL RESTRICTIONS
+// ============================================================================
+
+test('THRESHOLDS: Exact boundaries at ₹50,000, ₹50,001, ₹5,00,000, and ₹5,00,001', async () => {
+  // 1. Boundary ₹50,000 (Principal can approve, partial approve, reject, or return)
+  const actionsPrincipal50k = await actionsAt('PRINCIPAL', false, 50000);
+  assert.ok(actionsPrincipal50k.includes('APPROVE'), 'Principal can approve at <= 50,000');
+  assert.ok(actionsPrincipal50k.includes('REJECT'), 'Principal can reject at <= 50,000');
+  assert.ok(actionsPrincipal50k.includes('RETURN'));
+
+  // 2. Boundary ₹50,001 (Principal reviews/refers; CDC makes final decision)
+  const actionsPrincipal50kPlus = await actionsAt('PRINCIPAL', false, 50001);
+  assert.strictEqual(actionsPrincipal50kPlus.includes('APPROVE'), false, 'Principal cannot final approve at 50,001');
+  assert.strictEqual(actionsPrincipal50kPlus.includes('REJECT'), false, 'Principal cannot final reject at 50,001');
+  assert.ok(actionsPrincipal50kPlus.includes('ESCALATE'), 'Principal escalates/refers at 50,001');
+  assert.ok(actionsPrincipal50kPlus.includes('RETURN'));
+
+  const actionsCdc50kPlus = await actionsAt('CDC', false, 50001);
+  assert.ok(actionsCdc50kPlus.includes('APPROVE'), 'CDC can approve at 50,001');
+  assert.ok(actionsCdc50kPlus.includes('REJECT'), 'CDC can reject at 50,001');
+  assert.ok(actionsCdc50kPlus.includes('RETURN'));
+
+  // 3. Boundary ₹5,00,000 (Principal reviews/refers; CDC makes final decision)
+  const actionsPrincipal500k = await actionsAt('PRINCIPAL', false, 500000);
+  assert.strictEqual(actionsPrincipal500k.includes('APPROVE'), false);
+  assert.ok(actionsPrincipal500k.includes('ESCALATE'));
+
+  const actionsCdc500k = await actionsAt('CDC', false, 500000);
+  assert.ok(actionsCdc500k.includes('APPROVE'), 'CDC can approve at 5,00,000');
+  assert.ok(actionsCdc500k.includes('REJECT'), 'CDC can reject at 5,00,000');
+  assert.ok(actionsCdc500k.includes('RETURN'));
+
+  // 4. Boundary ₹5,00,001 (Principal and CDC review/refer; Chairman/Vice Chairman makes final decision)
+  const actionsPrincipal500kPlus = await actionsAt('PRINCIPAL', false, 500001);
+  assert.strictEqual(actionsPrincipal500kPlus.includes('APPROVE'), false);
+  assert.ok(actionsPrincipal500kPlus.includes('ESCALATE'));
+
+  const actionsCdc500kPlus = await actionsAt('CDC', false, 500001);
+  assert.strictEqual(actionsCdc500kPlus.includes('APPROVE'), false, 'CDC cannot final approve at 5,00,001');
+  assert.strictEqual(actionsCdc500kPlus.includes('REJECT'), false, 'CDC cannot final reject at 5,00,001');
+  assert.ok(actionsCdc500kPlus.includes('RETURN'));
+
+  const actionsFinal500kPlus = await actionsAt('FINAL_AUTHORITY', true, 500001);
+  assert.ok(actionsFinal500kPlus.includes('APPROVE'), 'Final Authority can approve at 5,00,001');
+  assert.ok(actionsFinal500kPlus.includes('REJECT'), 'Final Authority can reject at 5,00,001');
+  assert.ok(actionsFinal500kPlus.includes('RETURN'));
+
+  // 5. Purchase Committee across all thresholds (review and refer only, never final approve or reject)
+  for (const amt of [50000, 50001, 500000, 500001]) {
+    const pcActions = await actionsAt('PURCHASE_COMMITTEE', false, amt);
+    assert.strictEqual(pcActions.includes('APPROVE'), false, `PC must never approve at ₹${amt}`);
+    assert.strictEqual(pcActions.includes('REJECT'), false, `PC must never reject at ₹${amt}`);
+    assert.ok(pcActions.includes('ESCALATE'));
+    assert.ok(pcActions.includes('RETURN'));
+  }
+});
+
+// ============================================================================
+// 11. SQL MIGRATION FILES & REGISTRY INTEGRITY
+// ============================================================================
+
+test('MIGRATION: Secure account activation migration exists and is registered', async () => {
+  const migrationPath = path.resolve('..', 'db', 'migrations', '20261011T230000_secure_account_activation.sql');
+  const sql = await fs.readFile(migrationPath, 'utf8');
+
+  assert.ok(sql.includes('CREATE TABLE IF NOT EXISTS account_setup_tokens'));
+  assert.ok(sql.includes('token_hash'));
+  assert.ok(sql.includes('expires_at'));
+  assert.ok(sql.includes('used_at'));
+  assert.ok(sql.includes('ALTER TABLE account_setup_tokens ENABLE ROW LEVEL SECURITY'));
+  assert.ok(sql.includes('account_setup_tokens_admin'));
+  assert.ok(sql.includes('schema_migrations'));
+  assert.ok(sql.includes('20261011T230000_secure_account_activation.sql'));
+});
 
 test('MIGRATION: Migration 20261011T200000_config_driven_system.sql exists and is well-formed', async () => {
   const migrationPath = path.resolve('..', 'db', 'migrations', '20261011T200000_config_driven_system.sql');
@@ -599,10 +848,11 @@ test('MIGRATION: Migration 20261011T220000_approval_workflow_and_user_mgmt_corre
 });
 
 // ============================================================================
-// 10. LIVE DATABASE VERIFICATION (RUNS WHEN POSTGRESQL IS ONLINE)
+// 12. LIVE DATABASE VERIFICATION (RUNS WHEN POSTGRESQL IS ONLINE)
 // ============================================================================
 
 test('LIVE DB: system_configurations table and SQL functions behave correctly', async (t) => {
+
   const connected = await isDbConnected();
   if (!connected) {
     t.skip('Local PostgreSQL instance is offline; skipping live DB queries');

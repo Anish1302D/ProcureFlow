@@ -29,7 +29,6 @@ export const Login = () => {
   const [email, setEmail] = useState('');
   const [fullName, setFullName] = useState('');
   const [password, setPassword] = useState('');
-  const [selectedRole, setSelectedRole] = useState('HEAD');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -60,7 +59,6 @@ export const Login = () => {
             email: email.trim(),
             fullName: fullName.trim(),
             password,
-            role: selectedRole,
           },
         });
         showToast('Registration successful! Welcome to the portal.', 'success');
@@ -155,18 +153,11 @@ export const Login = () => {
               value={password} onChange={(e) => setPassword(e.target.value)} />
           </div>
           {mode === 'register' && (
-            <div>
-              <label htmlFor="role" className="block text-xs font-semibold text-gray-600 uppercase tracking-wider mb-1.5">Institutional Role</label>
-              <select
-                id="role"
-                value={selectedRole}
-                onChange={(e) => setSelectedRole(e.target.value)}
-                className={inputCls}
-              >
-                <option value="HEAD">Head of Department (Requisitions)</option>
-                <option value="ACTIVITY_INCHARGE">Activity In-charge (Requisitions)</option>
-              </select>
-              <p className="text-[11px] text-gray-400 mt-1">Administrative and approval roles are assigned solely by institution administrators.</p>
+            <div className="rounded-lg bg-indigo-50/60 border border-indigo-100 p-3 text-xs text-indigo-900 space-y-1">
+              <p className="font-semibold">Institutional Requester Access</p>
+              <p className="text-[11px] text-indigo-700 leading-relaxed">
+                Self-registered accounts receive standard requester access. Department head, committee authority, and administrative roles are assigned solely by administrators.
+              </p>
             </div>
           )}
           {error && <p role="alert" className="text-xs text-red-600">{error}</p>}

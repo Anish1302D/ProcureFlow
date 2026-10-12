@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
@@ -19,8 +20,11 @@ const registerSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
   fullName: z.string().trim().min(2).max(200),
   password: z.string().min(8, 'Password must be at least 8 characters').max(200),
-  departmentId: z.number().int().positive().optional().nullable(),
-  role: z.enum(['HEAD', 'ACTIVITY_INCHARGE']).optional().default('HEAD'),
+});
+
+const setupAccountSchema = z.object({
+  token: z.string().trim().min(16).max(256),
+  password: z.string().min(8, 'Password must be at least 8 characters').max(200),
 });
 
 // Global IP rate limiter to protect against credential stuffing across accounts.
@@ -124,26 +128,31 @@ authRouter.post('/register', loginIpLimiter, async (req, res) => {
     throw new HttpError(403, 'Self-registration is currently disabled by administrator');
   }
 
-  // Prevent privilege escalation or arbitrary role assignment
-  if (req.body?.roles || req.body?.roleIds) {
-    throw new HttpError(400, 'Direct role assignment is prohibited during self-registration');
+  // Prevent privilege escalation, role spoofing, or untrusted department assignment.
+  // Anonymous registrants can never select a role, department, or approval stage.
+  if (
+    req.body?.role ||
+    req.body?.roles ||
+    req.body?.roleIds ||
+    req.body?.departmentId ||
+    req.body?.department_id ||
+    req.body?.stageId ||
+    req.body?.stages ||
+    req.body?.permissions
+  ) {
+    throw new HttpError(400, 'Self-registration cannot specify roles, departments, or permissions');
   }
 
-  const { email, fullName, password, departmentId, role } = registerSchema.parse(req.body);
+  const { email, fullName, password } = registerSchema.parse(req.body);
 
   const dup = await anonQuery('SELECT 1 FROM users WHERE email = $1', [email]);
   if (dup.rowCount) {
     throw conflict('An account with this email already exists');
   }
 
-  if (departmentId) {
-    const deptCheck = await anonQuery('SELECT 1 FROM departments WHERE department_id = $1', [departmentId]);
-    if (!deptCheck.rowCount) {
-      throw new HttpError(422, 'Selected department does not exist');
-    }
-  }
-
-  const assignedRoleCode = role === 'ACTIVITY_INCHARGE' ? 'ACTIVITY_INCHARGE' : 'HEAD';
+  // Public registrants are strictly assigned the least-privileged valid requester role.
+  // Privileged roles (HEAD, CDC, PC, PRINCIPAL, FINAL_AUTHORITY, ADMIN) are strictly prohibited.
+  const assignedRoleCode = 'ACTIVITY_INCHARGE';
   const roleRow = await anonQuery('SELECT role_id FROM roles WHERE code = $1', [assignedRoleCode]);
   if (!roleRow.rowCount) {
     throw new HttpError(500, 'Assigned role not found');
@@ -152,11 +161,13 @@ authRouter.post('/register', loginIpLimiter, async (req, res) => {
 
   const passwordHash = await bcrypt.hash(password, 12);
 
+  // Department assignment requires institutional administrator verification and approval.
+  // Self-registered accounts start with department_id = NULL.
   const { rows: userRows } = await anonQuery(
     `INSERT INTO users (email, full_name, password_hash, department_id, is_active, token_version)
-     VALUES ($1, $2, $3, $4, TRUE, 1)
+     VALUES ($1, $2, $3, NULL, TRUE, 1)
      RETURNING user_id`,
-    [email, fullName, passwordHash, departmentId ?? null],
+    [email, fullName, passwordHash],
   );
   const newUserId = userRows[0].user_id;
 
@@ -174,6 +185,102 @@ authRouter.post('/register', loginIpLimiter, async (req, res) => {
   res.status(201).json({
     token: issueToken(newUserId, 1),
     user: await describe(newUserId),
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Account setup & activation for admin-invited users
+// ---------------------------------------------------------------------------
+authRouter.get('/verify-setup-token', async (req, res) => {
+  const token = String(req.query.token ?? '').trim();
+  if (!token || token.length < 16) {
+    throw new HttpError(400, 'Invalid or missing setup token');
+  }
+
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const { rows } = await anonQuery(
+    `SELECT t.token_id, t.user_id, t.expires_at, t.used_at,
+            u.email, u.full_name, u.is_active
+       FROM account_setup_tokens t
+       JOIN users u ON u.user_id = t.user_id
+      WHERE t.token_hash = $1`,
+    [tokenHash],
+  );
+
+  const entry = rows[0];
+  if (!entry) {
+    throw new HttpError(404, 'Invalid or unknown setup token');
+  }
+  if (entry.used_at) {
+    throw new HttpError(400, 'This setup link has already been used');
+  }
+  if (new Date(entry.expires_at) < new Date()) {
+    throw new HttpError(400, 'This setup link has expired. Please contact your administrator.');
+  }
+
+  res.json({
+    valid: true,
+    email: entry.email,
+    fullName: entry.full_name,
+  });
+});
+
+authRouter.post('/setup-account', loginIpLimiter, async (req, res) => {
+  const { token, password } = setupAccountSchema.parse(req.body);
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+  const { rows } = await anonQuery(
+    `SELECT t.token_id, t.user_id, t.expires_at, t.used_at,
+            u.email, u.full_name, u.is_active
+       FROM account_setup_tokens t
+       JOIN users u ON u.user_id = t.user_id
+      WHERE t.token_hash = $1`,
+    [tokenHash],
+  );
+
+  const entry = rows[0];
+  if (!entry) {
+    throw new HttpError(404, 'Invalid or unknown setup token');
+  }
+  if (entry.used_at) {
+    throw new HttpError(400, 'This setup link has already been used');
+  }
+  if (new Date(entry.expires_at) < new Date()) {
+    throw new HttpError(400, 'This setup link has expired. Please contact your administrator.');
+  }
+
+  const newHash = await bcrypt.hash(password, 12);
+  const userId = entry.user_id;
+
+  await anonQuery(
+    `UPDATE account_setup_tokens
+        SET used_at = NOW()
+      WHERE token_id = $1`,
+    [entry.token_id],
+  );
+
+  const { rows: updatedRows } = await anonQuery(
+    `UPDATE users
+        SET password_hash = $1,
+            is_active = TRUE,
+            token_version = COALESCE(token_version, 1) + 1,
+            updated_at = NOW()
+      WHERE user_id = $2
+  RETURNING COALESCE(token_version, 1) AS token_version`,
+    [newHash, userId],
+  );
+
+  const newVersion = updatedRows[0]?.token_version ?? 1;
+
+  await anonQuery(
+    `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
+     VALUES ('user', $1::text, $1::uuid, 'ACCOUNT_ACTIVATED', jsonb_build_object('ip', $2::text))`,
+    [userId, req.ip],
+  );
+
+  res.json({
+    token: issueToken(userId, newVersion),
+    user: await describe(userId),
   });
 });
 

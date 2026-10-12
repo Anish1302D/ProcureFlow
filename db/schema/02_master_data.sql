@@ -34,6 +34,18 @@ CREATE TABLE user_roles (
     PRIMARY KEY (user_id, role_id)
 );
 
+CREATE TABLE account_setup_tokens (
+    token_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id        UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    token_hash     TEXT NOT NULL,
+    expires_at     TIMESTAMPTZ NOT NULL,
+    used_at        TIMESTAMPTZ,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX account_setup_tokens_user_idx ON account_setup_tokens(user_id);
+CREATE INDEX account_setup_tokens_hash_idx ON account_setup_tokens(token_hash);
+
 CREATE TABLE courses (
     course_id      SERIAL PRIMARY KEY,
     department_id  INTEGER NOT NULL REFERENCES departments(department_id) ON DELETE RESTRICT,

@@ -508,3 +508,12 @@ CREATE POLICY system_configurations_admin_write ON system_configurations
     FOR ALL
     USING (app_has_role('ADMIN'))
     WITH CHECK (app_has_role('ADMIN'));
+
+-- Account setup tokens are accessible to ADMIN or the owning user
+ALTER TABLE account_setup_tokens ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY account_setup_tokens_admin ON account_setup_tokens
+    FOR ALL
+    TO app_user
+    USING (app_is_admin() OR app_current_user_id() = user_id)
+    WITH CHECK (app_is_admin());
