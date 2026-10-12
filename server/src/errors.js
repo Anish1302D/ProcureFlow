@@ -20,6 +20,7 @@ function defaultCode(status) {
     415: 'UNSUPPORTED_MEDIA_TYPE',
     422: 'UNPROCESSABLE',
     429: 'TOO_MANY_REQUESTS',
+    503: 'SERVICE_UNAVAILABLE',
   }[status] ?? 'ERROR';
 }
 

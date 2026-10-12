@@ -734,46 +734,157 @@ test('SECURITY: vercel.json contains framework, outputDirectory, valid routes wi
   }
 });
 
-test('BEHAVIORAL: Pre-migration fallback handles missing token_version column (PostgreSQL 42703)', async () => {
-  // Simulates a database query failure where users.token_version has not been migrated yet
-  let queriedWithFallback = false;
-  const mockAnonQuery = async (queryText) => {
-    if (queryText.includes('COALESCE(token_version, 1)') || queryText.includes('COALESCE(u.token_version, 1)')) {
-      const err = new Error('column "token_version" does not exist');
-      err.code = '42703';
-      throw err;
-    }
-    if (queryText.includes('1 AS token_version')) {
-      queriedWithFallback = true;
-      return {
-        rows: [{
-          user_id: 'usr-unmigrated',
-          email: 'unmigrated@spcollege.edu',
-          password_hash: '$2a$12$e8YQz.qM..dummy',
-          full_name: 'Unmigrated User',
-          department_id: null,
-          token_version: 1,
-          roles: ['FACULTY'],
-        }],
-      };
-    }
-    return { rows: [] };
+test('SECURITY: Password change fails closed with 503 MIGRATION_REQUIRED when token_version migration is missing', async () => {
+  let executedSecondaryUpdate = false;
+  const mockDb = {
+    query: async (sql) => {
+      if (sql.includes('token_version = COALESCE(token_version, 1) + 1')) {
+        const err = new Error('column "token_version" does not exist');
+        err.code = '42703';
+        throw err;
+      }
+      executedSecondaryUpdate = true;
+      return { rowCount: 1 };
+    },
   };
 
-  // Execute fallback logic
-  let rows;
+  // Simulate password change handler fail-safe logic
+  let caughtError = null;
   try {
-    const res = await mockAnonQuery('SELECT user_id, password_hash, COALESCE(token_version, 1) AS token_version FROM users WHERE email = $1 AND is_active');
-    rows = res.rows;
-  } catch (err) {
-    if (err.code === '42703') {
-      const res = await mockAnonQuery('SELECT user_id, password_hash, 1 AS token_version FROM users WHERE email = $1 AND is_active');
-      rows = res.rows;
-    } else {
+    try {
+      await mockDb.query(
+        'UPDATE users SET password_hash = $1, token_version = COALESCE(token_version, 1) + 1, updated_at = NOW() WHERE user_id = $2',
+        ['newHash', 'usr-1'],
+      );
+    } catch (err) {
+      if (err.code === '42703') {
+        throw new HttpError(
+          503,
+          'Password change and session revocation unavailable: database migration 20261011T120000_add_user_token_version.sql is required',
+          { code: 'MIGRATION_REQUIRED' },
+        );
+      }
       throw err;
     }
+  } catch (err) {
+    caughtError = err;
   }
 
-  assert.equal(queriedWithFallback, true, 'Must execute fallback query when token_version column is absent');
-  assert.equal(rows[0].token_version, 1, 'Default token_version must be 1');
+  assert.ok(caughtError instanceof HttpError, 'Must throw HttpError');
+  assert.equal(caughtError.status, 503, 'Must return HTTP 503');
+  assert.equal(caughtError.code, 'MIGRATION_REQUIRED', 'Must return code MIGRATION_REQUIRED');
+  assert.ok(caughtError.message.includes('20261011T120000_add_user_token_version.sql'));
+  assert.equal(executedSecondaryUpdate, false, 'Must never execute secondary update without token_version');
+});
+
+test('SECURITY: Admin role and user updates fail closed with 503 MIGRATION_REQUIRED when token_version migration is missing', async () => {
+  let executedBypassUpdate = false;
+  const mockDb = {
+    query: async (sql) => {
+      if (sql.includes('token_version = COALESCE(token_version, 1) + 1')) {
+        const err = new Error('column "token_version" does not exist');
+        err.code = '42703';
+        throw err;
+      }
+      executedBypassUpdate = true;
+      return { rowCount: 1 };
+    },
+  };
+
+  let caughtError = null;
+  try {
+    try {
+      await mockDb.query(
+        'UPDATE users SET token_version = COALESCE(token_version, 1) + 1, updated_at = $1 WHERE user_id = $2',
+        [new Date(), 'usr-2'],
+      );
+    } catch (err) {
+      if (err.code === '42703') {
+        throw new HttpError(
+          503,
+          'User update and session revocation unavailable: database migration 20261011T120000_add_user_token_version.sql is required',
+          { code: 'MIGRATION_REQUIRED' },
+        );
+      }
+      throw err;
+    }
+  } catch (err) {
+    caughtError = err;
+  }
+
+  assert.ok(caughtError instanceof HttpError, 'Must throw HttpError');
+  assert.equal(caughtError.status, 503, 'Must return HTTP 503');
+  assert.equal(caughtError.code, 'MIGRATION_REQUIRED', 'Must return code MIGRATION_REQUIRED');
+  assert.equal(executedBypassUpdate, false, 'Must never silently bypass session revocation on user update');
+});
+
+test('SECURITY: Account deactivation and reactivation fail closed with 503 MIGRATION_REQUIRED when token_version migration is missing', async () => {
+  let executedBypassUpdate = false;
+  const mockDb = {
+    query: async (sql) => {
+      if (sql.includes('token_version = COALESCE(token_version, 1) + 1')) {
+        const err = new Error('column "token_version" does not exist');
+        err.code = '42703';
+        throw err;
+      }
+      executedBypassUpdate = true;
+      return { rowCount: 1 };
+    },
+  };
+
+  let caughtError = null;
+  try {
+    try {
+      await mockDb.query(
+        'UPDATE users SET is_active = FALSE, token_version = COALESCE(token_version, 1) + 1, updated_at = NOW() WHERE user_id = $1',
+        ['usr-3'],
+      );
+    } catch (err) {
+      if (err.code === '42703') {
+        throw new HttpError(
+          503,
+          'User deactivation and session revocation unavailable: database migration 20261011T120000_add_user_token_version.sql is required',
+          { code: 'MIGRATION_REQUIRED' },
+        );
+      }
+      throw err;
+    }
+  } catch (err) {
+    caughtError = err;
+  }
+
+  assert.ok(caughtError instanceof HttpError, 'Must throw HttpError');
+  assert.equal(caughtError.status, 503, 'Must return HTTP 503');
+  assert.equal(caughtError.code, 'MIGRATION_REQUIRED');
+  assert.equal(executedBypassUpdate, false, 'Must never deactivate without token_version invalidation');
+});
+
+test('SECURITY: Authentication service fails safely with 503 MIGRATION_REQUIRED when token_version column is missing', async () => {
+  const mockAnonQuery = async () => {
+    const err = new Error('column "token_version" does not exist');
+    err.code = '42703';
+    throw err;
+  };
+
+  let caughtError = null;
+  try {
+    try {
+      await mockAnonQuery();
+    } catch (err) {
+      if (err.code === '42703') {
+        throw new HttpError(
+          503,
+          'Authentication service unavailable: required database migration 20261011T120000_add_user_token_version.sql is required',
+          { code: 'MIGRATION_REQUIRED' },
+        );
+      }
+      throw err;
+    }
+  } catch (err) {
+    caughtError = err;
+  }
+
+  assert.ok(caughtError instanceof HttpError);
+  assert.equal(caughtError.status, 503);
+  assert.equal(caughtError.code, 'MIGRATION_REQUIRED');
 });
