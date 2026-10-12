@@ -20,17 +20,38 @@ export function issueToken(userId, tokenVersion = 1) {
 }
 
 export async function loadUser(userId) {
-  const { rows } = await anonQuery(
-    `SELECT u.user_id, u.email, u.full_name, u.department_id,
-            COALESCE(u.token_version, 1) AS token_version,
-            ARRAY(SELECT r.code FROM user_roles ur
-                    JOIN roles r ON r.role_id = ur.role_id
-                   WHERE ur.user_id = u.user_id
-                   ORDER BY r.code) AS roles
-       FROM users u
-      WHERE u.user_id = $1 AND u.is_active`,
-    [userId],
-  );
+  let rows;
+  try {
+    const res = await anonQuery(
+      `SELECT u.user_id, u.email, u.full_name, u.department_id,
+              COALESCE(u.token_version, 1) AS token_version,
+              ARRAY(SELECT r.code FROM user_roles ur
+                      JOIN roles r ON r.role_id = ur.role_id
+                     WHERE ur.user_id = u.user_id
+                     ORDER BY r.code) AS roles
+         FROM users u
+        WHERE u.user_id = $1 AND u.is_active`,
+      [userId],
+    );
+    rows = res.rows;
+  } catch (err) {
+    if (err.code === '42703') {
+      const res = await anonQuery(
+        `SELECT u.user_id, u.email, u.full_name, u.department_id,
+                1 AS token_version,
+                ARRAY(SELECT r.code FROM user_roles ur
+                        JOIN roles r ON r.role_id = ur.role_id
+                       WHERE ur.user_id = u.user_id
+                       ORDER BY r.code) AS roles
+           FROM users u
+          WHERE u.user_id = $1 AND u.is_active`,
+        [userId],
+      );
+      rows = res.rows;
+    } else {
+      throw err;
+    }
+  }
   if (!rows[0]) return null;
   const { user_id, email, full_name, department_id, token_version, roles } = rows[0];
   return {
