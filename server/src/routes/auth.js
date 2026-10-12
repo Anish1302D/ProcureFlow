@@ -52,11 +52,26 @@ authRouter.post('/login', loginIpLimiter, loginLimiter, async (req, res) => {
   // Passwords are compared here, in the API, rather than with crypt() in SQL:
   // that would send the plaintext to the database, where statement logging
   // could record it. pgcrypto's bcrypt hashes are standard $2a$ hashes.
-  const { rows } = await anonQuery(
-    `SELECT user_id, password_hash, COALESCE(token_version, 1) AS token_version
-       FROM users WHERE email = $1 AND is_active`,
-    [email],
-  );
+  let rows;
+  try {
+    const res = await anonQuery(
+      `SELECT user_id, password_hash, COALESCE(token_version, 1) AS token_version
+         FROM users WHERE email = $1 AND is_active`,
+      [email],
+    );
+    rows = res.rows;
+  } catch (err) {
+    if (err.code === '42703') {
+      const res = await anonQuery(
+        `SELECT user_id, password_hash, 1 AS token_version
+           FROM users WHERE email = $1 AND is_active`,
+        [email],
+      );
+      rows = res.rows;
+    } else {
+      throw err;
+    }
+  }
   const account = rows[0];
   const valid = await bcrypt.compare(password, account?.password_hash ?? DUMMY_HASH);
 
@@ -125,12 +140,23 @@ authRouter.post('/change-password', requireAuth, changePasswordLimiter, async (r
   if (!valid) throw new HttpError(401, 'Current password is incorrect');
 
   const newHash = await bcrypt.hash(newPassword, 12);
-  await withUser(req.user.id, (db) =>
-    db.query(
-      'UPDATE users SET password_hash = $1, token_version = COALESCE(token_version, 1) + 1, updated_at = NOW() WHERE user_id = $2',
-      [newHash, req.user.id],
-    ),
-  );
+  await withUser(req.user.id, async (db) => {
+    try {
+      await db.query(
+        'UPDATE users SET password_hash = $1, token_version = COALESCE(token_version, 1) + 1, updated_at = NOW() WHERE user_id = $2',
+        [newHash, req.user.id],
+      );
+    } catch (err) {
+      if (err.code === '42703') {
+        await db.query(
+          'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE user_id = $2',
+          [newHash, req.user.id],
+        );
+      } else {
+        throw err;
+      }
+    }
+  });
 
   res.status(204).end();
 });

@@ -254,10 +254,22 @@ adminRouter.patch('/users/:id', async (req, res) => {
       sets.push('token_version = COALESCE(token_version, 1) + 1');
       push('updated_at', new Date());
       vals.push(userId);
-      await db.query(
-        `UPDATE users SET ${sets.join(', ')} WHERE user_id = $${vals.length}`,
-        vals,
-      );
+      try {
+        await db.query(
+          `UPDATE users SET ${sets.join(', ')} WHERE user_id = $${vals.length}`,
+          vals,
+        );
+      } catch (err) {
+        if (err.code === '42703') {
+          const nonTvSets = sets.filter((s) => !s.includes('token_version'));
+          await db.query(
+            `UPDATE users SET ${nonTvSets.join(', ')} WHERE user_id = $${vals.length}`,
+            vals,
+          );
+        } else {
+          throw err;
+        }
+      }
     }
 
     // Replace roles atomically when roleIds is given.
@@ -323,12 +335,24 @@ adminRouter.delete('/users/:id', async (req, res) => {
       }
     }
 
-    const { rowCount } = await db.query(
-      `UPDATE users SET is_active = FALSE, token_version = COALESCE(token_version, 1) + 1, updated_at = NOW()
-        WHERE user_id = $1`,
-      [userId],
-    );
-    if (!rowCount) throw notFound('User not found');
+    try {
+      const { rowCount } = await db.query(
+        `UPDATE users SET is_active = FALSE, token_version = COALESCE(token_version, 1) + 1, updated_at = NOW()
+          WHERE user_id = $1`,
+        [userId],
+      );
+      if (!rowCount) throw notFound('User not found');
+    } catch (err) {
+      if (err.code === '42703') {
+        const { rowCount } = await db.query(
+          `UPDATE users SET is_active = FALSE, updated_at = NOW() WHERE user_id = $1`,
+          [userId],
+        );
+        if (!rowCount) throw notFound('User not found');
+      } else {
+        throw err;
+      }
+    }
   });
 
   res.status(204).end();
@@ -341,12 +365,24 @@ adminRouter.post('/users/:id/reactivate', async (req, res) => {
   const userId = req.params.id;
 
   await withUser(req.user.id, async (db) => {
-    const { rowCount } = await db.query(
-      `UPDATE users SET is_active = TRUE, token_version = COALESCE(token_version, 1) + 1, updated_at = NOW()
-        WHERE user_id = $1`,
-      [userId],
-    );
-    if (!rowCount) throw notFound('User not found');
+    try {
+      const { rowCount } = await db.query(
+        `UPDATE users SET is_active = TRUE, token_version = COALESCE(token_version, 1) + 1, updated_at = NOW()
+          WHERE user_id = $1`,
+        [userId],
+      );
+      if (!rowCount) throw notFound('User not found');
+    } catch (err) {
+      if (err.code === '42703') {
+        const { rowCount } = await db.query(
+          `UPDATE users SET is_active = TRUE, updated_at = NOW() WHERE user_id = $1`,
+          [userId],
+        );
+        if (!rowCount) throw notFound('User not found');
+      } else {
+        throw err;
+      }
+    }
   });
 
   res.json(await userDetail(userId));

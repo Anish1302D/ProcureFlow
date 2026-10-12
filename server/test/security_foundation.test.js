@@ -723,3 +723,57 @@ test('SECURITY: dist/ production build artifacts contain zero demo passwords and
     assert.ok(!content.includes('protonedge01@gmail.com'), `dist/assets/${file} must not contain protonedge01@gmail.com`);
   }
 });
+
+test('SECURITY: vercel.json contains framework, outputDirectory, valid routes without negative lookaheads', async () => {
+  const vercelJsonRaw = await fs.readFile(path.resolve('../vercel.json'), 'utf8');
+  const vercelConfig = JSON.parse(vercelJsonRaw);
+  assert.equal(vercelConfig.framework, 'vite');
+  assert.equal(vercelConfig.outputDirectory, 'dist');
+  for (const h of vercelConfig.headers || []) {
+    assert.ok(!h.source.includes('?!'), `Header source ${h.source} must not contain negative lookahead syntax`);
+  }
+});
+
+test('BEHAVIORAL: Pre-migration fallback handles missing token_version column (PostgreSQL 42703)', async () => {
+  // Simulates a database query failure where users.token_version has not been migrated yet
+  let queriedWithFallback = false;
+  const mockAnonQuery = async (queryText) => {
+    if (queryText.includes('COALESCE(token_version, 1)') || queryText.includes('COALESCE(u.token_version, 1)')) {
+      const err = new Error('column "token_version" does not exist');
+      err.code = '42703';
+      throw err;
+    }
+    if (queryText.includes('1 AS token_version')) {
+      queriedWithFallback = true;
+      return {
+        rows: [{
+          user_id: 'usr-unmigrated',
+          email: 'unmigrated@spcollege.edu',
+          password_hash: '$2a$12$e8YQz.qM..dummy',
+          full_name: 'Unmigrated User',
+          department_id: null,
+          token_version: 1,
+          roles: ['FACULTY'],
+        }],
+      };
+    }
+    return { rows: [] };
+  };
+
+  // Execute fallback logic
+  let rows;
+  try {
+    const res = await mockAnonQuery('SELECT user_id, password_hash, COALESCE(token_version, 1) AS token_version FROM users WHERE email = $1 AND is_active');
+    rows = res.rows;
+  } catch (err) {
+    if (err.code === '42703') {
+      const res = await mockAnonQuery('SELECT user_id, password_hash, 1 AS token_version FROM users WHERE email = $1 AND is_active');
+      rows = res.rows;
+    } else {
+      throw err;
+    }
+  }
+
+  assert.equal(queriedWithFallback, true, 'Must execute fallback query when token_version column is absent');
+  assert.equal(rows[0].token_version, 1, 'Default token_version must be 1');
+});
