@@ -114,7 +114,7 @@ test('5. Non-Grant request is approved solely by CDC Non-Grant member', async ()
 
   // Create request for CHEM department (Non-Grant)
   const draft = expectStatus(await t.api('POST', '/api/requests', {
-    token: tok.headChem,
+    token: tok.head,
     body: {
       title: 'Authz test - Non-Grant department',
       departmentId: ids.chemDept,
@@ -123,7 +123,7 @@ test('5. Non-Grant request is approved solely by CDC Non-Grant member', async ()
     },
   }), 201);
 
-  expectStatus(await t.api('POST', `/api/requests/${draft.id}/submit`, { token: tok.headChem }), 200);
+  expectStatus(await t.api('POST', `/api/requests/${draft.id}/submit`, { token: tok.head }), 200);
   expectStatus(await t.api('POST', `/api/requests/${draft.id}/actions`, { token: tok.pc1, body: { action: 'FORWARD' } }), 201);
   expectStatus(await t.api('POST', `/api/requests/${draft.id}/actions`, { token: tok.principal, body: { action: 'FORWARD' } }), 201);
 

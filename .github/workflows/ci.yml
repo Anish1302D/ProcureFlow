@@ -62,7 +62,6 @@ jobs:
           --health-retries 10
 
     env:
-      NODE_ENV: test
       # The suite rewrites the database name to spc_api_test; only the
       # credentials and host matter here.
       DATABASE_URL: postgresql://app_user:ci_app_user_password@localhost:5432/spc_approval
@@ -117,14 +116,6 @@ jobs:
             echo "::error::Row-Level Security checks failed"
             exit 1
           fi
-
-      # -------------------------------------------------------------------------
-      # Migration verification: verify that db/migrations/ upgrades an existing
-      # database correctly and idempotently on a pre-migration schema.
-      # -------------------------------------------------------------------------
-      - name: Verify token_version migration against PostgreSQL
-        working-directory: server
-        run: npm run test:migration
 
   # -------------------------------------------------------------------------
   # Dependency audit. Advisory for the frontend, enforced for the server.

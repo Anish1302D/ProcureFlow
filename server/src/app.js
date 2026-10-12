@@ -24,15 +24,7 @@ export function createApp() {
   // address — not the proxy's — or every user shares one sign-in rate limit.
   app.set('trust proxy', 'loopback');
 
-  app.use(helmet({
-    frameguard: { action: 'deny' },
-    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
-    hsts: { maxAge: 63072000, includeSubDomains: true, preload: true },
-  }));
-  app.use((_req, res, next) => {
-    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-    next();
-  });
+  app.use(helmet());
   app.use(cors({
     origin: config.corsOrigins,
     allowedHeaders: ['Authorization', 'Content-Type'],

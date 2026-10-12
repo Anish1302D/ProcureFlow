@@ -22,7 +22,6 @@ CREATE TABLE users (
     password_hash  TEXT NOT NULL,
     department_id  INTEGER REFERENCES departments(department_id) ON DELETE SET NULL,
     is_active      BOOLEAN NOT NULL DEFAULT TRUE,
-    token_version  INTEGER NOT NULL DEFAULT 1,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

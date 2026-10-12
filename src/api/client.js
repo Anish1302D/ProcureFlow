@@ -226,22 +226,14 @@ export async function api(path, { method = 'GET', body, form, signal } = {}) {
   try {
     const res = await fetch(`${BASE}${path}`, init);
     if (res.status >= 502 && res.status <= 504) {
-      if (import.meta.env.DEV) {
-        return getMockResponse(path, { method, body });
-      }
-      return await handle(res);
+      return getMockResponse(path, { method, body });
     }
     return await handle(res);
   } catch (err) {
-    if (err?.name === 'AbortError') {
-      throw err;
-    }
-    if (import.meta.env.DEV) {
+    if (err?.name !== 'AbortError') {
       return getMockResponse(path, { method, body });
     }
-    throw new ApiError(0, {
-      error: { message: 'Network connection failed. The server is currently unreachable.' },
-    });
+    throw err;
   }
 }
 

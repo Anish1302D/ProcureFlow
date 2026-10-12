@@ -201,45 +201,6 @@ adminRouter.patch('/users/:id', async (req, res) => {
       if (dup.rowCount) throw conflict('This email is already taken by another user');
     }
 
-    const adminRoleRes = await db.query("SELECT role_id FROM roles WHERE code = 'ADMIN'");
-    const adminRoleId = adminRoleRes.rows[0]?.role_id;
-
-    // Prevent deactivating the last active administrator
-    if (body.isActive === false && adminRoleId) {
-      const userHasAdmin = await db.query(
-        'SELECT 1 FROM user_roles WHERE user_id = $1 AND role_id = $2', [userId, adminRoleId],
-      );
-      if (userHasAdmin.rowCount > 0) {
-        const otherAdmins = await db.query(
-          `SELECT 1 FROM user_roles ur
-             JOIN users u ON u.user_id = ur.user_id
-            WHERE ur.role_id = $1 AND ur.user_id != $2 AND u.is_active`,
-          [adminRoleId, userId],
-        );
-        if (otherAdmins.rowCount === 0) {
-          throw new HttpError(400, 'Cannot deactivate the only active administrator');
-        }
-      }
-    }
-
-    // Prevent stripping the ADMIN role from the last active administrator
-    if (body.roleIds !== undefined && adminRoleId) {
-      const userHasAdmin = await db.query(
-        'SELECT 1 FROM user_roles WHERE user_id = $1 AND role_id = $2', [userId, adminRoleId],
-      );
-      if (userHasAdmin.rowCount > 0 && !body.roleIds.includes(adminRoleId)) {
-        const otherAdmins = await db.query(
-          `SELECT 1 FROM user_roles ur
-             JOIN users u ON u.user_id = ur.user_id
-            WHERE ur.role_id = $1 AND ur.user_id != $2 AND u.is_active`,
-          [adminRoleId, userId],
-        );
-        if (otherAdmins.rowCount === 0) {
-          throw new HttpError(400, 'Cannot remove the ADMIN role from the only active administrator');
-        }
-      }
-    }
-
     // Build SET clause dynamically so we never blank out unmentioned columns.
     const sets = [];
     const vals = [];
@@ -250,8 +211,7 @@ adminRouter.patch('/users/:id', async (req, res) => {
     if (hash !== undefined) push('password_hash', hash);
     if (body.isActive !== undefined) push('is_active', body.isActive);
 
-    if (sets.length || body.roleIds !== undefined) {
-      sets.push('token_version = COALESCE(token_version, 1) + 1');
+    if (sets.length) {
       push('updated_at', new Date());
       vals.push(userId);
       await db.query(
@@ -304,27 +264,8 @@ adminRouter.delete('/users/:id', async (req, res) => {
   }
 
   await withUser(req.user.id, async (db) => {
-    const adminRoleRes = await db.query("SELECT role_id FROM roles WHERE code = 'ADMIN'");
-    const adminRoleId = adminRoleRes.rows[0]?.role_id;
-    if (adminRoleId) {
-      const userHasAdmin = await db.query(
-        'SELECT 1 FROM user_roles WHERE user_id = $1 AND role_id = $2', [userId, adminRoleId],
-      );
-      if (userHasAdmin.rowCount > 0) {
-        const otherAdmins = await db.query(
-          `SELECT 1 FROM user_roles ur
-             JOIN users u ON u.user_id = ur.user_id
-            WHERE ur.role_id = $1 AND ur.user_id != $2 AND u.is_active`,
-          [adminRoleId, userId],
-        );
-        if (otherAdmins.rowCount === 0) {
-          throw new HttpError(400, 'Cannot deactivate the only active administrator');
-        }
-      }
-    }
-
     const { rowCount } = await db.query(
-      `UPDATE users SET is_active = FALSE, token_version = COALESCE(token_version, 1) + 1, updated_at = NOW()
+      `UPDATE users SET is_active = FALSE, updated_at = NOW()
         WHERE user_id = $1`,
       [userId],
     );
@@ -342,7 +283,7 @@ adminRouter.post('/users/:id/reactivate', async (req, res) => {
 
   await withUser(req.user.id, async (db) => {
     const { rowCount } = await db.query(
-      `UPDATE users SET is_active = TRUE, token_version = COALESCE(token_version, 1) + 1, updated_at = NOW()
+      `UPDATE users SET is_active = TRUE, updated_at = NOW()
         WHERE user_id = $1`,
       [userId],
     );

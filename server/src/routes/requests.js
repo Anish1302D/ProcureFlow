@@ -4,7 +4,7 @@ import { requireRole } from '../auth.js';
 import { config } from '../config.js';
 import { pool, queryAll, withUser } from '../db.js';
 import { buildRequestStatusEmail } from '../emailTemplates.js';
-import { HttpError, conflict, forbidden, notFound, unprocessable } from '../errors.js';
+import { conflict, forbidden, notFound, unprocessable } from '../errors.js';
 import { sendMail } from '../mailer.js';
 import { REQUESTER_ROLES } from '../roles.js';
 import { seal, verifySeal } from '../signing.js';
@@ -885,17 +885,6 @@ const createSchema = z.object({
 requestsRouter.post('/', requireRole(...REQUESTER_ROLES), async (req, res) => {
   const body = createSchema.parse(req.body);
 
-  const isAdmin = req.user.roles.includes('ADMIN');
-  if (!isAdmin) {
-    if (body.departmentId != null && req.user.departmentId != null && body.departmentId !== req.user.departmentId) {
-      throw forbidden('You can only raise requests for your own department');
-    }
-    // Automatically set or default to the requester's assigned department
-    if (body.departmentId == null && req.user.departmentId != null) {
-      body.departmentId = req.user.departmentId;
-    }
-  }
-
   const detail = await withUser(req.user.id, async (db) => {
     const head = await db.query(
       'SELECT 1 FROM budget_heads WHERE budget_head_id = $1 AND is_active', [body.budgetHeadId]);
@@ -932,13 +921,6 @@ const updateSchema = createSchema.omit({ items: true }).partial();
 requestsRouter.patch('/:id', async (req, res) => {
   const requestId = param(req, 'id');
   const body = updateSchema.parse(req.body);
-
-  const isAdmin = req.user.roles.includes('ADMIN');
-  if (!isAdmin && body.departmentId !== undefined) {
-    if (req.user.departmentId != null && body.departmentId !== req.user.departmentId) {
-      throw forbidden('You cannot assign a request to a different department');
-    }
-  }
 
   const detail = await withUser(req.user.id, async (db) => {
     const current = await lockEditableRequest(db, requestId, req.user);
@@ -1205,32 +1187,31 @@ requestsRouter.post('/:id/actions', async (req, res) => {
     const stageCode = stageRows[0].stage_code;
     const amount = Number(stageRows[0].tentative_total_cost);
 
-    // Explicit server-side staffed-stage authorization check.
-    if (!stageRows[0].staffed_here) {
-      throw new HttpError(403, 'You are not authorised to act on this request at its current stage', { code: 'SP004' });
-    }
-
-    if (stageCode === 'PURCHASE_COMMITTEE' && ['APPROVE', 'PARTIAL_APPROVE'].includes(dbAction)) {
-      throw unprocessable('Purchase Committee performs validity review only and cannot approve requests');
-    }
-    if (stageCode === 'PRINCIPAL') {
-      if (['APPROVE', 'PARTIAL_APPROVE'].includes(dbAction) && amount > PRINCIPAL_DECIDES_UPTO) {
-        throw unprocessable(
-          `Requests above ₹${PRINCIPAL_DECIDES_UPTO.toLocaleString('en-IN')} are decided by CDC or the Chairman and Vice Chairman; forward it instead`);
+    // Defence in depth. fn_record_action refuses each of these too; repeating
+    // them here turns a database exception into a clear refusal, and keeps the
+    // rule visible to anyone reading the route. Skipped for a caller who is not
+    // staffed at this stage, so that "you cannot act here" stays the reason
+    // they are refused rather than a rule about someone else's stage.
+    if (stageRows[0].staffed_here) {
+      if (stageCode === 'PURCHASE_COMMITTEE' && ['APPROVE', 'PARTIAL_APPROVE'].includes(dbAction)) {
+        throw unprocessable('Purchase Committee performs validity review only and cannot approve requests');
       }
-      if (dbAction === 'ESCALATE' && amount <= PRINCIPAL_DECIDES_UPTO) {
+      if (stageCode === 'PRINCIPAL' && ['APPROVE', 'PARTIAL_APPROVE'].includes(dbAction)
+          && amount > PRINCIPAL_DECIDES_UPTO) {
         throw unprocessable(
-          `Requests up to ₹${PRINCIPAL_DECIDES_UPTO.toLocaleString('en-IN')} must be decided by the Principal and cannot be escalated`);
+          'Requests above ₹50,000 are decided by CDC or the Chairman and Vice Chairman; forward it instead');
       }
-    }
-    if (dbAction === 'RETURN' && !['PURCHASE_COMMITTEE', 'PRINCIPAL'].includes(stageCode)) {
-      throw unprocessable('Only the Purchase Committee and the Principal can return a request for correction');
-    }
-    // The Principal referred the request to whoever the amount says decides
-    // it, so CDC has nowhere to pass it: above ₹5,00,000 it would never have
-    // reached them.
-    if (dbAction === 'ESCALATE' && stageCode === 'CDC') {
-      throw unprocessable('CDC holds the decision at this amount; it cannot pass the request further up');
+      if (dbAction === 'RETURN' && !['PURCHASE_COMMITTEE', 'PRINCIPAL'].includes(stageCode)) {
+        throw unprocessable('Only the Purchase Committee and the Principal can return a request for correction');
+      }
+      // The Principal referred the request to whoever the amount says decides
+      // it, so CDC has nowhere to pass it: above ₹5,00,000 it would never have
+      // reached them. Left to fn_record_action, two escalations at CDC close
+      // the request as partially approved with nothing actually approved.
+      // (The final authority's own refusal is the database's, as SP006.)
+      if (dbAction === 'ESCALATE' && stageCode === 'CDC') {
+        throw unprocessable('CDC holds the decision at this amount; it cannot pass the request further up');
+      }
     }
 
     const decisions = await buildDecisions(db, requestId, body);

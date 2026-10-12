@@ -217,8 +217,7 @@ attachmentsRouter.delete('/attachments/:id', async (req, res) => {
   const attachmentId = param(req, 'id');
   const fileInfo = await withUser(req.user.id, async (db) => {
     const { rows } = await db.query(
-      `SELECT a.storage_path, a.storage_backend, a.uploaded_by, a.budget_provision_id, a.action_id,
-              r.current_status AS request_status, i.status AS issue_status
+      `SELECT a.storage_path, a.storage_backend, a.uploaded_by, r.current_status AS request_status, i.status AS issue_status
          FROM attachments a
          LEFT JOIN requests r ON r.request_id = a.request_id
          LEFT JOIN issues   i ON i.issue_id   = a.issue_id
@@ -232,12 +231,6 @@ attachmentsRouter.delete('/attachments/:id', async (req, res) => {
     }
     if ((a.request_status && a.request_status !== 'DRAFT') || CLOSED_ISSUE.includes(a.issue_status)) {
       throw conflict('Files on a submitted request or a closed issue are part of the record');
-    }
-    if (a.action_id) {
-      throw conflict('Approval action evidence documents are part of the permanent audit record and cannot be deleted');
-    }
-    if (a.budget_provision_id) {
-      throw conflict('Sanction documents on a budget provision are part of the official financial record and cannot be deleted');
     }
     await db.query('DELETE FROM attachments WHERE attachment_id = $1', [attachmentId]);
     return { storagePath: a.storage_path, backend: a.storage_backend };
