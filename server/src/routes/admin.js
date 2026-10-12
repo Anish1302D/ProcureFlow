@@ -234,6 +234,11 @@ adminRouter.post('/users', async (req, res) => {
   });
 
   const detail = await userDetail(created);
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+    Pragma: 'no-cache',
+    Expires: '0',
+  });
   res.status(201).json({
     ...detail,
     setupToken: rawToken,
@@ -272,6 +277,11 @@ adminRouter.post('/users/:id/setup-token', async (req, res) => {
     );
   });
 
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+    Pragma: 'no-cache',
+    Expires: '0',
+  });
   res.json({
     userId,
     setupToken: rawToken,

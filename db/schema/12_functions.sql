@@ -493,3 +493,131 @@ BEGIN
     RETURN v_new_id;
 END;
 $$ LANGUAGE plpgsql;
+
+-- ---------------------------------------------------------------------------
+-- Function: fn_verify_account_setup_token
+-- ---------------------------------------------------------------------------
+-- Secure, narrowly scoped public verification for unauthenticated recipients.
+-- Does NOT grant table-level SELECT access to app_user.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION fn_verify_account_setup_token(p_token_hash TEXT)
+RETURNS TABLE (
+    status TEXT,
+    user_id UUID,
+    email TEXT,
+    full_name TEXT
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_token RECORD;
+BEGIN
+    SELECT t.token_id, t.user_id, t.expires_at, t.used_at,
+           u.email, u.full_name, u.is_active
+      INTO v_token
+      FROM account_setup_tokens t
+      JOIN users u ON u.user_id = t.user_id
+     WHERE t.token_hash = p_token_hash;
+
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT 'INVALID'::TEXT, NULL::UUID, NULL::TEXT, NULL::TEXT;
+        RETURN;
+    END IF;
+
+    IF v_token.used_at IS NOT NULL THEN
+        RETURN QUERY SELECT 'ALREADY_USED'::TEXT, v_token.user_id, v_token.email, v_token.full_name;
+        RETURN;
+    END IF;
+
+    IF v_token.expires_at < NOW() THEN
+        RETURN QUERY SELECT 'EXPIRED'::TEXT, v_token.user_id, v_token.email, v_token.full_name;
+        RETURN;
+    END IF;
+
+    RETURN QUERY SELECT 'VALID'::TEXT, v_token.user_id, v_token.email, v_token.full_name;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION fn_verify_account_setup_token(TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION fn_verify_account_setup_token(TEXT) TO app_user;
+
+-- ---------------------------------------------------------------------------
+-- Function: fn_consume_account_setup_token
+-- ---------------------------------------------------------------------------
+-- Atomically consumes the token, sets the bcrypt password hash, activates
+-- the user account, increments token_version (session security), and writes
+-- the audit log in a single transaction with row-level locking (FOR UPDATE).
+-- Serializes concurrent requests on the same token to prevent race conditions.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION fn_consume_account_setup_token(
+    p_token_hash TEXT,
+    p_password_hash TEXT,
+    p_ip TEXT
+)
+RETURNS TABLE (
+    user_id UUID,
+    token_version INTEGER
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_token RECORD;
+    v_new_version INTEGER;
+BEGIN
+    -- Acquire exclusive row lock on the token row to serialize concurrent setup attempts.
+    -- Any simultaneous request blocks here and subsequently sees used_at IS NOT NULL.
+    SELECT t.token_id, t.user_id, t.expires_at, t.used_at
+      INTO v_token
+      FROM account_setup_tokens t
+     WHERE t.token_hash = p_token_hash
+       FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Setup token is invalid or unknown'
+            USING ERRCODE = 'ST001';
+    END IF;
+
+    IF v_token.used_at IS NOT NULL THEN
+        RAISE EXCEPTION 'Setup token has already been used'
+            USING ERRCODE = 'ST002';
+    END IF;
+
+    IF v_token.expires_at < NOW() THEN
+        RAISE EXCEPTION 'Setup token has expired'
+            USING ERRCODE = 'ST003';
+    END IF;
+
+    -- Mark token as used atomically
+    UPDATE account_setup_tokens
+       SET used_at = NOW()
+     WHERE token_id = v_token.token_id;
+
+    -- Set password, activate user, increment token_version for clean session state
+    UPDATE users
+       SET password_hash = p_password_hash,
+           is_active = TRUE,
+           token_version = COALESCE(token_version, 1) + 1,
+           updated_at = NOW()
+     WHERE users.user_id = v_token.user_id
+ RETURNING COALESCE(users.token_version, 1) INTO v_new_version;
+
+    -- Record immutable audit log entry in the same transaction
+    INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
+    VALUES (
+        'user',
+        v_token.user_id::TEXT,
+        v_token.user_id,
+        'ACCOUNT_ACTIVATED',
+        jsonb_build_object('ip', p_ip)
+    );
+
+    RETURN QUERY SELECT v_token.user_id, v_new_version;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION fn_consume_account_setup_token(TEXT, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION fn_consume_account_setup_token(TEXT, TEXT, TEXT) TO app_user;

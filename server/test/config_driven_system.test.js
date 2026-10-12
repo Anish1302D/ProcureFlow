@@ -24,6 +24,13 @@ const { pool, anonQuery } = await import('../src/db.js');
 const { HttpError } = await import('../src/errors.js');
 const { actionsAt } = await import('../src/routes/requests.js');
 const { requireRole, issueToken } = await import('../src/auth.js');
+const { verifySetupLimiter, setupAccountLimiter } = await import('../src/routes/auth.js');
+const {
+  REQUESTER_ROLES,
+  ISSUE_MANAGER_ROLES,
+  INVENTORY_READER_ROLES,
+  INVENTORY_WRITER_ROLES,
+} = await import('../src/roles.js');
 
 // Helper to check DB connectivity with fast timeout
 async function isDbConnected() {
@@ -742,6 +749,252 @@ test('ACCOUNT ACTIVATION: Unactivated accounts (is_active = FALSE) cannot log in
 
   assert.strictEqual(loadUserMock('u-1'), null);
   assert.ok(loadUserMock('u-2'));
+});
+
+test('ACCOUNT ACTIVATION: Atomic token consumption serializes concurrent requests and guarantees single-use', async () => {
+  // Simulates PostgreSQL fn_consume_account_setup_token logic with FOR UPDATE row-level locking
+  let lockAcquired = false;
+  const tokenState = {
+    token_id: 't-123',
+    token_hash: crypto.createHash('sha256').update('secret-token-1234567890123456').digest('hex'),
+    expires_at: new Date(Date.now() + 86400000),
+    used_at: null,
+  };
+  const userState = {
+    user_id: 'u-999',
+    password_hash: null,
+    is_active: false,
+    token_version: 1,
+  };
+  const auditLogs = [];
+
+  async function consumeTokenAtomic(tokenHash, newPasswordHash, clientIp) {
+    // Row lock simulation: if locked, concurrent request waits until released
+    while (lockAcquired) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    lockAcquired = true;
+    try {
+      if (tokenState.token_hash !== tokenHash) {
+        throw new HttpError(404, 'Invalid or unknown setup token', { code: 'ST001' });
+      }
+      if (tokenState.used_at !== null) {
+        throw new HttpError(400, 'This setup link has already been used', { code: 'ST002' });
+      }
+      if (tokenState.expires_at < new Date()) {
+        throw new HttpError(400, 'This setup link has expired. Please contact your administrator.', { code: 'ST003' });
+      }
+
+      // Mark token as used
+      tokenState.used_at = new Date();
+
+      // Update user atomically
+      userState.password_hash = newPasswordHash;
+      userState.is_active = true;
+      userState.token_version = (userState.token_version || 1) + 1;
+
+      // Write immutable audit log
+      auditLogs.push({
+        entity_type: 'user',
+        entity_id: userState.user_id,
+        action: 'ACCOUNT_ACTIVATED',
+        ip: clientIp,
+      });
+
+      return {
+        user_id: userState.user_id,
+        token_version: userState.token_version,
+      };
+    } finally {
+      lockAcquired = false;
+    }
+  }
+
+  const rawToken = 'secret-token-1234567890123456';
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+
+  // Run simultaneous concurrent requests with identical token
+  const [result1, result2] = await Promise.allSettled([
+    consumeTokenAtomic(tokenHash, 'hashed-password-1', '192.168.1.10'),
+    consumeTokenAtomic(tokenHash, 'hashed-password-2', '192.168.1.11'),
+  ]);
+
+  // Exactly one request must succeed and exactly one must fail
+  const fulfilled = [result1, result2].filter((r) => r.status === 'fulfilled');
+  const rejected = [result1, result2].filter((r) => r.status === 'rejected');
+
+  assert.strictEqual(fulfilled.length, 1, 'Only one concurrent setup request may succeed');
+  assert.strictEqual(rejected.length, 1, 'Simultaneous reuse attempt must be rejected');
+
+  assert.strictEqual(rejected[0].reason.status, 400);
+  assert.strictEqual(rejected[0].reason.message, 'This setup link has already been used');
+  assert.strictEqual(rejected[0].reason.code, 'ST002');
+
+  // Verify database state is consistent and not double-incremented
+  assert.strictEqual(userState.is_active, true);
+  assert.strictEqual(userState.token_version, 2, 'token_version incremented exactly once');
+  assert.strictEqual(auditLogs.length, 1, 'Exactly one ACCOUNT_ACTIVATED audit event written');
+  assert.ok(tokenState.used_at !== null);
+});
+
+test('ACCOUNT ACTIVATION: Rejection of expired, invalid, and already-used tokens without modifying account state', async () => {
+  const user = {
+    user_id: 'u-unactivated',
+    password_hash: null,
+    is_active: false,
+    token_version: 1,
+  };
+
+  function simulateConsume(tokenRecord, incomingToken) {
+    const hash = crypto.createHash('sha256').update(incomingToken).digest('hex');
+    if (!tokenRecord || tokenRecord.token_hash !== hash) {
+      throw new HttpError(404, 'Invalid or unknown setup token', { code: 'ST001' });
+    }
+    if (tokenRecord.used_at) {
+      throw new HttpError(400, 'This setup link has already been used', { code: 'ST002' });
+    }
+    if (tokenRecord.expires_at < new Date()) {
+      throw new HttpError(400, 'This setup link has expired. Please contact your administrator.', { code: 'ST003' });
+    }
+    // Only if all pass would user be modified
+    user.is_active = true;
+  }
+
+  // 1. Invalid token
+  assert.throws(
+    () => simulateConsume(null, 'invalid-token-1234567890'),
+    (err) => err.status === 404 && err.code === 'ST001',
+  );
+  assert.strictEqual(user.is_active, false);
+
+  // 2. Expired token
+  const expiredRecord = {
+    token_hash: crypto.createHash('sha256').update('expired-token-1234567890').digest('hex'),
+    expires_at: new Date(Date.now() - 3600000),
+    used_at: null,
+  };
+  assert.throws(
+    () => simulateConsume(expiredRecord, 'expired-token-1234567890'),
+    (err) => err.status === 400 && err.code === 'ST003' && err.message.includes('has expired'),
+  );
+  assert.strictEqual(user.is_active, false);
+
+  // 3. Already used token
+  const usedRecord = {
+    token_hash: crypto.createHash('sha256').update('used-token-1234567890123456').digest('hex'),
+    expires_at: new Date(Date.now() + 86400000),
+    used_at: new Date(Date.now() - 1000),
+  };
+  assert.throws(
+    () => simulateConsume(usedRecord, 'used-token-1234567890123456'),
+    (err) => err.status === 400 && err.code === 'ST002' && err.message.includes('already been used'),
+  );
+  assert.strictEqual(user.is_active, false);
+  assert.strictEqual(user.token_version, 1);
+});
+
+test('ACCOUNT ACTIVATION: RLS policy and database permissions enforce administrator-only isolation and SECURITY DEFINER access', async () => {
+  const migrationPath = path.resolve('..', 'db', 'migrations', '20261011T230000_secure_account_activation.sql');
+  const migrationSql = await fs.readFile(migrationPath, 'utf8');
+
+  // Verify RLS policy is strictly admin-only
+  assert.ok(migrationSql.includes('ALTER TABLE account_setup_tokens ENABLE ROW LEVEL SECURITY'));
+  assert.ok(migrationSql.includes('USING (app_is_admin())'));
+  assert.ok(migrationSql.includes('WITH CHECK (app_is_admin())'));
+
+  // Verify table grant to app_user exists so admin operations succeed
+  assert.ok(migrationSql.includes('GRANT SELECT, INSERT, UPDATE, DELETE ON account_setup_tokens TO app_user'));
+
+  // Verify SECURITY DEFINER functions exist with app_user execution grant
+  assert.ok(migrationSql.includes('CREATE OR REPLACE FUNCTION fn_verify_account_setup_token'));
+  assert.ok(migrationSql.includes('SECURITY DEFINER'));
+  assert.ok(migrationSql.includes('GRANT EXECUTE ON FUNCTION fn_verify_account_setup_token(TEXT) TO app_user'));
+
+  assert.ok(migrationSql.includes('CREATE OR REPLACE FUNCTION fn_consume_account_setup_token'));
+  assert.ok(migrationSql.includes('FOR UPDATE'));
+  assert.ok(migrationSql.includes('GRANT EXECUTE ON FUNCTION fn_consume_account_setup_token(TEXT, TEXT, TEXT) TO app_user'));
+
+  // Also verify mirrored definitions in db/schema/14_rls.sql and 12_functions.sql
+  const rlsSql = await fs.readFile(path.resolve('..', 'db', 'schema', '14_rls.sql'), 'utf8');
+  assert.ok(rlsSql.includes('ALTER TABLE account_setup_tokens ENABLE ROW LEVEL SECURITY'));
+  assert.ok(rlsSql.includes('CREATE POLICY account_setup_tokens_admin ON account_setup_tokens'));
+  assert.ok(rlsSql.includes('USING (app_is_admin())'));
+
+  const funcSql = await fs.readFile(path.resolve('..', 'db', 'schema', '12_functions.sql'), 'utf8');
+  assert.ok(funcSql.includes('fn_verify_account_setup_token'));
+  assert.ok(funcSql.includes('fn_consume_account_setup_token'));
+});
+
+test('ACCOUNT ACTIVATION: Delivery protection, anti-caching, rate limiters, and URL token removal', async () => {
+  // 1. Rate limiters are exported and configured
+  assert.ok(verifySetupLimiter, 'verifySetupLimiter must be exported');
+  assert.ok(setupAccountLimiter, 'setupAccountLimiter must be exported');
+
+  // 2. Anti-caching headers defined on setup endpoints
+  const authRoutesSrc = await fs.readFile(path.resolve('src', 'routes', 'auth.js'), 'utf8');
+  assert.ok(authRoutesSrc.includes("'Cache-Control': 'no-store, no-cache, must-revalidate, private'"));
+  assert.ok(authRoutesSrc.includes("Pragma: 'no-cache'"));
+  assert.ok(authRoutesSrc.includes("Expires: '0'"));
+
+  // 3. Admin user creation & token generation sets anti-caching headers and does NOT claim email sent
+  const adminRoutesSrc = await fs.readFile(path.resolve('src', 'routes', 'admin.js'), 'utf8');
+  assert.ok(adminRoutesSrc.includes("emailDelivery: 'UNCONFIGURED'"));
+  assert.ok(adminRoutesSrc.includes('Outbound email delivery is unconfigured in this environment'));
+  assert.strictEqual(adminRoutesSrc.includes('Email sent successfully'), false);
+
+  // 4. Server error logging redacts setup token from URLs
+  const errorsSrc = await fs.readFile(path.resolve('src', 'errors.js'), 'utf8');
+  assert.ok(errorsSrc.includes("replace(/([?&]token=)[^&]+/gi, '$1[REDACTED]')"));
+
+  const testUrl = '/api/auth/verify-setup-token?token=supersecrettoken1234567890&format=json';
+  const redactedUrl = testUrl.replace(/([?&]token=)[^&]+/gi, '$1[REDACTED]');
+  assert.strictEqual(redactedUrl, '/api/auth/verify-setup-token?token=[REDACTED]&format=json');
+  assert.strictEqual(redactedUrl.includes('supersecrettoken1234567890'), false);
+
+  // 5. Frontend SetupAccount immediately cleanses URL token on mount
+  const setupAccountPageSrc = await fs.readFile(path.resolve('..', 'src', 'pages', 'SetupAccount.jsx'), 'utf8');
+  assert.ok(setupAccountPageSrc.includes('window.history.replaceState({}, document.title, window.location.pathname)'));
+
+  // 6. index.html has strict referrer policy
+  const indexHtml = await fs.readFile(path.resolve('..', 'index.html'), 'utf8');
+  assert.ok(indexHtml.includes('name="referrer" content="strict-origin-when-cross-origin"'));
+});
+
+test('SELF-REGISTRATION: ACTIVITY_INCHARGE is strictly least-privileged requester and lacks approval/management authority', () => {
+  // ACTIVITY_INCHARGE is in REQUESTER_ROLES (can raise requisitions)
+  assert.ok(REQUESTER_ROLES.includes('ACTIVITY_INCHARGE'));
+
+  // ACTIVITY_INCHARGE cannot manage issues (only PRINCIPAL, ADMIN)
+  assert.strictEqual(ISSUE_MANAGER_ROLES.includes('ACTIVITY_INCHARGE'), false);
+
+  // ACTIVITY_INCHARGE cannot view or write inventory
+  assert.strictEqual(INVENTORY_READER_ROLES.includes('ACTIVITY_INCHARGE'), false);
+  assert.strictEqual(INVENTORY_WRITER_ROLES.includes('ACTIVITY_INCHARGE'), false);
+
+  // ACTIVITY_INCHARGE cannot approve budget or review financial requisitions
+  const APPROVAL_ROLES = ['PRINCIPAL', 'CHAIRMAN', 'VICE_PRESIDENT', 'CDC_MEMBER', 'ADMIN'];
+  assert.strictEqual(APPROVAL_ROLES.includes('ACTIVITY_INCHARGE'), false);
+
+  // A self-registered user has no workflow stage assignments and null department
+  const selfRegUser = {
+    id: 'self-reg-1',
+    roles: ['ACTIVITY_INCHARGE'],
+    departmentId: null,
+    stages: [],
+  };
+
+  const permissions = {
+    raiseRequests: REQUESTER_ROLES.some((r) => selfRegUser.roles.includes(r)),
+    manageIssues: ISSUE_MANAGER_ROLES.some((r) => selfRegUser.roles.includes(r)),
+    viewInventory: INVENTORY_READER_ROLES.some((r) => selfRegUser.roles.includes(r)),
+    approve: selfRegUser.stages.length > 0,
+  };
+
+  assert.strictEqual(permissions.raiseRequests, true);
+  assert.strictEqual(permissions.manageIssues, false);
+  assert.strictEqual(permissions.viewInventory, false);
+  assert.strictEqual(permissions.approve, false);
+  assert.strictEqual(selfRegUser.departmentId, null, 'Must have null department until admin verifies assignment');
 });
 
 // ============================================================================

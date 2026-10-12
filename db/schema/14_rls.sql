@@ -509,11 +509,16 @@ CREATE POLICY system_configurations_admin_write ON system_configurations
     USING (app_has_role('ADMIN'))
     WITH CHECK (app_has_role('ADMIN'));
 
--- Account setup tokens are accessible to ADMIN or the owning user
+-- Account setup tokens are strictly administrator-managed under RLS.
+-- Public unauthenticated verification and consumption are handled exclusively via
+-- the SECURITY DEFINER functions fn_verify_account_setup_token and fn_consume_account_setup_token.
 ALTER TABLE account_setup_tokens ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS account_setup_tokens_admin ON account_setup_tokens;
 CREATE POLICY account_setup_tokens_admin ON account_setup_tokens
     FOR ALL
     TO app_user
-    USING (app_is_admin() OR app_current_user_id() = user_id)
+    USING (app_is_admin())
     WITH CHECK (app_is_admin());
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON account_setup_tokens TO app_user;

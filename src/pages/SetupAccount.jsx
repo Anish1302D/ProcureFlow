@@ -20,6 +20,12 @@ export const SetupAccount = () => {
     const rawToken = params.get('token') || '';
     setToken(rawToken);
 
+    // Remove token from visible address bar immediately after capturing to prevent
+    // leakage via browser history, shoulder-surfing, or Referrer headers.
+    if (window.location.search && window.history?.replaceState) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
     if (!rawToken) {
       setVerifying(false);
       setVerifyError('Missing invitation token. Please check the activation link provided by your administrator.');
