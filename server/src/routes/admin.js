@@ -261,14 +261,13 @@ adminRouter.patch('/users/:id', async (req, res) => {
         );
       } catch (err) {
         if (err.code === '42703') {
-          const nonTvSets = sets.filter((s) => !s.includes('token_version'));
-          await db.query(
-            `UPDATE users SET ${nonTvSets.join(', ')} WHERE user_id = $${vals.length}`,
-            vals,
+          throw new HttpError(
+            503,
+            'User update and session revocation unavailable: database migration 20261011T120000_add_user_token_version.sql is required',
+            { code: 'MIGRATION_REQUIRED' },
           );
-        } else {
-          throw err;
         }
+        throw err;
       }
     }
 
@@ -344,14 +343,13 @@ adminRouter.delete('/users/:id', async (req, res) => {
       if (!rowCount) throw notFound('User not found');
     } catch (err) {
       if (err.code === '42703') {
-        const { rowCount } = await db.query(
-          `UPDATE users SET is_active = FALSE, updated_at = NOW() WHERE user_id = $1`,
-          [userId],
+        throw new HttpError(
+          503,
+          'User deactivation and session revocation unavailable: database migration 20261011T120000_add_user_token_version.sql is required',
+          { code: 'MIGRATION_REQUIRED' },
         );
-        if (!rowCount) throw notFound('User not found');
-      } else {
-        throw err;
       }
+      throw err;
     }
   });
 
@@ -374,14 +372,13 @@ adminRouter.post('/users/:id/reactivate', async (req, res) => {
       if (!rowCount) throw notFound('User not found');
     } catch (err) {
       if (err.code === '42703') {
-        const { rowCount } = await db.query(
-          `UPDATE users SET is_active = TRUE, updated_at = NOW() WHERE user_id = $1`,
-          [userId],
+        throw new HttpError(
+          503,
+          'User reactivation and session revocation unavailable: database migration 20261011T120000_add_user_token_version.sql is required',
+          { code: 'MIGRATION_REQUIRED' },
         );
-        if (!rowCount) throw notFound('User not found');
-      } else {
-        throw err;
       }
+      throw err;
     }
   });
 

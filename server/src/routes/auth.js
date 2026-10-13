@@ -62,15 +62,13 @@ authRouter.post('/login', loginIpLimiter, loginLimiter, async (req, res) => {
     rows = res.rows;
   } catch (err) {
     if (err.code === '42703') {
-      const res = await anonQuery(
-        `SELECT user_id, password_hash, 1 AS token_version
-           FROM users WHERE email = $1 AND is_active`,
-        [email],
+      throw new HttpError(
+        503,
+        'Authentication service unavailable: required database migration 20261011T120000_add_user_token_version.sql is required',
+        { code: 'MIGRATION_REQUIRED' },
       );
-      rows = res.rows;
-    } else {
-      throw err;
     }
+    throw err;
   }
   const account = rows[0];
   const valid = await bcrypt.compare(password, account?.password_hash ?? DUMMY_HASH);
@@ -148,13 +146,13 @@ authRouter.post('/change-password', requireAuth, changePasswordLimiter, async (r
       );
     } catch (err) {
       if (err.code === '42703') {
-        await db.query(
-          'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE user_id = $2',
-          [newHash, req.user.id],
+        throw new HttpError(
+          503,
+          'Password change and session revocation unavailable: database migration 20261011T120000_add_user_token_version.sql is required',
+          { code: 'MIGRATION_REQUIRED' },
         );
-      } else {
-        throw err;
       }
+      throw err;
     }
   });
 
