@@ -236,19 +236,18 @@ BEGIN
         format($q$SELECT fn_record_action(%L::UUID, %L::UUID, 'RETURN', p_comments := 'Invalid stage return')$q$, v_mid, current_setting('t.cdc_grant')),
         'SP005', 'CDC stage cannot execute RETURN action');
 
-    -- CDC Grant Member approves: request must NOT advance yet
+    -- CDC Non-Grant Member cannot see Grant requests under RLS
+    PERFORM pg_temp.act_as('cdc_nongrant');
+    PERFORM pg_temp.assert_that(
+        NOT EXISTS (SELECT 1 FROM requests WHERE request_id = v_mid),
+        'CDC Non-Grant member cannot see Grant request under RLS');
+
+    -- CDC Grant Member approves: single decision is sufficient; request advances to APPROVED
     PERFORM pg_temp.act_as('cdc_grant');
     PERFORM fn_record_action(v_mid, current_setting('t.cdc_grant')::UUID, 'APPROVE');
     PERFORM pg_temp.assert_that(
-        (SELECT current_status FROM requests WHERE request_id = v_mid) = 'UNDER_CDC_REVIEW',
-        'request remains at CDC stage after only 1 of 2 CDC approvals');
-
-    -- CDC Non-Grant Member approves: request now advances to APPROVED
-    PERFORM pg_temp.act_as('cdc_nongrant');
-    PERFORM fn_record_action(v_mid, current_setting('t.cdc_nongrant')::UUID, 'APPROVE');
-    PERFORM pg_temp.assert_that(
         (SELECT current_status FROM requests WHERE request_id = v_mid) = 'APPROVED',
-        'request advances to APPROVED after both CDC Grant and Non-Grant approvals recorded');
+        'request advances to APPROVED on single CDC Grant approval');
 END $$;
 
 -- ===========================================================================

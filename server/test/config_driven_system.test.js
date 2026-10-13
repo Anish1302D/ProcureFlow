@@ -8,7 +8,8 @@ import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 
 // Configure environment before importing server modules
-process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgres://app_user:app_password@localhost:5433/sp_college';
+const defaultDbUrl = 'postgres://app_user:app_password@localhost:5433/spc_api_test';
+process.env.DATABASE_URL = (process.env.DATABASE_URL || defaultDbUrl).replace(/\/sp_college(?:\?|$)/, '/spc_api_test$1');
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret-minimum-32-characters-long!';
 process.env.SIGNING_SECRET = process.env.SIGNING_SECRET || 'test-signing-secret-minimum-32-characters-long!';
 process.env.NODE_ENV = 'test';
@@ -285,6 +286,10 @@ test('CDC CAPACITY: Enforces member limits during assignment logic', () => {
 // ============================================================================
 
 test('THRESHOLDS: Helper returns numeric threshold pair', async () => {
+  if (!(await isDbConnected())) {
+    configService.setTestOverride('workflow.threshold.principal_max', 50000);
+    configService.setTestOverride('workflow.threshold.cdc_max', 500000);
+  }
   const thresholds = await configService.getThresholds();
   assert.strictEqual(typeof thresholds.principalMax, 'number');
   assert.strictEqual(typeof thresholds.cdcMax, 'number');
@@ -324,29 +329,38 @@ test('THRESHOLDS: Dynamic routing evaluation matches institutional tier boundari
 });
 
 test('THRESHOLDS BOUNDARIES: actionsAt enforces exact boundaries (₹50,000, ₹50,001, ₹5,00,000, ₹5,00,001)', async () => {
-  // Boundary 1: Exactly ₹50,000 (Principal is final decision maker)
-  const actionsAt50000 = await actionsAt('PRINCIPAL', false, 50000);
-  assert.deepStrictEqual(actionsAt50000.sort(), ['APPROVE', 'PARTIAL_APPROVE', 'REJECT', 'RETURN'].sort());
-  assert.strictEqual(actionsAt50000.includes('ESCALATE'), false, 'Principal cannot escalate requests <= 50,000');
+  const offline = !(await isDbConnected());
+  if (offline) {
+    configService.setTestOverride('workflow.threshold.principal_max', 50000);
+    configService.setTestOverride('workflow.threshold.cdc_max', 500000);
+  }
+  try {
+    // Boundary 1: Exactly ₹50,000 (Principal is final decision maker)
+    const actionsAt50000 = await actionsAt('PRINCIPAL', false, 50000);
+    assert.deepStrictEqual(actionsAt50000.sort(), ['APPROVE', 'PARTIAL_APPROVE', 'REJECT', 'RETURN'].sort());
+    assert.strictEqual(actionsAt50000.includes('ESCALATE'), false, 'Principal cannot escalate requests <= 50,000');
 
-  // Boundary 2: Exactly ₹50,001 (Principal is review-and-forward only)
-  const actionsAt50001 = await actionsAt('PRINCIPAL', false, 50001);
-  assert.deepStrictEqual(actionsAt50001.sort(), ['ESCALATE', 'RETURN'].sort());
-  assert.strictEqual(actionsAt50001.includes('APPROVE'), false, 'Principal cannot approve requests > 50,000');
-  assert.strictEqual(actionsAt50001.includes('PARTIAL_APPROVE'), false, 'Principal cannot partial approve requests > 50,000');
-  assert.strictEqual(actionsAt50001.includes('REJECT'), false, 'Principal cannot reject requests > 50,000');
+    // Boundary 2: Exactly ₹50,001 (Principal is review-and-forward/reject/return)
+    const actionsAt50001 = await actionsAt('PRINCIPAL', false, 50001);
+    assert.deepStrictEqual(actionsAt50001.sort(), ['ESCALATE', 'REJECT', 'RETURN'].sort());
+    assert.strictEqual(actionsAt50001.includes('APPROVE'), false, 'Principal cannot approve requests > 50,000');
+    assert.strictEqual(actionsAt50001.includes('PARTIAL_APPROVE'), false, 'Principal cannot partial approve requests > 50,000');
+    assert.ok(actionsAt50001.includes('REJECT'), 'Principal can reject requests > 50,000');
 
-  // Boundary 3: Exactly ₹5,00,000 (CDC is final deciding authority)
-  const principalAt5L = await actionsAt('PRINCIPAL', false, 500000);
-  assert.deepStrictEqual(principalAt5L.sort(), ['ESCALATE', 'RETURN'].sort());
-  const cdcAt5L = await actionsAt('CDC', false, 500000);
-  assert.deepStrictEqual(cdcAt5L.sort(), ['APPROVE', 'PARTIAL_APPROVE', 'REJECT', 'RETURN'].sort());
+    // Boundary 3: Exactly ₹5,00,000 (CDC is final deciding authority)
+    const principalAt5L = await actionsAt('PRINCIPAL', false, 500000);
+    assert.deepStrictEqual(principalAt5L.sort(), ['ESCALATE', 'REJECT', 'RETURN'].sort());
+    const cdcAt5L = await actionsAt('CDC', false, 500000);
+    assert.deepStrictEqual(cdcAt5L.sort(), ['APPROVE', 'PARTIAL_APPROVE', 'REJECT'].sort());
 
-  // Boundary 4: Exactly ₹5,00,001 (Chairman authority stage is final deciding authority)
-  const principalAt500001 = await actionsAt('PRINCIPAL', false, 500001);
-  assert.deepStrictEqual(principalAt500001.sort(), ['ESCALATE', 'RETURN'].sort());
-  const finalAt500001 = await actionsAt('FINAL_AUTHORITY', true, 500001);
-  assert.deepStrictEqual(finalAt500001.sort(), ['APPROVE', 'PARTIAL_APPROVE', 'REJECT', 'RETURN'].sort());
+    // Boundary 4: Exactly ₹5,00,001 (Chairman authority stage is final deciding authority)
+    const principalAt500001 = await actionsAt('PRINCIPAL', false, 500001);
+    assert.deepStrictEqual(principalAt500001.sort(), ['ESCALATE', 'REJECT', 'RETURN'].sort());
+    const finalAt500001 = await actionsAt('FINAL_AUTHORITY', true, 500001);
+    assert.deepStrictEqual(finalAt500001.sort(), ['APPROVE', 'PARTIAL_APPROVE', 'REJECT'].sort());
+  } finally {
+    if (offline) configService.clearTestOverrides();
+  }
 });
 
 // ============================================================================
@@ -355,10 +369,10 @@ test('THRESHOLDS BOUNDARIES: actionsAt enforces exact boundaries (₹50,000, ₹
 
 test('PURCHASE COMMITTEE: Review & verification only — cannot approve requests', async () => {
   const pcActions = await actionsAt('PURCHASE_COMMITTEE', false, 15000);
-  assert.deepStrictEqual(pcActions.sort(), ['ESCALATE', 'RETURN'].sort());
+  assert.deepStrictEqual(pcActions.sort(), ['ESCALATE', 'REJECT', 'RETURN'].sort());
   assert.strictEqual(pcActions.includes('APPROVE'), false);
   assert.strictEqual(pcActions.includes('PARTIAL_APPROVE'), false);
-  assert.strictEqual(pcActions.includes('REJECT'), false);
+  assert.ok(pcActions.includes('REJECT'), 'Purchase Committee can reject invalid requests');
 });
 
 test('API ACTION RULES: Server-side validation rejects invalid stage actions', () => {
@@ -370,7 +384,7 @@ test('API ACTION RULES: Server-side validation rejects invalid stage actions', (
       throw new HttpError(422, 'Purchase Committee performs validity review only and cannot approve requests');
     }
     if (stageCode === 'PRINCIPAL') {
-      if (['APPROVE', 'PARTIAL_APPROVE', 'REJECT'].includes(action) && amount > principalMax) {
+      if (['APPROVE', 'PARTIAL_APPROVE'].includes(action) && amount > principalMax) {
         throw new HttpError(422, `Principal performs review and forward only for requests above ₹${principalMax}`);
       }
       if (action === 'ESCALATE' && amount <= principalMax) {
@@ -385,8 +399,8 @@ test('API ACTION RULES: Server-side validation rejects invalid stage actions', (
         throw new HttpError(422, 'CDC holds the decision at this amount; it cannot pass the request further up');
       }
     }
-    if (action === 'RETURN' && !['PURCHASE_COMMITTEE', 'PRINCIPAL', 'CDC', 'FINAL_AUTHORITY'].includes(stageCode)) {
-      throw new HttpError(422, 'Only review stages can return a request for correction');
+    if (action === 'RETURN' && !['PURCHASE_COMMITTEE', 'PRINCIPAL'].includes(stageCode)) {
+      throw new HttpError(422, 'Only the Purchase Committee and the Principal can return a request for correction');
     }
     return true;
   }
@@ -397,15 +411,12 @@ test('API ACTION RULES: Server-side validation rejects invalid stage actions', (
     (err) => err.status === 422 && err.message.includes('Purchase Committee performs validity review only'),
   );
 
-  // 2. Principal trying to APPROVE or REJECT amount ₹50,001 -> Rejected 422
+  // 2. Principal trying to APPROVE amount ₹50,001 -> Rejected 422 (REJECT is allowed)
   assert.throws(
     () => validateAction('PRINCIPAL', 'APPROVE', 50001),
     (err) => err.status === 422 && err.message.includes('Principal performs review and forward only'),
   );
-  assert.throws(
-    () => validateAction('PRINCIPAL', 'REJECT', 50001),
-    (err) => err.status === 422 && err.message.includes('Principal performs review and forward only'),
-  );
+  assert.strictEqual(validateAction('PRINCIPAL', 'REJECT', 50001), true);
 
   // 3. Principal ESCALATE on amount ₹50,000 -> Rejected 422
   assert.throws(
@@ -428,11 +439,17 @@ test('API ACTION RULES: Server-side validation rejects invalid stage actions', (
     (err) => err.status === 422 && err.message.includes('must be decided by Chairman and Vice Chairman'),
   );
 
-  // 7. RETURN permitted across all review stages
+  // 7. RETURN permitted only for Purchase Committee and Principal
   assert.strictEqual(validateAction('PURCHASE_COMMITTEE', 'RETURN', 20000), true);
   assert.strictEqual(validateAction('PRINCIPAL', 'RETURN', 60000), true);
-  assert.strictEqual(validateAction('CDC', 'RETURN', 200000), true);
-  assert.strictEqual(validateAction('FINAL_AUTHORITY', 'RETURN', 600000), true);
+  assert.throws(
+    () => validateAction('CDC', 'RETURN', 200000),
+    (err) => err.status === 422 && err.message.includes('Only the Purchase Committee and the Principal'),
+  );
+  assert.throws(
+    () => validateAction('FINAL_AUTHORITY', 'RETURN', 600000),
+    (err) => err.status === 422 && err.message.includes('Only the Purchase Committee and the Principal'),
+  );
 });
 
 // ============================================================================
@@ -899,8 +916,8 @@ test('ACCOUNT ACTIVATION: RLS policy and database permissions enforce administra
 
   // Verify RLS policy is strictly admin-only
   assert.ok(migrationSql.includes('ALTER TABLE account_setup_tokens ENABLE ROW LEVEL SECURITY'));
-  assert.ok(migrationSql.includes('USING (app_is_admin())'));
-  assert.ok(migrationSql.includes('WITH CHECK (app_is_admin())'));
+  assert.ok(migrationSql.includes("USING (app_has_role('ADMIN'))"));
+  assert.ok(migrationSql.includes("WITH CHECK (app_has_role('ADMIN'))"));
 
   // Verify table grant to app_user exists so admin operations succeed
   assert.ok(migrationSql.includes('GRANT SELECT, INSERT, UPDATE, DELETE ON account_setup_tokens TO app_user'));
@@ -918,7 +935,7 @@ test('ACCOUNT ACTIVATION: RLS policy and database permissions enforce administra
   const rlsSql = await fs.readFile(path.resolve('..', 'db', 'schema', '14_rls.sql'), 'utf8');
   assert.ok(rlsSql.includes('ALTER TABLE account_setup_tokens ENABLE ROW LEVEL SECURITY'));
   assert.ok(rlsSql.includes('CREATE POLICY account_setup_tokens_admin ON account_setup_tokens'));
-  assert.ok(rlsSql.includes('USING (app_is_admin())'));
+  assert.ok(rlsSql.includes("USING (app_has_role('ADMIN'))"));
 
   const funcSql = await fs.readFile(path.resolve('..', 'db', 'schema', '12_functions.sql'), 'utf8');
   assert.ok(funcSql.includes('fn_verify_account_setup_token'));
@@ -1002,56 +1019,68 @@ test('SELF-REGISTRATION: ACTIVITY_INCHARGE is strictly least-privileged requeste
 // ============================================================================
 
 test('THRESHOLDS: Exact boundaries at ₹50,000, ₹50,001, ₹5,00,000, and ₹5,00,001', async () => {
-  // 1. Boundary ₹50,000 (Principal can approve, partial approve, reject, or return)
-  const actionsPrincipal50k = await actionsAt('PRINCIPAL', false, 50000);
-  assert.ok(actionsPrincipal50k.includes('APPROVE'), 'Principal can approve at <= 50,000');
-  assert.ok(actionsPrincipal50k.includes('REJECT'), 'Principal can reject at <= 50,000');
-  assert.ok(actionsPrincipal50k.includes('RETURN'));
+  const offline = !(await isDbConnected());
+  if (offline) {
+    configService.setTestOverride('workflow.threshold.principal_max', 50000);
+    configService.setTestOverride('workflow.threshold.cdc_max', 500000);
+  }
+  try {
+    // 1. Boundary ₹50,000 (Principal can approve, partial approve, reject, or return)
+    const actionsPrincipal50k = await actionsAt('PRINCIPAL', false, 50000);
+    assert.ok(actionsPrincipal50k.includes('APPROVE'), 'Principal can approve at <= 50,000');
+    assert.ok(actionsPrincipal50k.includes('REJECT'), 'Principal can reject at <= 50,000');
+    assert.ok(actionsPrincipal50k.includes('RETURN'));
 
-  // 2. Boundary ₹50,001 (Principal reviews/refers; CDC makes final decision)
-  const actionsPrincipal50kPlus = await actionsAt('PRINCIPAL', false, 50001);
-  assert.strictEqual(actionsPrincipal50kPlus.includes('APPROVE'), false, 'Principal cannot final approve at 50,001');
-  assert.strictEqual(actionsPrincipal50kPlus.includes('REJECT'), false, 'Principal cannot final reject at 50,001');
-  assert.ok(actionsPrincipal50kPlus.includes('ESCALATE'), 'Principal escalates/refers at 50,001');
-  assert.ok(actionsPrincipal50kPlus.includes('RETURN'));
+    // 2. Boundary ₹50,001 (Principal reviews/refers; CDC makes final decision)
+    const actionsPrincipal50kPlus = await actionsAt('PRINCIPAL', false, 50001);
+    assert.strictEqual(actionsPrincipal50kPlus.includes('APPROVE'), false, 'Principal cannot final approve at 50,001');
+    assert.ok(actionsPrincipal50kPlus.includes('ESCALATE'), 'Principal escalates/refers at 50,001');
+    assert.ok(actionsPrincipal50kPlus.includes('REJECT'), 'Principal can reject at 50,001');
+    assert.ok(actionsPrincipal50kPlus.includes('RETURN'));
 
-  const actionsCdc50kPlus = await actionsAt('CDC', false, 50001);
-  assert.ok(actionsCdc50kPlus.includes('APPROVE'), 'CDC can approve at 50,001');
-  assert.ok(actionsCdc50kPlus.includes('REJECT'), 'CDC can reject at 50,001');
-  assert.ok(actionsCdc50kPlus.includes('RETURN'));
+    const actionsCdc50kPlus = await actionsAt('CDC', false, 50001);
+    assert.ok(actionsCdc50kPlus.includes('APPROVE'), 'CDC can approve at 50,001');
+    assert.ok(actionsCdc50kPlus.includes('REJECT'), 'CDC can reject at 50,001');
+    assert.strictEqual(actionsCdc50kPlus.includes('RETURN'), false);
 
-  // 3. Boundary ₹5,00,000 (Principal reviews/refers; CDC makes final decision)
-  const actionsPrincipal500k = await actionsAt('PRINCIPAL', false, 500000);
-  assert.strictEqual(actionsPrincipal500k.includes('APPROVE'), false);
-  assert.ok(actionsPrincipal500k.includes('ESCALATE'));
+    // 3. Boundary ₹5,00,000 (Principal reviews/refers; CDC makes final decision)
+    const actionsPrincipal500k = await actionsAt('PRINCIPAL', false, 500000);
+    assert.strictEqual(actionsPrincipal500k.includes('APPROVE'), false);
+    assert.ok(actionsPrincipal500k.includes('ESCALATE'));
+    assert.ok(actionsPrincipal500k.includes('REJECT'));
+    assert.ok(actionsPrincipal500k.includes('RETURN'));
 
-  const actionsCdc500k = await actionsAt('CDC', false, 500000);
-  assert.ok(actionsCdc500k.includes('APPROVE'), 'CDC can approve at 5,00,000');
-  assert.ok(actionsCdc500k.includes('REJECT'), 'CDC can reject at 5,00,000');
-  assert.ok(actionsCdc500k.includes('RETURN'));
+    const actionsCdc500k = await actionsAt('CDC', false, 500000);
+    assert.ok(actionsCdc500k.includes('APPROVE'), 'CDC can approve at 5,00,000');
+    assert.ok(actionsCdc500k.includes('REJECT'), 'CDC can reject at 5,00,000');
+    assert.strictEqual(actionsCdc500k.includes('RETURN'), false);
 
-  // 4. Boundary ₹5,00,001 (Principal and CDC review/refer; Chairman/Vice Chairman makes final decision)
-  const actionsPrincipal500kPlus = await actionsAt('PRINCIPAL', false, 500001);
-  assert.strictEqual(actionsPrincipal500kPlus.includes('APPROVE'), false);
-  assert.ok(actionsPrincipal500kPlus.includes('ESCALATE'));
+    // 4. Boundary ₹5,00,001 (Principal and CDC review/refer; Chairman/Vice Chairman makes final decision)
+    const actionsPrincipal500kPlus = await actionsAt('PRINCIPAL', false, 500001);
+    assert.strictEqual(actionsPrincipal500kPlus.includes('APPROVE'), false);
+    assert.ok(actionsPrincipal500kPlus.includes('ESCALATE'));
+    assert.ok(actionsPrincipal500kPlus.includes('REJECT'));
+    assert.ok(actionsPrincipal500kPlus.includes('RETURN'));
 
-  const actionsCdc500kPlus = await actionsAt('CDC', false, 500001);
-  assert.strictEqual(actionsCdc500kPlus.includes('APPROVE'), false, 'CDC cannot final approve at 5,00,001');
-  assert.strictEqual(actionsCdc500kPlus.includes('REJECT'), false, 'CDC cannot final reject at 5,00,001');
-  assert.ok(actionsCdc500kPlus.includes('RETURN'));
+    const actionsCdc500kPlus = await actionsAt('CDC', false, 500001);
+    assert.strictEqual(actionsCdc500kPlus.includes('APPROVE'), false, 'CDC cannot final approve at 5,00,001');
+    assert.strictEqual(actionsCdc500kPlus.includes('RETURN'), false);
 
-  const actionsFinal500kPlus = await actionsAt('FINAL_AUTHORITY', true, 500001);
-  assert.ok(actionsFinal500kPlus.includes('APPROVE'), 'Final Authority can approve at 5,00,001');
-  assert.ok(actionsFinal500kPlus.includes('REJECT'), 'Final Authority can reject at 5,00,001');
-  assert.ok(actionsFinal500kPlus.includes('RETURN'));
+    const actionsFinal500kPlus = await actionsAt('FINAL_AUTHORITY', true, 500001);
+    assert.ok(actionsFinal500kPlus.includes('APPROVE'), 'Final Authority can approve at 5,00,001');
+    assert.ok(actionsFinal500kPlus.includes('REJECT'), 'Final Authority can reject at 5,00,001');
+    assert.strictEqual(actionsFinal500kPlus.includes('RETURN'), false);
 
-  // 5. Purchase Committee across all thresholds (review and refer only, never final approve or reject)
-  for (const amt of [50000, 50001, 500000, 500001]) {
-    const pcActions = await actionsAt('PURCHASE_COMMITTEE', false, amt);
-    assert.strictEqual(pcActions.includes('APPROVE'), false, `PC must never approve at ₹${amt}`);
-    assert.strictEqual(pcActions.includes('REJECT'), false, `PC must never reject at ₹${amt}`);
-    assert.ok(pcActions.includes('ESCALATE'));
-    assert.ok(pcActions.includes('RETURN'));
+    // 5. Purchase Committee across all thresholds (review and refer, can reject, never approve)
+    for (const amt of [50000, 50001, 500000, 500001]) {
+      const pcActions = await actionsAt('PURCHASE_COMMITTEE', false, amt);
+      assert.strictEqual(pcActions.includes('APPROVE'), false, `PC must never approve at ₹${amt}`);
+      assert.ok(pcActions.includes('REJECT'), `PC can reject at ₹${amt}`);
+      assert.ok(pcActions.includes('ESCALATE'));
+      assert.ok(pcActions.includes('RETURN'));
+    }
+  } finally {
+    if (offline) configService.clearTestOverrides();
   }
 });
 
@@ -1139,6 +1168,274 @@ test('LIVE DB: system_configurations table and SQL functions behave correctly', 
   // 5. Verify Chairman & Vice Chairman stage rename
   const stageResult = await anonQuery("SELECT name FROM workflow_stages WHERE code = 'FINAL_AUTHORITY'");
   assert.strictEqual(stageResult.rows[0]?.name, 'Chairman & Vice Chairman');
+});
+
+// ============================================================================
+// 13. FINAL AUTHORITY SINGLE-APPROVAL REGRESSION TESTS
+// ============================================================================
+
+test('FINAL AUTHORITY: Single decision finalizes approval or rejection without joint approval', async (t) => {
+  const connected = await isDbConnected();
+  if (!connected) {
+    t.skip('Local PostgreSQL instance is offline; skipping live DB test');
+    return;
+  }
+
+  // 1. Create a request above ₹5,00,000 (e.g. ₹6,50,000)
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const fyRes = await client.query('SELECT financial_year_id FROM financial_years WHERE is_active LIMIT 1');
+    const bhRes = await client.query("SELECT budget_head_id FROM budget_heads WHERE code = 'IT' LIMIT 1");
+    const biRes = await client.query("SELECT budget_item_id FROM budget_items WHERE code = 'MIC-01' LIMIT 1");
+    const userRes = await client.query("SELECT user_id, email FROM users WHERE email IN ('head.cs@spcollege.edu', 'pc1@spcollege.edu', 'principal@spcollege.edu', 'chairman@spcollege.edu', 'vp@spcollege.edu')");
+    const users = Object.fromEntries(userRes.rows.map((r) => [r.email, r.user_id]));
+
+    const fy = fyRes.rows[0].financial_year_id;
+    const bh = bhRes.rows[0].budget_head_id;
+    const bi = biRes.rows[0].budget_item_id;
+
+    // As head: create request
+    await client.query("SELECT set_config('app.user_id', $1, true)", [users['head.cs@spcollege.edu']]);
+    const insRes = await client.query(
+      `INSERT INTO requests (raised_by, financial_year_id, budget_head_id, title, tentative_total_cost)
+       VALUES ($1, $2, $3, 'High Value Lab Equipment', 650000)
+       RETURNING request_id`,
+      [users['head.cs@spcollege.edu'], fy, bh]
+    );
+    const reqId = insRes.rows[0].request_id;
+
+    await client.query(
+      `INSERT INTO request_items (request_id, budget_item_id, item_type_snapshot, requested_quantity, estimated_unit_cost, estimated_total)
+       VALUES ($1, $2, 'CAPITAL', 1, 650000, 650000)`,
+      [reqId, bi]
+    );
+
+    // Initial submission -> enters Purchase Committee
+    await client.query('SELECT fn_submit_request($1)', [reqId]);
+
+    // PC escalates to Principal
+    await client.query("SELECT set_config('app.user_id', $1, true)", [users['pc1@spcollege.edu']]);
+    await client.query(
+      "SELECT fn_record_action($1, $2, 'ESCALATE', NULL, 'Recommended')",
+      [reqId, users['pc1@spcollege.edu']]
+    );
+
+    // Principal escalates: since amount (650000) > cdcMax (500000), refers to FINAL_AUTHORITY
+    await client.query("SELECT set_config('app.user_id', $1, true)", [users['principal@spcollege.edu']]);
+    await client.query(
+      "SELECT fn_record_action($1, $2, 'ESCALATE', NULL, 'Forwarded to Final Authority')",
+      [reqId, users['principal@spcollege.edu']]
+    );
+
+    const checkEsc = await client.query('SELECT current_status, current_stage_id FROM requests WHERE request_id = $1', [reqId]);
+    assert.strictEqual(checkEsc.rows[0].current_status, 'UNDER_FINAL_AUTHORITY_REVIEW');
+
+    // 2. Unauthorized role (head or pc) attempts to decide at FINAL_AUTHORITY -> SP004
+    await client.query("SELECT set_config('app.user_id', $1, true)", [users['head.cs@spcollege.edu']]);
+    await client.query('SAVEPOINT sp_unauth');
+    await assert.rejects(
+      async () => {
+        await client.query("SELECT fn_record_action($1, $2, 'APPROVE')", [reqId, users['head.cs@spcollege.edu']]);
+      },
+      (err) => err.code === 'SP004' || (err.message && err.message.includes('not an approver at stage FINAL_AUTHORITY')),
+      'Unauthorized role must be rejected from deciding at Final Authority stage'
+    );
+    await client.query('ROLLBACK TO SAVEPOINT sp_unauth');
+
+    // 3. Authorized Chairman approves: single decision must finalize status to APPROVED
+    await client.query("SELECT set_config('app.user_id', $1, true)", [users['chairman@spcollege.edu']]);
+    await client.query("SELECT fn_record_action($1, $2, 'APPROVE')", [reqId, users['chairman@spcollege.edu']]);
+
+    const finalCheck = await client.query(
+      'SELECT current_status, closed_at FROM requests WHERE request_id = $1',
+      [reqId]
+    );
+    assert.strictEqual(finalCheck.rows[0].current_status, 'APPROVED', 'Single Chairman approval must finalize request to APPROVED');
+    assert.ok(finalCheck.rows[0].closed_at !== null, 'Request must be closed upon final approval');
+
+    // 4. Test single Vice Chairman decision (Rejection) on a second request
+    await client.query("SELECT set_config('app.user_id', $1, true)", [users['head.cs@spcollege.edu']]);
+    const insRes2 = await client.query(
+      `INSERT INTO requests (raised_by, financial_year_id, budget_head_id, title, tentative_total_cost)
+       VALUES ($1, $2, $3, 'High Value Server Upgrade', 700000)
+       RETURNING request_id`,
+      [users['head.cs@spcollege.edu'], fy, bh]
+    );
+    const reqId2 = insRes2.rows[0].request_id;
+    await client.query(
+      `INSERT INTO request_items (request_id, budget_item_id, item_type_snapshot, requested_quantity, estimated_unit_cost, estimated_total)
+       VALUES ($1, $2, 'CAPITAL', 1, 700000, 700000)`,
+      [reqId2, bi]
+    );
+    await client.query('SELECT fn_submit_request($1)', [reqId2]);
+    await client.query("SELECT set_config('app.user_id', $1, true)", [users['pc1@spcollege.edu']]);
+    await client.query("SELECT fn_record_action($1, $2, 'ESCALATE', NULL, 'OK')", [reqId2, users['pc1@spcollege.edu']]);
+    await client.query("SELECT set_config('app.user_id', $1, true)", [users['principal@spcollege.edu']]);
+    await client.query("SELECT fn_record_action($1, $2, 'ESCALATE', NULL, 'OK')", [reqId2, users['principal@spcollege.edu']]);
+
+    // Vice Chairman single rejection finalizes request to REJECTED
+    await client.query("SELECT set_config('app.user_id', $1, true)", [users['vp@spcollege.edu']]);
+    await client.query(
+      "SELECT fn_record_action($1, $2, 'REJECT', NULL, 'Budget constraints', 'Cost exceeds allocation')",
+      [reqId2, users['vp@spcollege.edu']]
+    );
+    const checkRej = await client.query(
+      'SELECT current_status, closed_at FROM requests WHERE request_id = $1',
+      [reqId2]
+    );
+    assert.strictEqual(checkRej.rows[0].current_status, 'REJECTED', 'Single Vice Chairman rejection must finalize request to REJECTED');
+    assert.ok(checkRej.rows[0].closed_at !== null);
+
+    await client.query('ROLLBACK');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+});
+
+// ============================================================================
+// 14. PRIVILEGED CONFIGURATION & SECRET ROW ISOLATION
+// ============================================================================
+
+test('CONFIG SECURITY: Secret configuration isolation and fail-safe defaults', async (t) => {
+  const connected = await isDbConnected();
+  if (!connected) {
+    t.skip('Local PostgreSQL instance is offline; skipping config security test');
+    return;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Insert a secret configuration row
+    await client.query(`
+      INSERT INTO system_configurations (key, value, description, is_secret, category)
+      VALUES ('auth.internal_webhook_secret', '"super-secret-key-12345"'::jsonb, 'Internal webhook key', true, 'security')
+      ON CONFLICT (key) DO UPDATE SET is_secret = true, value = '"super-secret-key-12345"'::jsonb
+    `);
+
+    // As app_user without ADMIN role, secret row is hidden under RLS
+    await client.query('SET LOCAL ROLE app_user');
+    await client.query("SELECT set_config('app.user_id', (SELECT user_id::text FROM users WHERE email = 'head.cs@spcollege.edu'), true)");
+
+    const regularRead = await client.query("SELECT key FROM system_configurations WHERE key = 'auth.internal_webhook_secret'");
+    assert.strictEqual(regularRead.rows.length, 0, 'Unprivileged app_user must not see secret configurations under RLS');
+
+    const regularPublic = await client.query("SELECT key FROM system_configurations WHERE key = 'workflow.threshold.principal_max'");
+    assert.strictEqual(regularPublic.rows.length, 1, 'Unprivileged app_user can read non-secret configuration');
+
+    // Unprivileged user cannot write to system_configurations
+    await client.query('SAVEPOINT sp_unauth_cfg');
+    await assert.rejects(
+      async () => {
+        await client.query("UPDATE system_configurations SET value = '99999'::jsonb WHERE key = 'workflow.threshold.principal_max'");
+      },
+      /permission denied|violates row-level security policy|42501/i,
+      'Unprivileged app_user cannot modify system_configurations'
+    );
+    await client.query('ROLLBACK TO SAVEPOINT sp_unauth_cfg');
+
+    // As admin user, secret row is visible
+    await client.query("SELECT set_config('app.user_id', (SELECT user_id::text FROM users WHERE email = 'admin@spcollege.edu'), true)");
+    const adminRead = await client.query("SELECT key FROM system_configurations WHERE key = 'auth.internal_webhook_secret'");
+    assert.strictEqual(adminRead.rows.length, 1, 'Admin must be able to read secret configurations');
+
+    await client.query('ROLLBACK');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+});
+
+// ============================================================================
+// 15. CRITICAL CONFIGURATION FAIL-CLOSED REGRESSION TESTS
+// ============================================================================
+
+test('CONFIG FAIL-CLOSED: Critical workflow thresholds fail closed when missing, invalid, or on DB error', async (t) => {
+  const connected = await isDbConnected();
+  if (!connected) {
+    t.skip('Local PostgreSQL instance is offline; skipping live DB fail-closed tests');
+    return;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // 1. Missing record in DB -> get('workflow.threshold.principal_max') must throw 500
+    await client.query("DELETE FROM system_configurations WHERE key = 'workflow.threshold.principal_max'");
+    configService.invalidate();
+
+    await assert.rejects(
+      async () => {
+        await configService.get('workflow.threshold.principal_max');
+      },
+      (err) => err instanceof HttpError && err.status === 500 && err.message.includes('missing from database'),
+      'Critical threshold must fail closed when record is deleted from database'
+    );
+
+    await assert.rejects(
+      async () => {
+        await configService.getThresholds();
+      },
+      (err) => err instanceof HttpError && err.status === 500,
+      'getThresholds() must fail closed when threshold record is missing'
+    );
+
+    // 2. Invalid value in DB -> get('workflow.threshold.principal_max') must throw 500
+    await client.query(`
+      INSERT INTO system_configurations (key, value, description, category, is_secret)
+      VALUES ('workflow.threshold.principal_max', '"not-a-valid-number"'::jsonb, 'Corrupt threshold', 'approval_workflow', FALSE)
+      ON CONFLICT (key) DO UPDATE SET value = '"not-a-valid-number"'::jsonb
+    `);
+    configService.invalidate();
+
+    await assert.rejects(
+      async () => {
+        await configService.get('workflow.threshold.principal_max');
+      },
+      (err) => err instanceof HttpError && err.status === 500 && err.message.includes('invalid'),
+      'Critical threshold must fail closed when value in database fails schema validation'
+    );
+
+    // 3. Database error simulation -> critical keys fail closed with 500
+    configService.invalidate();
+    configService._dbError = new Error('Simulated network connection drop to database');
+    await assert.rejects(
+      async () => {
+        await configService.get('workflow.threshold.cdc_max');
+      },
+      (err) => err instanceof HttpError && err.status === 500 && err.message.includes('cannot be trusted'),
+      'Critical threshold must fail closed when database error occurs'
+    );
+
+    // Self-registration fails closed to false on DB error
+    const regStatus = await configService.isSelfRegistrationEnabled();
+    assert.strictEqual(regStatus, false, 'Self-registration must fail closed (false) on database error');
+
+    // Safe non-critical setting falls back to safe institutional default
+    const instName = await configService.get('institution.name');
+    assert.strictEqual(instName, 'S.P. College', 'Safe non-sensitive setting may fall back to institutional default');
+
+    // Clean up simulated error
+    configService._dbError = null;
+
+    await client.query('ROLLBACK');
+    configService.invalidate();
+  } catch (err) {
+    await client.query('ROLLBACK');
+    configService.invalidate();
+    throw err;
+  } finally {
+    client.release();
+  }
 });
 
 // Ensure pool cleanly disconnects

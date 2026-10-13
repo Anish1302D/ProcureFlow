@@ -540,6 +540,14 @@ BEGIN
 END;
 $$;
 
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_user') THEN
+        CREATE ROLE app_user NOLOGIN;
+    END IF;
+END
+$$;
+
 REVOKE ALL ON FUNCTION fn_verify_account_setup_token(TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION fn_verify_account_setup_token(TEXT) TO app_user;
 

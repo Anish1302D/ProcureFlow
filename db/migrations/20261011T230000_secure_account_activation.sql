@@ -31,8 +31,8 @@ DROP POLICY IF EXISTS account_setup_tokens_admin ON account_setup_tokens;
 CREATE POLICY account_setup_tokens_admin ON account_setup_tokens
     FOR ALL
     TO app_user
-    USING (app_is_admin())
-    WITH CHECK (app_is_admin());
+    USING (app_has_role('ADMIN'))
+    WITH CHECK (app_has_role('ADMIN'));
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON account_setup_tokens TO app_user;
 

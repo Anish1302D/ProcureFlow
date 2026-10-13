@@ -453,7 +453,8 @@ ALTER TABLE system_configurations ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS system_configurations_read ON system_configurations;
 CREATE POLICY system_configurations_read ON system_configurations
-    FOR SELECT USING (TRUE);
+    FOR SELECT
+    USING (NOT is_secret OR app_has_role('ADMIN'));
 
 DROP POLICY IF EXISTS system_configurations_admin_write ON system_configurations;
 CREATE POLICY system_configurations_admin_write ON system_configurations

@@ -126,8 +126,8 @@ BEGIN
             USING ERRCODE = 'SP005';
     END IF;
 
-    IF v_stage_code = 'PRINCIPAL' AND p_action IN ('APPROVE', 'PARTIAL_APPROVE', 'REJECT') AND v_req.tentative_total_cost > v_principal_max THEN
-        RAISE EXCEPTION 'Principal performs review and forward only for requests exceeding ₹% and cannot approve or reject; forward to deciding authority instead', v_principal_max
+    IF v_stage_code = 'PRINCIPAL' AND p_action IN ('APPROVE', 'PARTIAL_APPROVE') AND v_req.tentative_total_cost > v_principal_max THEN
+        RAISE EXCEPTION 'Principal cannot final-approve requests exceeding ₹%', v_principal_max
             USING ERRCODE = 'SP005';
     END IF;
 
@@ -161,8 +161,8 @@ BEGIN
             USING ERRCODE = 'SP007';
     END IF;
 
-    IF p_action = 'RETURN' AND v_stage_code NOT IN ('PURCHASE_COMMITTEE', 'PRINCIPAL', 'CDC', 'FINAL_AUTHORITY') THEN
-        RAISE EXCEPTION 'Stage % cannot return a request for correction', v_stage_code
+    IF p_action = 'RETURN' AND v_stage_code NOT IN ('PURCHASE_COMMITTEE', 'PRINCIPAL') THEN
+        RAISE EXCEPTION 'Only Purchase Committee and Principal can return a request for correction'
             USING ERRCODE = 'SP005';
     END IF;
 

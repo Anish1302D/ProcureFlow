@@ -41,24 +41,24 @@ const EDITABLE_STATUSES = ['DRAFT', 'AWAITING_RESUBMISSION'];
 export async function actionsAt(stageCode, _isFinalStage, amount) {
   if (stageCode === 'PURCHASE_COMMITTEE') {
     // Review and verification only — never final approval or financial decision.
-    return ['ESCALATE', 'RETURN'];
+    return ['ESCALATE', 'RETURN', 'REJECT'];
   }
   if (stageCode === 'PRINCIPAL') {
     const { principalMax } = await configService.getThresholds();
     return amount <= principalMax
       ? ['APPROVE', 'PARTIAL_APPROVE', 'REJECT', 'RETURN']
-      : ['ESCALATE', 'RETURN'];
+      : ['ESCALATE', 'REJECT', 'RETURN'];
   }
   if (stageCode === 'CDC') {
     const { cdcMax } = await configService.getThresholds();
     return amount <= cdcMax
-      ? ['APPROVE', 'PARTIAL_APPROVE', 'REJECT', 'RETURN']
-      : ['ESCALATE', 'RETURN'];
+      ? ['APPROVE', 'PARTIAL_APPROVE', 'REJECT']
+      : ['ESCALATE', 'REJECT'];
   }
 
   if (stageCode === 'FINAL_AUTHORITY') {
     // Chairman and Vice Chairman decide requests above cdcMax
-    return ['APPROVE', 'PARTIAL_APPROVE', 'REJECT', 'RETURN'];
+    return ['APPROVE', 'PARTIAL_APPROVE', 'REJECT'];
   }
   return [];
 }
@@ -700,7 +700,7 @@ export async function loadDetail(db, requestId, user) {
       canSubmit: canEdit && r.current_status === 'DRAFT' && items.rowCount > 0,
       canResubmit: isOwner && r.current_status === 'AWAITING_RESUBMISSION' && items.rowCount > 0,
       canAct,
-      actions: canAct ? actionsAt(r.stage_code, r.stage_is_final, Number(r.tentative_total_cost)) : [],
+      actions: canAct ? await actionsAt(r.stage_code, r.stage_is_final, Number(r.tentative_total_cost)) : [],
       canAttach: !ATTACH_CLOSED.includes(r.current_status) && (isOwner || isAdmin || r.staffed_here),
       canCarryForward: (isOwner || isAdmin) && !NOT_CARRYABLE.includes(r.current_status),
     },
@@ -1221,9 +1221,9 @@ requestsRouter.post('/:id/actions', async (req, res) => {
     }
     if (stageCode === 'PRINCIPAL') {
       const { principalMax } = await configService.getThresholds();
-      if (['APPROVE', 'PARTIAL_APPROVE', 'REJECT'].includes(dbAction) && amount > principalMax) {
+      if (['APPROVE', 'PARTIAL_APPROVE'].includes(dbAction) && amount > principalMax) {
         throw unprocessable(
-          `Principal performs review and forward only for requests above ₹${principalMax.toLocaleString('en-IN')}; forward to the deciding authority instead`);
+          `Requests above ₹${principalMax.toLocaleString('en-IN')} are decided by CDC or the Chairman and Vice Chairman; forward it instead`);
       }
       if (dbAction === 'ESCALATE' && amount <= principalMax) {
         throw unprocessable(
@@ -1240,8 +1240,8 @@ requestsRouter.post('/:id/actions', async (req, res) => {
         throw unprocessable('CDC holds the decision at this amount; it cannot pass the request further up');
       }
     }
-    if (dbAction === 'RETURN' && !['PURCHASE_COMMITTEE', 'PRINCIPAL', 'CDC', 'FINAL_AUTHORITY'].includes(stageCode)) {
-      throw unprocessable('Only review stages can return a request for correction');
+    if (dbAction === 'RETURN' && !['PURCHASE_COMMITTEE', 'PRINCIPAL'].includes(stageCode)) {
+      throw unprocessable('Only the Purchase Committee and the Principal can return a request for correction');
     }
 
     const decisions = await buildDecisions(db, requestId, body);

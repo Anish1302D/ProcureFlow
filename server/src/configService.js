@@ -61,11 +61,37 @@ export const CONFIG_CATEGORIES = {
   'institution.support_email': 'institutional',
 };
 
+/**
+ * Critical workflow & authorization keys: MUST fail closed when database configuration
+ * cannot be verified. Silent fallbacks are strictly prohibited.
+ */
+export const CRITICAL_CONFIG_KEYS = new Set([
+  'workflow.threshold.principal_max',
+  'workflow.threshold.cdc_max',
+]);
+
+/**
+ * Safe, non-sensitive keys permitted to use safe institutional default fallbacks
+ * if missing from the database.
+ */
+export const SAFE_FALLBACK_KEYS = new Set([
+  'institution.name',
+  'institution.system_name',
+  'institution.support_email',
+  'roles.vice_chairman.title',
+  'budget.warn_utilization_percent',
+  'cdc.teaching_members_limit',
+  'cdc.non_teaching_members_limit',
+]);
+
 class ConfigService {
   constructor() {
     this._cache = new Map();
+    this._invalidKeys = new Map();
+    this._dbError = null;
     this._lastLoaded = 0;
     this._ttlMs = 30_000; // 30 second cache TTL with immediate invalidation on write
+    this._testOverrides = null;
   }
 
   /**
@@ -73,7 +99,24 @@ class ConfigService {
    */
   invalidate() {
     this._cache.clear();
+    this._invalidKeys.clear();
+    this._dbError = null;
     this._lastLoaded = 0;
+  }
+
+  /**
+   * Set a temporary test override (for isolated unit tests only).
+   */
+  setTestOverride(key, val) {
+    if (!this._testOverrides) this._testOverrides = new Map();
+    this._testOverrides.set(key, val);
+  }
+
+  /**
+   * Clear test overrides.
+   */
+  clearTestOverrides() {
+    if (this._testOverrides) this._testOverrides.clear();
   }
 
   /**
@@ -81,7 +124,7 @@ class ConfigService {
    */
   async loadAll(force = false) {
     const now = Date.now();
-    if (!force && this._cache.size > 0 && now - this._lastLoaded < this._ttlMs) {
+    if (!force && (this._cache.size > 0 || this._dbError) && now - this._lastLoaded < this._ttlMs) {
       return this._cache;
     }
 
@@ -90,29 +133,88 @@ class ConfigService {
         'SELECT key, value, description, category, updated_at FROM system_configurations ORDER BY key'
       );
       this._cache.clear();
+      this._invalidKeys.clear();
+      this._dbError = null;
       for (const row of rows) {
-        this._cache.set(row.key, row.value);
+        if (CONFIG_SCHEMAS[row.key]) {
+          const parsed = CONFIG_SCHEMAS[row.key].safeParse(row.value);
+          if (parsed.success) {
+            this._cache.set(row.key, parsed.data);
+          } else {
+            this._invalidKeys.set(row.key, parsed.error);
+          }
+        }
       }
+    } catch (err) {
+      this._dbError = err;
+    } finally {
       this._lastLoaded = now;
-    } catch {
-      // If table is not yet migrated or query fails, leave existing cache or rely on defaults
     }
     return this._cache;
   }
 
   /**
-   * Retrieve a configuration value by key.
+   * Retrieve a configuration value by key. Fails closed for critical workflow keys.
    */
   async get(key) {
     if (!CONFIG_SCHEMAS[key]) {
       throw new HttpError(400, `Unknown configuration key: ${key}`);
     }
 
+    if (this._testOverrides && this._testOverrides.has(key)) {
+      return this._testOverrides.get(key);
+    }
+
     await this.loadAll();
+
+    // 1. If database query failed
+    if (this._dbError) {
+      if (CRITICAL_CONFIG_KEYS.has(key)) {
+        throw new HttpError(
+          500,
+          `Critical workflow configuration "${key}" cannot be trusted: database error (${this._dbError.message})`
+        );
+      }
+      if (SAFE_FALLBACK_KEYS.has(key) && DEFAULT_CONFIGS[key] !== undefined) {
+        return DEFAULT_CONFIGS[key];
+      }
+      throw new HttpError(
+        500,
+        `Configuration "${key}" is unavailable due to database error (${this._dbError.message})`
+      );
+    }
+
+    // 2. If row exists in database but has an invalid/corrupt value
+    if (this._invalidKeys.has(key)) {
+      throw new HttpError(
+        500,
+        `Configuration "${key}" in database has an invalid value and cannot be trusted: ${this._invalidKeys.get(key).message}`
+      );
+    }
+
+    // 3. Successfully loaded and validated from database
     if (this._cache.has(key)) {
       return this._cache.get(key);
     }
-    return DEFAULT_CONFIGS[key];
+
+    // 4. Missing from database
+    if (CRITICAL_CONFIG_KEYS.has(key)) {
+      throw new HttpError(
+        500,
+        `Critical workflow configuration "${key}" is missing from database; institutional approval policy cannot be verified`
+      );
+    }
+
+    // Safe fallback keys permitted only for explicitly approved non-sensitive settings
+    if (SAFE_FALLBACK_KEYS.has(key) && DEFAULT_CONFIGS[key] !== undefined) {
+      return DEFAULT_CONFIGS[key];
+    }
+
+    if (key === 'self_registration.enabled') {
+      return false; // Fail closed: disabled by default
+    }
+
+    throw new HttpError(500, `Configuration "${key}" is missing from database`);
   }
 
   /**
@@ -122,12 +224,20 @@ class ConfigService {
     await this.loadAll();
     const result = [];
     for (const key of Object.keys(CONFIG_SCHEMAS)) {
-      const val = this._cache.has(key) ? this._cache.get(key) : DEFAULT_CONFIGS[key];
+      let val;
+      if (this._cache.has(key)) {
+        val = this._cache.get(key);
+      } else if (SAFE_FALLBACK_KEYS.has(key)) {
+        val = DEFAULT_CONFIGS[key];
+      } else {
+        val = null;
+      }
       result.push({
         key,
         value: val,
         description: CONFIG_DESCRIPTIONS[key] ?? '',
         category: CONFIG_CATEGORIES[key] ?? 'general',
+        isCritical: CRITICAL_CONFIG_KEYS.has(key),
       });
     }
     return result;
@@ -247,10 +357,14 @@ class ConfigService {
 
   /**
    * Helper: Retrieve workflow thresholds.
+   * Fails closed with 500 if thresholds are missing, invalid, or violate invariants.
    */
   async getThresholds() {
     const principalMax = Number(await this.get('workflow.threshold.principal_max'));
     const cdcMax = Number(await this.get('workflow.threshold.cdc_max'));
+    if (!Number.isFinite(principalMax) || !Number.isFinite(cdcMax) || principalMax <= 0 || cdcMax <= 0 || principalMax >= cdcMax) {
+      throw new HttpError(500, 'Workflow thresholds in database violate institutional policy invariants');
+    }
     return { principalMax, cdcMax };
   }
 

@@ -498,12 +498,15 @@ CREATE POLICY request_versions_insert ON request_versions
         OR app_can_see_request(request_id)
     );
 
--- System configurations are readable by anyone, modifiable only by ADMIN.
+-- System configurations: non-secret rows readable by anyone; secret rows and writes restricted to ADMIN.
 ALTER TABLE system_configurations ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS system_configurations_read ON system_configurations;
 CREATE POLICY system_configurations_read ON system_configurations
-    FOR SELECT USING (TRUE);
+    FOR SELECT
+    USING (NOT is_secret OR app_has_role('ADMIN'));
 
+DROP POLICY IF EXISTS system_configurations_admin_write ON system_configurations;
 CREATE POLICY system_configurations_admin_write ON system_configurations
     FOR ALL
     USING (app_has_role('ADMIN'))
@@ -518,7 +521,7 @@ DROP POLICY IF EXISTS account_setup_tokens_admin ON account_setup_tokens;
 CREATE POLICY account_setup_tokens_admin ON account_setup_tokens
     FOR ALL
     TO app_user
-    USING (app_is_admin())
-    WITH CHECK (app_is_admin());
+    USING (app_has_role('ADMIN'))
+    WITH CHECK (app_has_role('ADMIN'));
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON account_setup_tokens TO app_user;
