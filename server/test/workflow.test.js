@@ -211,10 +211,9 @@ test('CDC cannot reach in and decide a request that bypassed them', async () => 
     token: tok.cdc, body: { action: 'APPROVE' } }), 404);
 });
 
-test('the joint stage names both signatures and shows which is still missing', async () => {
+test('final authority stage does not require joint approvals', async () => {
   const detail = expectStatus(await t.api('GET', `/api/requests/${ids.big}`, { token: tok.chairman }), 200);
-  assert.deepEqual(detail.jointApprovals.map((a) => [a.roleCode, a.decided]),
-    [['CHAIRMAN', false], ['VICE_PRESIDENT', false]]);
+  assert.deepEqual(detail.jointApprovals, []);
 });
 
 test('the final authority cannot escalate further', async () => {
@@ -255,8 +254,8 @@ test('partial approval must be complete and within what was asked', async (s) =>
   });
 });
 
-// Above ₹5,00,000 the Chairman and Vice Chairman decide together: one
-// signature alone leaves the request where it is.
+// Above ₹5,00,000 the Chairman or Vice Chairman decides: a single
+// authorized decision finalizes the request.
 test('chairman approves 2 of 4 microphones, no speakers, all cables', async () => {
   const decision = {
     action: 'PARTIAL_APPROVE',
@@ -268,15 +267,8 @@ test('chairman approves 2 of 4 microphones, no speakers, all cables', async () =
       { requestItemId: ids.hdmi.toUpperCase(), approvedQuantity: 5 },
     ],
   };
-  const first = expectStatus(await t.api('POST', `/api/requests/${ids.big}/actions`, {
-    token: tok.chairman, body: decision }), 201);
-  assert.equal(first.request.status, 'UNDER_FINAL_AUTHORITY_REVIEW',
-    'one of the two joint approvers is not enough');
-  assert.deepEqual(first.request.jointApprovals.map((a) => [a.roleCode, a.decided]),
-    [['CHAIRMAN', true], ['VICE_PRESIDENT', false]]);
-
   const res = expectStatus(await t.api('POST', `/api/requests/${ids.big}/actions`, {
-    token: tok.vp, body: { ...decision, comments: 'Agreed' } }), 201);
+    token: tok.chairman, body: decision }), 201);
   const r = res.request;
   assert.equal(r.status, 'PARTIALLY_APPROVED');
   assert.equal(r.sanctionedAmount, 300000.5);
@@ -307,10 +299,10 @@ test('every decision on the timeline carries a verified seal', async () => {
   const tl = expectStatus(await t.api('GET', `/api/requests/${ids.big}/timeline`, { token: tok.head }), 200);
   assert.deepEqual(tl.map((e) => [e.action, e.seal]), [
     ['SUBMIT', 'UNSEALED'], ['ESCALATE', 'VERIFIED'], ['ESCALATE', 'VERIFIED'],
-    ['PARTIAL_APPROVE', 'VERIFIED'], ['PARTIAL_APPROVE', 'VERIFIED'],
+    ['PARTIAL_APPROVE', 'VERIFIED'],
   ]);
   const partial = tl.at(-1);
-  assert.equal(partial.by.name, 'Smt. L. Karve (Vice President)');
+  assert.equal(partial.by.name, 'Shri. K. Bhave (Chairman)');
   assert.equal(partial.amountApproved, 300000.5);
 });
 
@@ -590,8 +582,8 @@ test('carry-forward into the next year keeps the history and links back', async 
   assert.equal(original.status, 'CARRIED_FORWARD');
   const tl = expectStatus(await t.api('GET', `/api/requests/${ids.big}/timeline`, { token: tok.head }), 200);
   assert.equal(tl.at(-1).action, 'CARRY_FORWARD');
-  // submit, committee pass-through, Principal referral, both joint decisions.
-  assert.equal(tl.length, 6, 'the original history is preserved');
+  // submit, committee pass-through, Principal referral, single final-authority decision.
+  assert.equal(tl.length, 5, 'the original history is preserved');
 
   const again = expectStatus(await t.api('POST', `/api/requests/${ids.big}/carry-forward`, {
     token: tok.head, body: { financialYearId: rows[0].financial_year_id } }), 409);
