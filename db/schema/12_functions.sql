@@ -123,6 +123,7 @@ DECLARE
     v_status request_status;
     v_req    requests%ROWTYPE;
     v_items_json JSONB;
+    v_raiser_role_id INTEGER;
 BEGIN
     SELECT * INTO v_req
     FROM requests
@@ -147,6 +148,21 @@ BEGIN
     END IF;
 
     v_status := fn_stage_status((SELECT code FROM workflow_stages WHERE stage_id = v_stage));
+
+    -- Determine raiser's active role
+    SELECT ur.role_id INTO v_raiser_role_id
+      FROM user_roles ur
+      JOIN roles r ON r.role_id = ur.role_id
+     WHERE ur.user_id = v_req.raised_by
+       AND r.code IN ('HEAD', 'ACTIVITY_INCHARGE')
+     LIMIT 1;
+
+    IF v_raiser_role_id IS NULL THEN
+        SELECT ur.role_id INTO v_raiser_role_id
+          FROM user_roles ur
+         WHERE ur.user_id = v_req.raised_by
+         LIMIT 1;
+    END IF;
 
     UPDATE requests
        SET current_status   = v_status,
@@ -180,10 +196,10 @@ BEGIN
     )
     ON CONFLICT (request_id, version_number) DO NOTHING;
 
-    INSERT INTO approval_actions (request_id, stage_id, performed_by, action,
+    INSERT INTO approval_actions (request_id, stage_id, performed_by, role_id, action,
                                   previous_status, new_status,
                                   amount_requested_snapshot)
-    SELECT p_request_id, v_stage, raised_by, 'SUBMIT',
+    SELECT p_request_id, v_stage, raised_by, v_raiser_role_id, 'SUBMIT',
            'DRAFT', v_status, tentative_total_cost
     FROM requests WHERE request_id = p_request_id;
 END;
@@ -207,6 +223,7 @@ DECLARE
     v_target_stage  INTEGER;
     v_target_status request_status;
     v_signature_id  UUID;
+    v_actor_role_id INTEGER;
 BEGIN
     IF app_current_user_id() IS NOT NULL
        AND p_actor_id IS DISTINCT FROM app_current_user_id() THEN
@@ -229,6 +246,20 @@ BEGIN
         RAISE EXCEPTION 'Request % is not in AWAITING_RESUBMISSION state (current=%)',
             v_req.request_number, v_req.current_status
             USING ERRCODE = 'SP018';
+    END IF;
+
+    SELECT ur.role_id INTO v_actor_role_id
+      FROM user_roles ur
+      JOIN roles r ON r.role_id = ur.role_id
+     WHERE ur.user_id = p_actor_id
+       AND r.code IN ('HEAD', 'ACTIVITY_INCHARGE')
+     LIMIT 1;
+
+    IF v_actor_role_id IS NULL THEN
+        SELECT ur.role_id INTO v_actor_role_id
+          FROM user_roles ur
+         WHERE ur.user_id = p_actor_id
+         LIMIT 1;
     END IF;
 
     v_new_version := COALESCE(v_req.current_version_number, 1) + 1;
@@ -290,10 +321,10 @@ BEGIN
     END IF;
 
     INSERT INTO approval_actions (
-        request_id, stage_id, performed_by, action,
+        request_id, stage_id, performed_by, role_id, action,
         previous_status, new_status, amount_requested_snapshot, comments, signature_id
     ) VALUES (
-        p_request_id, v_target_stage, p_actor_id, 'RESUBMIT',
+        p_request_id, v_target_stage, p_actor_id, v_actor_role_id, 'RESUBMIT',
         'AWAITING_RESUBMISSION', v_target_status, v_req.tentative_total_cost, p_comments, v_signature_id
     );
 

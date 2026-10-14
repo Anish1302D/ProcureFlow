@@ -41,6 +41,7 @@ DECLARE
     v_final_count        INTEGER;
     v_principal_max      NUMERIC;
     v_cdc_max            NUMERIC;
+    v_actor_role_id      INTEGER;
 BEGIN
     IF app_current_user_id() IS NOT NULL
        AND p_actor_id IS DISTINCT FROM app_current_user_id() THEN
@@ -89,6 +90,29 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'User % is not an approver at stage %', p_actor_id, v_stage_code
             USING ERRCODE = 'SP004';
+    END IF;
+
+    -- Resolve the actor's actual role at this stage
+    SELECT sa.role_id INTO v_actor_role_id
+      FROM stage_approvers sa
+     WHERE sa.stage_id = v_req.current_stage_id
+       AND sa.user_id  = p_actor_id
+     LIMIT 1;
+
+    IF v_actor_role_id IS NULL THEN
+        SELECT ra.role_id INTO v_actor_role_id
+          FROM role_appointments ra
+         WHERE ra.user_id = p_actor_id
+           AND (ra.stage_id = v_req.current_stage_id OR ra.stage_id IS NULL)
+           AND ra.is_active
+         LIMIT 1;
+    END IF;
+
+    IF v_actor_role_id IS NULL THEN
+        SELECT ur.role_id INTO v_actor_role_id
+          FROM user_roles ur
+         WHERE ur.user_id = p_actor_id
+         LIMIT 1;
     END IF;
 
     -- CDC Grant vs Non-Grant role check
@@ -223,11 +247,11 @@ BEGIN
     END IF;
 
     INSERT INTO approval_actions (
-        request_id, stage_id, performed_by, action,
+        request_id, stage_id, performed_by, role_id, action,
         previous_status, new_status, amount_requested_snapshot,
         rejection_reason, comments, signature_id)
     VALUES (
-        p_request_id, v_req.current_stage_id, p_actor_id, p_action,
+        p_request_id, v_req.current_stage_id, p_actor_id, v_actor_role_id, p_action,
         v_req.current_status, v_new_status, v_req.tentative_total_cost,
         p_rejection_reason, p_comments, v_signature_id)
     RETURNING action_id INTO v_action_id;

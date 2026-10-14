@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
-  Check, ChevronDown, Copy, Edit2, KeyRound, Loader2, Plus, Search,
-  ShieldCheck, Trash2, UserCheck, UserX, X,
+  Calendar, Check, ChevronDown, Clock, Copy, Edit2, History, KeyRound, Loader2,
+  Plus, Search, ShieldCheck, Trash2, UserCheck, Users, UserX, X,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { useApp } from '../context/AppContext';
@@ -26,7 +26,7 @@ const ROLE_COLORS = {
 
 const rolePill = (role) => (
   <span
-    key={role.code}
+    key={role.code || role.id}
     className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${
       ROLE_COLORS[role.code] ?? 'bg-gray-100 text-gray-700 border-gray-200'
     }`}
@@ -39,7 +39,15 @@ const rolePill = (role) => (
 // Modal — add / edit a user
 // ---------------------------------------------------------------------------
 
-const BLANK = { email: '', fullName: '', password: '', departmentId: null, roleIds: [], isActive: true };
+const BLANK_USER = {
+  email: '',
+  fullName: '',
+  employeeId: '',
+  password: '',
+  departmentId: null,
+  roleIds: [],
+  isActive: true,
+};
 
 function UserModal({ user, roles, departments = [], onClose, onSaved }) {
   const isEdit = Boolean(user);
@@ -49,12 +57,13 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
       ? {
           email: user.email,
           fullName: user.name,
+          employeeId: user.employeeId ?? '',
           password: '',
           departmentId: user.departmentId ?? null,
           roleIds: user.roles.map((r) => r.id),
           isActive: user.isActive,
         }
-      : BLANK,
+      : BLANK_USER,
   );
   const [saving, setSaving] = useState(false);
   const [showRoles, setShowRoles] = useState(false);
@@ -80,6 +89,7 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
       const body = {
         email: form.email.trim().toLowerCase(),
         fullName: form.fullName.trim(),
+        employeeId: form.employeeId.trim() || null,
         departmentId: form.departmentId ? Number(form.departmentId) : null,
         roleIds: form.roleIds,
       };
@@ -134,7 +144,7 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
           </button>
         </div>
 
-        <div className="px-6 py-5 space-y-4">
+        <div className="px-6 py-5 space-y-4 max-h-[75vh] overflow-y-auto">
           {/* Full name */}
           <div>
             <label className={labelCls}>Full name *</label>
@@ -148,13 +158,24 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
 
           {/* Email */}
           <div>
-            <label className={labelCls}>Email *</label>
+            <label className={labelCls}>Official Institutional Email *</label>
             <input
               type="email"
               className={inputCls}
               placeholder="head.cs@spcollege.edu"
               value={form.email}
               onChange={(e) => set({ email: e.target.value })}
+            />
+          </div>
+
+          {/* Employee / Member Identifier */}
+          <div>
+            <label className={labelCls}>Employee / Member Identifier (ID)</label>
+            <input
+              className={inputCls}
+              placeholder="e.g. EMP-PRIN-001 or EMP-CS-001"
+              value={form.employeeId}
+              onChange={(e) => set({ employeeId: e.target.value })}
             />
           </div>
 
@@ -180,7 +201,6 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
               </p>
             </div>
           )}
-
 
           {/* Department picker */}
           <div>
@@ -294,6 +314,349 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
 }
 
 // ---------------------------------------------------------------------------
+// Modal — Appoint / Role Transition
+// ---------------------------------------------------------------------------
+
+function AppointmentModal({ users = [], roles = [], departments = [], onClose, onSaved }) {
+  const { showToast } = useApp();
+  const [userId, setUserId] = useState('');
+  const [roleId, setRoleId] = useState('');
+  const [departmentId, setDepartmentId] = useState('');
+  const [memberClassification, setMemberClassification] = useState('');
+  const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
+  const [endDate, setEndDate] = useState('');
+  const [appointmentOrderNo, setAppointmentOrderNo] = useState('');
+  const [remarks, setRemarks] = useState('');
+  const [autoTransition, setAutoTransition] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const selectedRole = roles.find((r) => r.id === Number(roleId));
+  const isCdcRole = selectedRole && ['CDC_MEMBER', 'CDC_GRANT_MEMBER', 'CDC_NON_GRANT_MEMBER'].includes(selectedRole.code);
+  const isSingleHolder = selectedRole && ['PRINCIPAL', 'CHAIRMAN', 'VICE_PRESIDENT'].includes(selectedRole.code);
+
+  const save = async () => {
+    if (!userId) return showToast('Please select a user', 'error');
+    if (!roleId) return showToast('Please select a role', 'error');
+    if (!startDate) return showToast('Start date is required', 'error');
+
+    setSaving(true);
+    try {
+      await api('/api/admin/appointments', {
+        method: 'POST',
+        body: {
+          userId,
+          roleId: Number(roleId),
+          departmentId: departmentId ? Number(departmentId) : null,
+          memberClassification: memberClassification || null,
+          startDate,
+          endDate: endDate || null,
+          isActive: true,
+          appointmentOrderNo: appointmentOrderNo.trim() || null,
+          remarks: remarks.trim() || null,
+          autoTransitionPrevious: autoTransition,
+        },
+      });
+      showToast('Institutional appointment recorded successfully', 'success');
+      onSaved();
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const inputCls =
+    'w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400';
+  const labelCls = 'block text-xs font-semibold text-gray-600 uppercase tracking-wider mb-1.5';
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/40 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
+        <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100">
+          <div>
+            <h2 className="text-base font-bold text-gray-900">Appoint Member / Role Transition</h2>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Record new appointment tenure without overwriting historical incumbents.
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="px-6 py-5 space-y-4 max-h-[75vh] overflow-y-auto">
+          {/* User selector */}
+          <div>
+            <label className={labelCls}>Member / User *</label>
+            <select className={inputCls} value={userId} onChange={(e) => setUserId(e.target.value)}>
+              <option value="">Select institutional member…</option>
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name} ({u.email}){u.employeeId ? ` — ID: ${u.employeeId}` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Role selector */}
+          <div>
+            <label className={labelCls}>Role to Appoint *</label>
+            <select className={inputCls} value={roleId} onChange={(e) => setRoleId(e.target.value)}>
+              <option value="">Select role…</option>
+              {roles.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name} ({r.code})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* CDC Member Classification */}
+          {isCdcRole && (
+            <div>
+              <label className={labelCls}>CDC Member Classification *</label>
+              <select
+                className={inputCls}
+                value={memberClassification}
+                onChange={(e) => setMemberClassification(e.target.value)}
+              >
+                <option value="">Select classification…</option>
+                <option value="TEACHING">Teaching Member (Max 3)</option>
+                <option value="NON_TEACHING">Non-Teaching Member (Max 1)</option>
+              </select>
+            </div>
+          )}
+
+          {/* Department */}
+          <div>
+            <label className={labelCls}>Department (if applicable)</label>
+            <select
+              className={inputCls}
+              value={departmentId}
+              onChange={(e) => setDepartmentId(e.target.value)}
+            >
+              <option value="">None / Institution-wide</option>
+              {departments.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name} ({d.code})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Dates */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Tenure Start Date *</label>
+              <input
+                type="date"
+                className={inputCls}
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className={labelCls}>Tenure End Date (optional)</label>
+              <input
+                type="date"
+                className={inputCls}
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* Order No */}
+          <div>
+            <label className={labelCls}>Appointment Order / Gazette No.</label>
+            <input
+              className={inputCls}
+              placeholder="e.g. SP/GOV/2026/04"
+              value={appointmentOrderNo}
+              onChange={(e) => setAppointmentOrderNo(e.target.value)}
+            />
+          </div>
+
+          {/* Remarks */}
+          <div>
+            <label className={labelCls}>Remarks / Notes</label>
+            <input
+              className={inputCls}
+              placeholder="e.g. Principal appointed per GC resolution 12"
+              value={remarks}
+              onChange={(e) => setRemarks(e.target.value)}
+            />
+          </div>
+
+          {/* Single holder auto-transition notice */}
+          {isSingleHolder && (
+            <label className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-50 border border-amber-200 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={autoTransition}
+                onChange={(e) => setAutoTransition(e.target.checked)}
+                className="mt-0.5 rounded border-amber-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              <span className="text-xs text-amber-900 leading-snug">
+                <strong>Auto-transition previous active incumbent:</strong> Marks previous active tenure for this role as completed without deleting historical decisions.
+              </span>
+            </label>
+          )}
+        </div>
+
+        <div className="px-6 pb-5 flex items-center justify-end gap-3 border-t border-gray-100 pt-4">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-gray-500 hover:bg-gray-100">
+            Cancel
+          </button>
+          <button
+            onClick={save}
+            disabled={saving}
+            className="px-5 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 flex items-center gap-2"
+          >
+            {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            Confirm Appointment
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Modal — Edit Appointment Tenure
+// ---------------------------------------------------------------------------
+
+function EditAppointmentModal({ appointment, onClose, onSaved }) {
+  const { showToast } = useApp();
+  const [startDate, setStartDate] = useState(appointment.startDate?.split('T')[0] ?? '');
+  const [endDate, setEndDate] = useState(appointment.endDate?.split('T')[0] ?? '');
+  const [isActive, setIsActive] = useState(appointment.isActive);
+  const [memberClassification, setMemberClassification] = useState(appointment.memberClassification ?? '');
+  const [appointmentOrderNo, setAppointmentOrderNo] = useState(appointment.appointmentOrderNo ?? '');
+  const [remarks, setRemarks] = useState(appointment.remarks ?? '');
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api(`/api/admin/appointments/${appointment.appointmentId}`, {
+        method: 'PATCH',
+        body: {
+          startDate: startDate || undefined,
+          endDate: endDate || null,
+          isActive,
+          memberClassification: memberClassification || null,
+          appointmentOrderNo: appointmentOrderNo.trim() || null,
+          remarks: remarks.trim() || null,
+        },
+      });
+      showToast('Tenure record updated', 'success');
+      onSaved();
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const inputCls =
+    'w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400';
+  const labelCls = 'block text-xs font-semibold text-gray-600 uppercase tracking-wider mb-1.5';
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/40 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
+        <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100">
+          <div>
+            <h2 className="text-base font-bold text-gray-900">Edit Tenure Record</h2>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {appointment.user.name} · {appointment.role.name}
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="px-6 py-5 space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Start Date</label>
+              <input type="date" className={inputCls} value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+            </div>
+            <div>
+              <label className={labelCls}>End Date</label>
+              <input type="date" className={inputCls} value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+            </div>
+          </div>
+
+          <div>
+            <label className={labelCls}>Active Status</label>
+            <div className="flex items-center gap-3 select-none">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={isActive}
+                onClick={() => setIsActive(!isActive)}
+                className={`relative inline-flex w-10 h-5 rounded-full transition-colors ${
+                  isActive ? 'bg-indigo-600' : 'bg-gray-300'
+                }`}
+              >
+                <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                  isActive ? 'translate-x-5' : ''
+                }`} />
+              </button>
+              <span className="text-xs text-gray-700 font-medium">
+                {isActive ? 'Current Incumbent (Active)' : 'Former Incumbent (Inactive)'}
+              </span>
+            </div>
+          </div>
+
+          {['CDC_MEMBER', 'CDC_GRANT_MEMBER', 'CDC_NON_GRANT_MEMBER'].includes(appointment.role.code) && (
+            <div>
+              <label className={labelCls}>CDC Member Classification</label>
+              <select
+                className={inputCls}
+                value={memberClassification}
+                onChange={(e) => setMemberClassification(e.target.value)}
+              >
+                <option value="">None / Unspecified</option>
+                <option value="TEACHING">Teaching Member</option>
+                <option value="NON_TEACHING">Non-Teaching Member</option>
+              </select>
+            </div>
+          )}
+
+          <div>
+            <label className={labelCls}>Appointment Order / Reference</label>
+            <input className={inputCls} value={appointmentOrderNo} onChange={(e) => setAppointmentOrderNo(e.target.value)} />
+          </div>
+
+          <div>
+            <label className={labelCls}>Remarks</label>
+            <input className={inputCls} value={remarks} onChange={(e) => setRemarks(e.target.value)} />
+          </div>
+        </div>
+
+        <div className="px-6 pb-5 flex items-center justify-end gap-3 border-t border-gray-100 pt-4">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-gray-500 hover:bg-gray-100">
+            Cancel
+          </button>
+          <button
+            onClick={save}
+            disabled={saving}
+            className="px-5 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 flex items-center gap-2"
+          >
+            {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            Save Changes
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Modal — Account activation & setup link
 // ---------------------------------------------------------------------------
 
@@ -378,8 +741,15 @@ export const UserManagement = () => {
   const users = useApi('/api/admin/users');
   const roles = useApi('/api/admin/roles');
   const departments = useApi('/api/admin/departments');
+  const appointments = useApi('/api/admin/appointments');
+
+  const [activeTab, setActiveTab] = useState('users'); // 'users' | 'tenure'
   const [search, setSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('ALL'); // 'ALL' | 'ACTIVE' | 'FORMER'
   const [modal, setModal] = useState(null); // null | 'create' | <user object>
+  const [appointmentModal, setAppointmentModal] = useState(false);
+  const [editAppointment, setEditAppointment] = useState(null);
   const [activationModal, setActivationModal] = useState(null); // null | { ... }
 
   const closeModal = (createdRes) => {
@@ -389,6 +759,13 @@ export const UserManagement = () => {
     if (createdRes?.setupUrl) {
       setActivationModal(createdRes);
     }
+  };
+
+  const closeAppointmentModal = () => {
+    setAppointmentModal(false);
+    setEditAppointment(null);
+    appointments.reload();
+    users.reload();
   };
 
   const handleGenerateSetupToken = async (user) => {
@@ -416,14 +793,31 @@ export const UserManagement = () => {
     );
   };
 
-  const list = (users.data ?? []).filter((u) => {
+  const userList = (users.data ?? []).filter((u) => {
     const q = search.toLowerCase();
     return (
       u.name.toLowerCase().includes(q) ||
       u.email.toLowerCase().includes(q) ||
+      (u.employeeId && u.employeeId.toLowerCase().includes(q)) ||
       (u.departmentName && u.departmentName.toLowerCase().includes(q)) ||
       (u.departmentCode && u.departmentCode.toLowerCase().includes(q)) ||
       u.roles.some((r) => r.name.toLowerCase().includes(q))
+    );
+  });
+
+  const appointmentList = (appointments.data ?? []).filter((a) => {
+    if (roleFilter && a.role.code !== roleFilter) return false;
+    if (statusFilter === 'ACTIVE' && !a.isActive) return false;
+    if (statusFilter === 'FORMER' && a.isActive) return false;
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return (
+      a.user.name.toLowerCase().includes(q) ||
+      a.user.email.toLowerCase().includes(q) ||
+      (a.user.employeeId && a.user.employeeId.toLowerCase().includes(q)) ||
+      a.role.name.toLowerCase().includes(q) ||
+      (a.remarks && a.remarks.toLowerCase().includes(q)) ||
+      (a.appointmentOrderNo && a.appointmentOrderNo.toLowerCase().includes(q))
     );
   });
 
@@ -436,152 +830,349 @@ export const UserManagement = () => {
             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-violet-100 text-violet-700 border border-violet-200 uppercase tracking-widest flex items-center gap-1.5 w-fit">
               <ShieldCheck className="w-3 h-3" /> Admin only
             </span>
-            <h2 className="text-xl font-extrabold text-gray-900 mt-1">User Management</h2>
+            <h2 className="text-xl font-extrabold text-gray-900 mt-1">Institutional User &amp; Member Management</h2>
             <p className="text-xs text-gray-500 mt-0.5">
-              Add accounts, set passwords, and assign roles. No SQL access required.
+              Persistent user identities, historical role tenure tracking, multi-member committees, and stage appointments.
             </p>
           </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {activeTab === 'users' ? (
+              <button
+                onClick={() => setModal('create')}
+                className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-2 shadow-sm"
+              >
+                <Plus className="w-4 h-4" /> Add User
+              </button>
+            ) : (
+              <button
+                onClick={() => setAppointmentModal(true)}
+                className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-2 shadow-sm"
+              >
+                <Plus className="w-4 h-4" /> Appoint / Transition
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Navigation Tabs */}
+        <div className="flex items-center gap-2 border-b border-gray-200 pb-2">
           <button
-            onClick={() => setModal('create')}
-            className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-2 shrink-0"
+            onClick={() => setActiveTab('users')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+              activeTab === 'users'
+                ? 'bg-indigo-600 text-white shadow-sm'
+                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+            }`}
           >
-            <Plus className="w-4 h-4" /> Add user
+            <Users className="w-4 h-4" /> User Directory ({users.data?.length ?? 0})
+          </button>
+          <button
+            onClick={() => setActiveTab('tenure')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+              activeTab === 'tenure'
+                ? 'bg-indigo-600 text-white shadow-sm'
+                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+            }`}
+          >
+            <History className="w-4 h-4" /> Role Tenure &amp; Incumbents History ({appointments.data?.length ?? 0})
           </button>
         </div>
 
-        {/* Search */}
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
-            className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-gray-200 bg-white text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400"
-            placeholder="Search by name, email, department, or role…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
+        {/* Search & Filters */}
+        <div className="flex flex-col sm:flex-row items-center gap-3">
+          <div className="relative flex-1 w-full">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-gray-200 bg-white text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400"
+              placeholder={
+                activeTab === 'users'
+                  ? 'Search by name, email, employee ID, department, or role…'
+                  : 'Search incumbents, order number, remarks…'
+              }
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
 
-        {/* Table */}
-        <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
-          {users.loading ? (
-            <div className="flex items-center justify-center py-16 gap-2 text-gray-400 text-sm">
-              <Loader2 className="w-4 h-4 animate-spin" /> Loading users…
-            </div>
-          ) : users.error ? (
-            <p className="text-center py-12 text-sm text-red-500">{users.error.message}</p>
-          ) : list.length === 0 ? (
-            <p className="text-center py-12 text-sm text-gray-400">
-              {search ? 'No users match your search.' : 'No users yet.'}
-            </p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="border-b border-gray-100 text-gray-400 font-semibold uppercase tracking-wider text-[10px]">
-                    <th className="py-3 px-4">Name / Email</th>
-                    <th className="py-3 px-4">Department</th>
-                    <th className="py-3 px-4">Roles</th>
-                    <th className="py-3 px-4 text-center">Status</th>
-                    <th className="py-3 px-4 text-center">Added</th>
-                    <th className="py-3 px-4 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {list.map((user) => (
-                    <tr
-                      key={user.id}
-                      className={`transition-colors ${user.isActive ? 'hover:bg-gray-50/60' : 'bg-gray-50/50 opacity-70'}`}
-                    >
-                      <td className="py-3.5 px-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-[11px] shrink-0">
-                            {user.name.split(' ').map((w) => w[0]).slice(0, 2).join('')}
-                          </div>
-                          <div>
-                            <p className="font-semibold text-gray-800 text-[13px]">{user.name}</p>
-                            <p className="text-gray-400 text-[11px]">{user.email}</p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="py-3.5 px-4">
-                        {user.departmentName ? (
-                          <div>
-                            <span className="font-semibold text-gray-800 text-xs">{user.departmentName}</span>
-                            <span className="ml-1 text-[10px] text-gray-400">({user.departmentCode})</span>
-                          </div>
-                        ) : (
-                          <span className="text-gray-400 italic text-[11px]">None</span>
-                        )}
-                      </td>
-                      <td className="py-3.5 px-4">
-                        <div className="flex flex-wrap gap-1">
-                          {user.roles.length ? user.roles.map(rolePill) : (
-                            <span className="text-gray-400 italic text-[11px]">No roles</span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="py-3.5 px-4 text-center">
-                        {user.isActive ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-bold border border-emerald-200">
-                            <UserCheck className="w-3 h-3" /> Active
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-50 text-red-600 text-[10px] font-bold border border-red-200">
-                            <UserX className="w-3 h-3" /> Inactive
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-3.5 px-4 text-center text-gray-400 text-[11px]">
-                        {new Date(user.createdAt).toLocaleDateString('en-IN', {
-                          day: '2-digit', month: 'short', year: 'numeric',
-                        })}
-                      </td>
-                      <td className="py-3.5 px-4 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            onClick={() => handleGenerateSetupToken(user)}
-                            className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
-                            title="Generate / view activation link"
-                          >
-                            <KeyRound className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => setModal(user)}
-                            className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
-                            title="Edit user"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                          {user.isActive ? (
-                            <button
-                              onClick={() => handleDeactivate(user)}
-                              className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                              title="Deactivate account"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => handleReactivate(user)}
-                              className="p-1.5 rounded-lg text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
-                              title="Reactivate account"
-                            >
-                              <UserCheck className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          {activeTab === 'tenure' && (
+            <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+              <select
+                value={roleFilter}
+                onChange={(e) => setRoleFilter(e.target.value)}
+                className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs font-semibold text-gray-700 focus:outline-none focus:border-indigo-400"
+              >
+                <option value="">All Institutional Roles</option>
+                <option value="PRINCIPAL">Principal</option>
+                <option value="CHAIRMAN">Chairman</option>
+                <option value="VICE_PRESIDENT">Vice Chairman</option>
+                <option value="CDC_GRANT_MEMBER">CDC Grant Member</option>
+                <option value="CDC_NON_GRANT_MEMBER">CDC Non-Grant Member</option>
+                <option value="CDC_MEMBER">CDC Member</option>
+                <option value="PURCHASE_COMMITTEE">Purchase Committee</option>
+                <option value="HEAD">Head of Department</option>
+              </select>
 
-              <div className="px-4 py-3 border-t border-gray-100 text-[11px] text-gray-400">
-                {list.length} user{list.length !== 1 ? 's' : ''}
-                {search && ` matching "${search}"`}
-              </div>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs font-semibold text-gray-700 focus:outline-none focus:border-indigo-400"
+              >
+                <option value="ALL">All Statuses</option>
+                <option value="ACTIVE">Current Incumbents</option>
+                <option value="FORMER">Former Incumbents</option>
+              </select>
             </div>
           )}
         </div>
+
+        {/* Tab 1: User Directory Table */}
+        {activeTab === 'users' && (
+          <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+            {users.loading ? (
+              <div className="flex items-center justify-center py-16 gap-2 text-gray-400 text-sm">
+                <Loader2 className="w-4 h-4 animate-spin" /> Loading users…
+              </div>
+            ) : users.error ? (
+              <p className="text-center py-12 text-sm text-red-500">{users.error.message}</p>
+            ) : userList.length === 0 ? (
+              <p className="text-center py-12 text-sm text-gray-400">
+                {search ? 'No users match your search.' : 'No users yet.'}
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-gray-100 text-gray-400 font-semibold uppercase tracking-wider text-[10px]">
+                      <th className="py-3 px-4">Member / Email</th>
+                      <th className="py-3 px-4">Identifier (ID)</th>
+                      <th className="py-3 px-4">Department</th>
+                      <th className="py-3 px-4">Roles</th>
+                      <th className="py-3 px-4 text-center">Status</th>
+                      <th className="py-3 px-4 text-center">Added</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {userList.map((user) => (
+                      <tr
+                        key={user.id}
+                        className={`transition-colors ${user.isActive ? 'hover:bg-gray-50/60' : 'bg-gray-50/50 opacity-70'}`}
+                      >
+                        <td className="py-3.5 px-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-[11px] shrink-0">
+                              {user.name.split(' ').map((w) => w[0]).slice(0, 2).join('')}
+                            </div>
+                            <div>
+                              <p className="font-semibold text-gray-800 text-[13px]">{user.name}</p>
+                              <p className="text-gray-400 text-[11px]">{user.email}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          {user.employeeId ? (
+                            <span className="font-mono text-[10px] bg-gray-100 text-gray-700 px-2 py-0.5 rounded border border-gray-200 font-semibold">
+                              {user.employeeId}
+                            </span>
+                          ) : (
+                            <span className="text-gray-400 italic text-[11px]">Unassigned</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          {user.departmentName ? (
+                            <div>
+                              <span className="font-semibold text-gray-800 text-xs">{user.departmentName}</span>
+                              <span className="ml-1 text-[10px] text-gray-400">({user.departmentCode})</span>
+                            </div>
+                          ) : (
+                            <span className="text-gray-400 italic text-[11px]">None</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <div className="flex flex-wrap gap-1">
+                            {user.roles.length ? user.roles.map(rolePill) : (
+                              <span className="text-gray-400 italic text-[11px]">No roles</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4 text-center">
+                          {user.isActive ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-bold border border-emerald-200">
+                              <UserCheck className="w-3 h-3" /> Active
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-50 text-red-600 text-[10px] font-bold border border-red-200">
+                              <UserX className="w-3 h-3" /> Inactive
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4 text-center text-gray-400 text-[11px]">
+                          {new Date(user.createdAt).toLocaleDateString('en-IN', {
+                            day: '2-digit', month: 'short', year: 'numeric',
+                          })}
+                        </td>
+                        <td className="py-3.5 px-4 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={() => handleGenerateSetupToken(user)}
+                              className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                              title="Generate / view activation link"
+                            >
+                              <KeyRound className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => setModal(user)}
+                              className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                              title="Edit user"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            {user.isActive ? (
+                              <button
+                                onClick={() => handleDeactivate(user)}
+                                className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                                title="Deactivate account"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => handleReactivate(user)}
+                                className="p-1.5 rounded-lg text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
+                                title="Reactivate account"
+                              >
+                                <UserCheck className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                <div className="px-4 py-3 border-t border-gray-100 text-[11px] text-gray-400">
+                  {userList.length} user{userList.length !== 1 ? 's' : ''}
+                  {search && ` matching "${search}"`}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab 2: Role Tenure & Incumbents History Table */}
+        {activeTab === 'tenure' && (
+          <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+            {appointments.loading ? (
+              <div className="flex items-center justify-center py-16 gap-2 text-gray-400 text-sm">
+                <Loader2 className="w-4 h-4 animate-spin" /> Loading tenure history…
+              </div>
+            ) : appointments.error ? (
+              <p className="text-center py-12 text-sm text-red-500">{appointments.error.message}</p>
+            ) : appointmentList.length === 0 ? (
+              <p className="text-center py-12 text-sm text-gray-400">
+                No appointment or tenure records found.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-gray-100 text-gray-400 font-semibold uppercase tracking-wider text-[10px]">
+                      <th className="py-3 px-4">Role</th>
+                      <th className="py-3 px-4">Incumbent</th>
+                      <th className="py-3 px-4">Classification / Dept</th>
+                      <th className="py-3 px-4">Tenure Period</th>
+                      <th className="py-3 px-4 text-center">Status</th>
+                      <th className="py-3 px-4">Order / Remarks</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {appointmentList.map((item) => (
+                      <tr
+                        key={item.appointmentId}
+                        className={`transition-colors ${item.isActive ? 'hover:bg-gray-50/60' : 'bg-gray-50/40 opacity-75'}`}
+                      >
+                        <td className="py-3.5 px-4 font-semibold text-gray-900">
+                          {rolePill(item.role)}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <div>
+                            <p className="font-semibold text-gray-800 text-[13px]">{item.user.name}</p>
+                            <p className="text-gray-400 text-[11px] flex items-center gap-1.5">
+                              {item.user.email}
+                              {item.user.employeeId && (
+                                <span className="font-mono text-[9px] bg-gray-100 text-gray-600 px-1.5 py-0.2 rounded border border-gray-200">
+                                  {item.user.employeeId}
+                                </span>
+                              )}
+                            </p>
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          {item.memberClassification ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                              {item.memberClassification}
+                            </span>
+                          ) : item.department ? (
+                            <span className="text-gray-700 font-medium">
+                              {item.department.name} ({item.department.code})
+                            </span>
+                          ) : (
+                            <span className="text-gray-400 italic text-[11px]">Institution-wide</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <div className="flex items-center gap-1.5 text-gray-700 font-medium text-[11px]">
+                            <Calendar className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                            <span>
+                              {item.startDate ? item.startDate.split('T')[0] : 'N/A'} — {item.endDate ? item.endDate.split('T')[0] : 'Present'}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4 text-center">
+                          {item.isActive ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-bold border border-emerald-200">
+                              <Clock className="w-3 h-3" /> Current
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[10px] font-semibold border border-gray-200">
+                              Former
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4 text-gray-600 text-[11px]">
+                          {item.appointmentOrderNo && (
+                            <p className="font-mono text-[10px] font-semibold text-gray-800">{item.appointmentOrderNo}</p>
+                          )}
+                          {item.remarks && (
+                            <p className="italic text-gray-500">{item.remarks}</p>
+                          )}
+                          {!item.appointmentOrderNo && !item.remarks && (
+                            <span className="text-gray-400 italic text-[11px]">—</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4 text-right">
+                          <button
+                            onClick={() => setEditAppointment(item)}
+                            className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                            title="Edit tenure details"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                <div className="px-4 py-3 border-t border-gray-100 text-[11px] text-gray-400">
+                  {appointmentList.length} appointment record{appointmentList.length !== 1 ? 's' : ''}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* User Modal */}
@@ -595,6 +1186,26 @@ export const UserManagement = () => {
         />
       )}
 
+      {/* Appointment Creation Modal */}
+      {appointmentModal && (
+        <AppointmentModal
+          users={users.data ?? []}
+          roles={roles.data ?? []}
+          departments={departments.data ?? []}
+          onClose={() => setAppointmentModal(false)}
+          onSaved={closeAppointmentModal}
+        />
+      )}
+
+      {/* Edit Appointment Modal */}
+      {editAppointment && (
+        <EditAppointmentModal
+          appointment={editAppointment}
+          onClose={() => setEditAppointment(null)}
+          onSaved={closeAppointmentModal}
+        />
+      )}
+
       {/* Activation Link Modal */}
       {activationModal && (
         <ActivationLinkModal
@@ -603,6 +1214,5 @@ export const UserManagement = () => {
         />
       )}
     </>
-
   );
 };

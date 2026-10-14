@@ -571,15 +571,17 @@ async function loadJointApprovals(db, requestId, stageCode, stageId) {
   if (!roleCodes) return [];
   const { rows } = await db.query(
     `SELECT ro.code AS role_code, ro.name AS role_name,
-            act.performed_by, act.action, act.created_at, u.full_name AS performed_by_name
+            act.performed_by, act.action, act.created_at, u.full_name AS performed_by_name,
+            u.email AS performed_by_email, u.employee_id AS performed_by_employee_id
        FROM roles ro
        LEFT JOIN LATERAL (
          SELECT aa.performed_by, aa.action, aa.created_at
            FROM approval_actions aa
-           JOIN stage_approvers sa ON sa.user_id = aa.performed_by
-                                  AND sa.stage_id = aa.stage_id
-                                  AND sa.role_id = ro.role_id
           WHERE aa.request_id = $1 AND aa.stage_id = $2
+            AND (aa.role_id = ro.role_id OR (aa.role_id IS NULL AND EXISTS (
+                  SELECT 1 FROM stage_approvers sa
+                   WHERE sa.user_id = aa.performed_by AND sa.stage_id = aa.stage_id AND sa.role_id = ro.role_id
+                )))
             AND aa.action IN ('APPROVE', 'PARTIAL_APPROVE', 'ESCALATE')
           ORDER BY aa.created_at DESC
           LIMIT 1
@@ -594,7 +596,12 @@ async function loadJointApprovals(db, requestId, stageCode, stageId) {
     roleName: row.role_name,
     decided: row.performed_by !== null,
     action: row.action,
-    by: row.performed_by ? { id: row.performed_by, name: row.performed_by_name } : null,
+    by: row.performed_by ? {
+      id: row.performed_by,
+      name: row.performed_by_name,
+      email: row.performed_by_email,
+      employeeId: row.performed_by_employee_id,
+    } : null,
     at: row.created_at,
   }));
 }
@@ -1373,7 +1380,17 @@ requestsRouter.get('/:id/timeline', async (req, res) => {
       at: r.created_at,
       action: r.action,
       stage: r.stage_code ? { code: r.stage_code, name: r.stage_name } : null,
-      by: { id: r.performed_by, name: r.performed_by_name },
+      by: {
+        id: r.performed_by,
+        name: r.performed_by_name,
+        email: r.performed_by_email,
+        employeeId: r.performed_by_employee_id,
+      },
+      role: r.role_id ? {
+        id: r.role_id,
+        code: r.role_code,
+        name: r.role_name,
+      } : null,
       previousStatus: r.previous_status,
       newStatus: r.new_status,
       amountRequested: r.amount_requested_snapshot,

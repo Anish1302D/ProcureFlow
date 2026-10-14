@@ -8,12 +8,15 @@ import { useApp } from '../context/AppContext';
 const DEV_DEMO = import.meta.env.DEV
   ? {
       accounts: [
-        ['Head, Computer Science', 'head.cs@spcollege.edu'],
+        ['Head, CS', 'head.cs@spcollege.edu'],
+        ['Head, Chemistry', 'head.chem@spcollege.edu'],
         ['Activity In-charge', 'incharge@spcollege.edu'],
-        ['Purchase Committee', 'pc1@spcollege.edu'],
-        ['Principal', 'principal@spcollege.edu'],
-        ['CDC (Grant)', 'cdc.grant@spcollege.edu'],
-        ['CDC (Non-Grant)', 'cdc.nongrant@spcollege.edu'],
+        ['Purchase Committee (1)', 'pc1@spcollege.edu'],
+        ['Purchase Committee (2)', 'pc2@spcollege.edu'],
+        ['Principal (Current)', 'principal@spcollege.edu'],
+        ['CDC Teaching (1)', 'cdc.grant@spcollege.edu'],
+        ['CDC Teaching (2)', 'cdc.teach2@spcollege.edu'],
+        ['CDC Non-Teaching', 'cdc.nongrant@spcollege.edu'],
         ['Chairman', 'chairman@spcollege.edu'],
         ['Vice Chairman', 'vp@spcollege.edu'],
         ['Clerk', 'clerk@spcollege.edu'],

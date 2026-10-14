@@ -20,6 +20,7 @@ CREATE TABLE users (
     email          CITEXT NOT NULL UNIQUE,
     full_name      TEXT NOT NULL,
     password_hash  TEXT NOT NULL,
+    employee_id    TEXT UNIQUE,
     department_id  INTEGER REFERENCES departments(department_id) ON DELETE SET NULL,
     is_active      BOOLEAN NOT NULL DEFAULT TRUE,
     token_version  INTEGER NOT NULL DEFAULT 1,
