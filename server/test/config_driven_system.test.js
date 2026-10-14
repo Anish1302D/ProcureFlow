@@ -9,7 +9,7 @@ import { z } from 'zod';
 
 // Configure environment before importing server modules
 const defaultDbUrl = 'postgres://app_user:app_password@localhost:5433/spc_api_test';
-process.env.DATABASE_URL = (process.env.DATABASE_URL || defaultDbUrl).replace(/\/sp_college(?:\?|$)/, '/spc_api_test$1');
+process.env.DATABASE_URL = (process.env.DATABASE_URL || defaultDbUrl).replace(/\/(?:sp_college|spc_approval)(?:\?|$)/, '/spc_api_test$1');
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret-minimum-32-characters-long!';
 process.env.SIGNING_SECRET = process.env.SIGNING_SECRET || 'test-signing-secret-minimum-32-characters-long!';
 process.env.NODE_ENV = 'test';
@@ -36,7 +36,10 @@ const {
 // Helper to check DB connectivity with fast timeout
 async function isDbConnected() {
   return new Promise((resolve) => {
-    const socket = net.createConnection({ host: 'localhost', port: 5433, timeout: 300 });
+    const url = new URL(process.env.DATABASE_URL);
+    const host = url.hostname || 'localhost';
+    const port = Number(url.port) || 5432;
+    const socket = net.createConnection({ host, port, timeout: 500 });
     socket.on('connect', () => {
       socket.destroy();
       resolve(true);
@@ -1368,6 +1371,7 @@ test('CONFIG FAIL-CLOSED: Critical workflow thresholds fail closed when missing,
   configService.invalidate();
   await configService.loadAll();
   configService._cache.delete('workflow.threshold.principal_max');
+  configService._dbError = null;
 
   await assert.rejects(
     async () => {
@@ -1390,6 +1394,7 @@ test('CONFIG FAIL-CLOSED: Critical workflow thresholds fail closed when missing,
   await configService.loadAll();
   configService._cache.delete('workflow.threshold.principal_max');
   configService._invalidKeys.set('workflow.threshold.principal_max', new Error('Validation failed'));
+  configService._dbError = null;
 
   await assert.rejects(
     async () => {
