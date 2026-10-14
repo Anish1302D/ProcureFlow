@@ -99,6 +99,13 @@ export const AppProvider = ({ children }) => {
     setModals((m) => ({ ...m, loginNotifications: true }));
   }, [showToast]);
 
+  const signInWithSession = useCallback((token, me) => {
+    setToken(token);
+    setUser(me);
+    setRoute(parseHash());
+    showToast(`Welcome, ${me.name}`, 'success');
+  }, [showToast]);
+
   const setActivePage = useCallback((page) => {
     setRoute({ page, open: null });
     writeHash(page, null);
@@ -124,13 +131,13 @@ export const AppProvider = ({ children }) => {
   const closeModal = useCallback((name) => setModals((m) => ({ ...m, [name]: false })), []);
 
   const value = useMemo(() => ({
-    user, portal, booting, signIn, signOut,
+    user, portal, booting, signIn, signInWithSession, signOut,
     activePage, setActivePage,
     openRecord, closeRecord, openRecordState: route.open,
     toast, showToast,
     dataVersion, refresh,
     modals, openModal, closeModal,
-  }), [user, portal, booting, signIn, signOut, activePage, setActivePage, openRecord, closeRecord,
+  }), [user, portal, booting, signIn, signInWithSession, signOut, activePage, setActivePage, openRecord, closeRecord,
     route.open, toast, showToast, dataVersion, refresh, modals, openModal, closeModal]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

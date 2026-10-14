@@ -1,7 +1,9 @@
+import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireRole } from '../auth.js';
+import { configService } from '../configService.js';
 import { anonQuery, withUser } from '../db.js';
 import { HttpError, conflict, notFound } from '../errors.js';
 
@@ -17,9 +19,23 @@ const BCRYPT_ROUNDS = 12;
 // Helpers
 // ---------------------------------------------------------------------------
 
+const ALLOWED_INSTITUTIONAL_ROLES = [
+  'HEAD',
+  'ACTIVITY_INCHARGE',
+  'PURCHASE_COMMITTEE',
+  'PRINCIPAL',
+  'CDC_MEMBER',
+  'CDC_GRANT_MEMBER',
+  'CDC_NON_GRANT_MEMBER',
+  'CHAIRMAN',
+  'VICE_PRESIDENT',
+  'ADMIN',
+];
+
 async function userDetail(userId) {
   const { rows } = await anonQuery(
     `SELECT u.user_id, u.email, u.full_name, u.is_active, u.created_at, u.updated_at,
+            u.department_id, d.name AS department_name, d.code AS department_code,
             COALESCE(
               json_agg(
                 json_build_object('id', r.role_id, 'code', r.code, 'name', r.name)
@@ -28,10 +44,11 @@ async function userDetail(userId) {
               '[]'
             ) AS roles
        FROM users u
+       LEFT JOIN departments d ON d.department_id = u.department_id
        LEFT JOIN user_roles ur ON ur.user_id = u.user_id
        LEFT JOIN roles r       ON r.role_id  = ur.role_id
       WHERE u.user_id = $1
-      GROUP BY u.user_id`,
+      GROUP BY u.user_id, d.name, d.code`,
     [userId],
   );
   if (!rows[0]) return null;
@@ -43,6 +60,9 @@ async function userDetail(userId) {
     isActive: u.is_active,
     createdAt: u.created_at,
     updatedAt: u.updated_at,
+    departmentId: u.department_id,
+    departmentName: u.department_name,
+    departmentCode: u.department_code,
     roles: u.roles,
   };
 }
@@ -50,11 +70,27 @@ async function userDetail(userId) {
 async function validateRoleIds(db, roleIds) {
   if (!roleIds.length) return;
   const { rows } = await db.query(
-    'SELECT role_id FROM roles WHERE role_id = ANY($1::int[])',
+    'SELECT role_id, code FROM roles WHERE role_id = ANY($1::int[])',
     [roleIds],
   );
   if (rows.length !== roleIds.length) {
     throw new HttpError(422, 'One or more role IDs are invalid');
+  }
+  for (const r of rows) {
+    if (!ALLOWED_INSTITUTIONAL_ROLES.includes(r.code)) {
+      throw new HttpError(422, `Role '${r.code}' is not an allowed institutional role`);
+    }
+  }
+}
+
+async function validateDepartmentId(db, departmentId) {
+  if (departmentId === null || departmentId === undefined) return;
+  const { rows } = await db.query(
+    'SELECT department_id FROM departments WHERE department_id = $1',
+    [departmentId],
+  );
+  if (!rows.length) {
+    throw new HttpError(422, 'Department ID does not exist');
   }
 }
 
@@ -64,6 +100,7 @@ async function validateRoleIds(db, roleIds) {
 adminRouter.get('/users', async (_req, res) => {
   const { rows } = await anonQuery(
     `SELECT u.user_id, u.email, u.full_name, u.is_active, u.created_at, u.updated_at,
+            u.department_id, d.name AS department_name, d.code AS department_code,
             COALESCE(
               json_agg(
                 json_build_object('id', r.role_id, 'code', r.code, 'name', r.name)
@@ -72,9 +109,10 @@ adminRouter.get('/users', async (_req, res) => {
               '[]'
             ) AS roles
        FROM users u
+       LEFT JOIN departments d ON d.department_id = u.department_id
        LEFT JOIN user_roles ur ON ur.user_id = u.user_id
        LEFT JOIN roles r       ON r.role_id  = ur.role_id
-      GROUP BY u.user_id
+      GROUP BY u.user_id, d.name, d.code
       ORDER BY u.full_name`,
   );
   res.json(rows.map((u) => ({
@@ -84,6 +122,9 @@ adminRouter.get('/users', async (_req, res) => {
     isActive: u.is_active,
     createdAt: u.created_at,
     updatedAt: u.updated_at,
+    departmentId: u.department_id,
+    departmentName: u.department_name,
+    departmentCode: u.department_code,
     roles: u.roles,
   })));
 });
@@ -104,21 +145,28 @@ adminRouter.get('/roles', async (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /api/admin/users  —  create a new user
+// POST /api/admin/users  —  invite a new user with single-use setup token
 // ---------------------------------------------------------------------------
 const createUserSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
   fullName: z.string().trim().min(2).max(200),
-  password: z.string().min(8).max(200),
+  departmentId: z.number().int().positive().nullable().optional(),
   roleIds: z.array(z.number().int().positive()).min(1, 'Assign at least one role'),
-  isActive: z.boolean().default(true),
+  isActive: z.boolean().optional(),
 });
 
 adminRouter.post('/users', async (req, res) => {
   const body = createUserSchema.parse(req.body);
-  // Hash before opening the transaction — bcrypt is CPU-bound and slow;
-  // holding a DB connection while it runs would waste pool capacity.
-  const hash = await bcrypt.hash(body.password, BCRYPT_ROUNDS);
+
+  // Generate an unusable placeholder password hash so unactivated accounts cannot log in.
+  const randomPlaceholder = crypto.randomBytes(16).toString('hex');
+  const initialPasswordHash = `$2a$12$unusable.placeholder.setup.required.${randomPlaceholder}`;
+
+  // Issue a short-lived (24h) cryptographically random setup token.
+  // The raw token is NEVER logged or stored in the database — only its SHA-256 hash.
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
   const created = await withUser(req.user.id, async (db) => {
     const dup = await db.query(
@@ -126,12 +174,14 @@ adminRouter.post('/users', async (req, res) => {
     );
     if (dup.rowCount) throw conflict('A user with this email already exists');
 
+    await validateDepartmentId(db, body.departmentId);
     await validateRoleIds(db, body.roleIds);
 
+    // Accounts start unactivated (is_active = FALSE) until the invitee completes password setup.
     const { rows } = await db.query(
-      `INSERT INTO users (email, full_name, password_hash, is_active)
-       VALUES ($1, $2, $3, $4) RETURNING user_id`,
-      [body.email, body.fullName, hash, body.isActive],
+      `INSERT INTO users (email, full_name, password_hash, department_id, is_active, token_version)
+       VALUES ($1, $2, $3, $4, FALSE, 1) RETURNING user_id`,
+      [body.email, body.fullName, initialPasswordHash, body.departmentId ?? null],
     );
     const userId = rows[0].user_id;
 
@@ -158,20 +208,100 @@ adminRouter.post('/users', async (req, res) => {
       );
     }
 
+    await db.query(
+      `INSERT INTO account_setup_tokens (user_id, token_hash, expires_at)
+       VALUES ($1, $2, $3)`,
+      [userId, tokenHash, expiresAt],
+    );
+
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
+       VALUES ('user', $1::text, $2::uuid, 'CREATE', $3::jsonb)`,
+      [
+        userId,
+        req.user.id,
+        JSON.stringify({
+          email: body.email,
+          fullName: body.fullName,
+          departmentId: body.departmentId ?? null,
+          roleIds: body.roleIds,
+          isActive: false,
+        }),
+      ],
+    );
+
     return userId;
   });
 
-  res.status(201).json(await userDetail(created));
+  const detail = await userDetail(created);
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+    Pragma: 'no-cache',
+    Expires: '0',
+  });
+  res.status(201).json({
+    ...detail,
+    setupToken: rawToken,
+    setupUrl: `/setup-account?token=${rawToken}`,
+    expiresAt: expiresAt.toISOString(),
+    emailDelivery: 'UNCONFIGURED',
+    message: 'User created. Outbound email delivery is unconfigured in this environment. Provide the setup link directly to the invited institutional member.',
+  });
 });
 
 // ---------------------------------------------------------------------------
-// PATCH /api/admin/users/:id  —  edit name/email/password/roles/active status
+// POST /api/admin/users/:id/setup-token  —  generate new setup link for a user
+// ---------------------------------------------------------------------------
+adminRouter.post('/users/:id/setup-token', async (req, res) => {
+  const userId = req.params.id;
+  const user = await userDetail(userId);
+  if (!user) throw notFound('User not found');
+
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+  await withUser(req.user.id, async (db) => {
+    await db.query(
+      'UPDATE account_setup_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL',
+      [userId],
+    );
+    await db.query(
+      'INSERT INTO account_setup_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)',
+      [userId, tokenHash, expiresAt],
+    );
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
+       VALUES ('user', $1::text, $2::uuid, 'SETUP_TOKEN_ISSUED', jsonb_build_object('expiresAt', $3::text))`,
+      [userId, req.user.id, expiresAt.toISOString()],
+    );
+  });
+
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+    Pragma: 'no-cache',
+    Expires: '0',
+  });
+  res.json({
+    userId,
+    setupToken: rawToken,
+    setupUrl: `/setup-account?token=${rawToken}`,
+    expiresAt: expiresAt.toISOString(),
+    emailDelivery: 'UNCONFIGURED',
+    message: 'New setup token generated. Outbound email delivery is unconfigured in this environment. Provide the setup link directly to the invited institutional member.',
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// PATCH /api/admin/users/:id  —  edit name/email/password/department/roles/active status
 // ---------------------------------------------------------------------------
 const updateUserSchema = z
   .object({
     email: z.string().trim().toLowerCase().email().max(254).optional(),
     fullName: z.string().trim().min(2).max(200).optional(),
     password: z.string().min(8).max(200).optional(),
+    departmentId: z.number().int().positive().nullable().optional(),
     roleIds: z.array(z.number().int().positive()).min(1).optional(),
     isActive: z.boolean().optional(),
   })
@@ -190,9 +320,20 @@ adminRouter.patch('/users/:id', async (req, res) => {
 
   await withUser(req.user.id, async (db) => {
     const existing = await db.query(
-      'SELECT user_id FROM users WHERE user_id = $1', [userId],
+      `SELECT u.user_id, u.email, u.full_name, u.department_id, u.is_active,
+              COALESCE(array_agg(ur.role_id) FILTER (WHERE ur.role_id IS NOT NULL), '{}') AS role_ids
+         FROM users u
+         LEFT JOIN user_roles ur ON ur.user_id = u.user_id
+        WHERE u.user_id = $1
+        GROUP BY u.user_id`,
+      [userId],
     );
     if (!existing.rowCount) throw notFound('User not found');
+    const beforeUser = existing.rows[0];
+
+    if (body.departmentId !== undefined) {
+      await validateDepartmentId(db, body.departmentId);
+    }
 
     if (body.email) {
       const dup = await db.query(
@@ -248,6 +389,7 @@ adminRouter.patch('/users/:id', async (req, res) => {
     if (body.email !== undefined) push('email', body.email);
     if (body.fullName !== undefined) push('full_name', body.fullName);
     if (hash !== undefined) push('password_hash', hash);
+    if (body.departmentId !== undefined) push('department_id', body.departmentId);
     if (body.isActive !== undefined) push('is_active', body.isActive);
 
     if (sets.length || body.roleIds !== undefined) {
@@ -300,6 +442,40 @@ adminRouter.patch('/users/:id', async (req, res) => {
         );
       }
     }
+
+    const afterRes = await db.query(
+      `SELECT u.user_id, u.email, u.full_name, u.department_id, u.is_active,
+              COALESCE(array_agg(ur.role_id) FILTER (WHERE ur.role_id IS NOT NULL), '{}') AS role_ids
+         FROM users u
+         LEFT JOIN user_roles ur ON ur.user_id = u.user_id
+        WHERE u.user_id = $1
+        GROUP BY u.user_id`,
+      [userId],
+    );
+    const afterUser = afterRes.rows[0];
+
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, before_json, after_json)
+       VALUES ('user', $1::text, $2::uuid, 'UPDATE', $3::jsonb, $4::jsonb)`,
+      [
+        userId,
+        req.user.id,
+        JSON.stringify({
+          email: beforeUser.email,
+          fullName: beforeUser.full_name,
+          departmentId: beforeUser.department_id,
+          roleIds: beforeUser.role_ids,
+          isActive: beforeUser.is_active,
+        }),
+        JSON.stringify({
+          email: afterUser.email,
+          fullName: afterUser.full_name,
+          departmentId: afterUser.department_id,
+          roleIds: afterUser.role_ids,
+          isActive: afterUser.is_active,
+        }),
+      ],
+    );
   });
 
   res.json(await userDetail(userId));
@@ -351,6 +527,12 @@ adminRouter.delete('/users/:id', async (req, res) => {
       }
       throw err;
     }
+
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
+       VALUES ('user', $1::text, $2::uuid, 'DEACTIVATE', jsonb_build_object('isActive', false))`,
+      [userId, req.user.id],
+    );
   });
 
   res.status(204).end();
@@ -380,6 +562,12 @@ adminRouter.post('/users/:id/reactivate', async (req, res) => {
       }
       throw err;
     }
+
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
+       VALUES ('user', $1::text, $2::uuid, 'REACTIVATE', jsonb_build_object('isActive', true))`,
+      [userId, req.user.id],
+    );
   });
 
   res.json(await userDetail(userId));
@@ -542,4 +730,220 @@ adminRouter.delete('/courses/:id', async (req, res) => {
   });
   res.status(204).end();
 });
+
+// ---------------------------------------------------------------------------
+// GET /api/admin/config  —  view all non-secret business configurations
+// ---------------------------------------------------------------------------
+adminRouter.get('/config', async (_req, res) => {
+  const configs = await configService.getAll();
+  res.json(configs);
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /api/admin/config  —  update business configurations (admin only)
+// ---------------------------------------------------------------------------
+adminRouter.patch('/config', async (req, res) => {
+  const updates = req.body?.settings ?? req.body;
+  if (!updates || typeof updates !== 'object') {
+    throw new HttpError(400, 'Invalid request body; expected configuration updates object');
+  }
+  const result = await configService.updateMultiple(updates, req.user.id);
+  res.json({
+    message: 'Configuration updated successfully',
+    updated: result,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/admin/stages  —  view workflow stages with assigned approvers
+// ---------------------------------------------------------------------------
+adminRouter.get('/stages', async (_req, res) => {
+  const { rows } = await anonQuery(
+    `SELECT ws.stage_id, ws.code, ws.name, ws.sequence_no, ws.is_final,
+            COALESCE(
+              json_agg(
+                json_build_object(
+                  'userId', u.user_id,
+                  'name', u.full_name,
+                  'email', u.email,
+                  'roleId', r.role_id,
+                  'roleCode', r.code,
+                  'roleName', r.name,
+                  'memberClassification', sa.member_classification
+                ) ORDER BY u.full_name
+              ) FILTER (WHERE u.user_id IS NOT NULL),
+              '[]'
+            ) AS approvers
+       FROM workflow_stages ws
+       LEFT JOIN stage_approvers sa ON sa.stage_id = ws.stage_id
+       LEFT JOIN users u ON u.user_id = sa.user_id
+       LEFT JOIN roles r ON r.role_id = sa.role_id
+      GROUP BY ws.stage_id
+      ORDER BY ws.sequence_no`,
+  );
+  res.json(rows.map((s) => ({
+    id: s.stage_id,
+    code: s.code,
+    name: s.name,
+    sequence: s.sequence_no,
+    isFinal: s.is_final,
+    approvers: s.approvers,
+  })));
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/admin/stages/:stageCode/approvers  —  assign approver to a stage
+// ---------------------------------------------------------------------------
+const assignApproverSchema = z.object({
+  userId: z.string().uuid(),
+  roleId: z.number().int().positive().optional(),
+  memberClassification: z.enum(['TEACHING', 'NON_TEACHING']).optional(),
+});
+
+adminRouter.post('/stages/:stageCode/approvers', async (req, res) => {
+  const stageCode = req.params.stageCode.toUpperCase();
+  const { userId, roleId, memberClassification } = assignApproverSchema.parse(req.body);
+
+  const { rows: stageRows } = await anonQuery(
+    'SELECT stage_id, code, name FROM workflow_stages WHERE code = $1',
+    [stageCode]
+  );
+  if (!stageRows[0]) throw notFound(`Workflow stage '${stageCode}' not found`);
+  const stage = stageRows[0];
+
+  const { rows: userRows } = await anonQuery(
+    'SELECT user_id, full_name, email, is_active FROM users WHERE user_id = $1',
+    [userId]
+  );
+  if (!userRows[0]) throw notFound('User not found');
+  if (!userRows[0].is_active) throw new HttpError(400, 'Cannot assign an inactive user as a stage approver');
+
+  await withUser(req.user.id, async (db) => {
+    let resolvedRoleId = roleId;
+
+    if (stageCode === 'CDC') {
+      const classification = memberClassification ?? 'TEACHING';
+      const { teachingLimit, nonTeachingLimit } = await configService.getCdcLimits();
+
+      const { rows: currentCdc } = await db.query(
+        `SELECT sa.member_classification, count(*) AS cnt
+           FROM stage_approvers sa
+          WHERE sa.stage_id = $1 AND sa.user_id <> $2
+          GROUP BY sa.member_classification`,
+        [stage.stage_id, userId]
+      );
+      const counts = Object.fromEntries(currentCdc.map((r) => [r.member_classification, Number(r.cnt)]));
+
+      if (classification === 'TEACHING' && (counts['TEACHING'] || 0) >= teachingLimit) {
+        throw new HttpError(422, `CDC teaching member limit reached (maximum ${teachingLimit} teaching members allowed)`);
+      }
+      if (classification === 'NON_TEACHING' && (counts['NON_TEACHING'] || 0) >= nonTeachingLimit) {
+        throw new HttpError(422, `CDC non-teaching member limit reached (maximum ${nonTeachingLimit} non-teaching members allowed)`);
+      }
+
+      if (!resolvedRoleId) {
+        const { rows: defRole } = await db.query(
+          "SELECT role_id FROM roles WHERE code = 'CDC_GRANT_MEMBER'"
+        );
+        resolvedRoleId = defRole[0]?.role_id;
+      }
+    } else if (stageCode === 'PRINCIPAL') {
+      if (!resolvedRoleId) {
+        const { rows: defRole } = await db.query("SELECT role_id FROM roles WHERE code = 'PRINCIPAL'");
+        resolvedRoleId = defRole[0]?.role_id;
+      }
+    } else if (stageCode === 'PURCHASE_COMMITTEE') {
+      if (!resolvedRoleId) {
+        const { rows: defRole } = await db.query("SELECT role_id FROM roles WHERE code = 'PURCHASE_COMMITTEE'");
+        resolvedRoleId = defRole[0]?.role_id;
+      }
+    } else if (stageCode === 'FINAL_AUTHORITY') {
+      if (!resolvedRoleId) {
+        const { rows: defRole } = await db.query("SELECT role_id FROM roles WHERE code = 'CHAIRMAN'");
+        resolvedRoleId = defRole[0]?.role_id;
+      }
+    }
+
+    if (resolvedRoleId) {
+      const { rows: rRows } = await db.query('SELECT role_id, code FROM roles WHERE role_id = $1', [resolvedRoleId]);
+      if (!rRows[0]) throw new HttpError(422, 'Invalid role ID');
+
+      await db.query(
+        'INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+        [userId, resolvedRoleId]
+      );
+    }
+
+    await db.query(
+      `INSERT INTO stage_approvers (stage_id, user_id, role_id, member_classification)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (stage_id, user_id) DO UPDATE SET
+         role_id = EXCLUDED.role_id,
+         member_classification = EXCLUDED.member_classification`,
+      [stage.stage_id, userId, resolvedRoleId, memberClassification ?? 'TEACHING']
+    );
+
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
+       VALUES ($1, $2, $3, $4, $5::jsonb)`,
+      [
+        'stage_approver',
+        `${stageCode}:${userId}`,
+        req.user.id,
+        'ASSIGN',
+        JSON.stringify({ stageCode, userId, roleId: resolvedRoleId, memberClassification: memberClassification ?? 'TEACHING' }),
+      ]
+    );
+  });
+
+  res.status(201).json({ message: `Approver assigned to ${stage.name}` });
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /api/admin/stages/:stageCode/approvers/:userId  —  remove approver
+// ---------------------------------------------------------------------------
+adminRouter.delete('/stages/:stageCode/approvers/:userId', async (req, res) => {
+  const stageCode = req.params.stageCode.toUpperCase();
+  const { userId } = req.params;
+
+  const { rows: stageRows } = await anonQuery(
+    'SELECT stage_id, code, name FROM workflow_stages WHERE code = $1',
+    [stageCode]
+  );
+  if (!stageRows[0]) throw notFound(`Workflow stage '${stageCode}' not found`);
+  const stage = stageRows[0];
+
+  await withUser(req.user.id, async (db) => {
+    if (stageCode === 'PRINCIPAL') {
+      const { rows: countRows } = await db.query(
+        'SELECT count(*) AS cnt FROM stage_approvers WHERE stage_id = $1 AND user_id <> $2',
+        [stage.stage_id, userId]
+      );
+      if (Number(countRows[0]?.cnt || 0) === 0) {
+        throw new HttpError(400, 'Cannot remove the last Principal approver. The Principal stage must remain staffed.');
+      }
+    }
+
+    const { rowCount } = await db.query(
+      'DELETE FROM stage_approvers WHERE stage_id = $1 AND user_id = $2',
+      [stage.stage_id, userId]
+    );
+    if (!rowCount) throw notFound('User is not assigned to this stage');
+
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
+       VALUES ($1, $2, $3, $4, $5::jsonb)`,
+      [
+        'stage_approver',
+        `${stageCode}:${userId}`,
+        req.user.id,
+        'REMOVE',
+        JSON.stringify({ stageCode, userId }),
+      ]
+    );
+  });
+
+  res.status(204).end();
+});
+
 

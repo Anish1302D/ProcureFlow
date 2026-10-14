@@ -50,6 +50,9 @@ const PG_ERRORS = {
   SP016: [409, 'A request cannot move past the Principal without the Principal\'s decision'],
   SP017: [409, 'This request is waiting for the requester to correct and resubmit it'],
   SP018: [409, 'This request has not been returned for correction, so it cannot be resubmitted'],
+  ST001: [404, 'Invalid or unknown setup token'],
+  ST002: [400, 'This setup link has already been used'],
+  ST003: [400, 'This setup link has expired. Please contact your administrator.'],
   23505: [409, 'That record already exists'],
   23503: [422, 'A referenced record does not exist'],
   23514: [422, 'A value is outside its allowed range'],
@@ -94,7 +97,8 @@ export function errorHandler(err, req, res, _next) {
   }
 
   if (!httpErr) {
-    console.error(`[${req.method} ${req.originalUrl}]`, err);
+    const sanitizedUrl = req.originalUrl ? req.originalUrl.replace(/([?&]token=)[^&]+/gi, '$1[REDACTED]') : '';
+    console.error(`[${req.method} ${sanitizedUrl}]`, err);
     httpErr = new HttpError(500, 'Something went wrong', { code: 'INTERNAL' });
   }
 

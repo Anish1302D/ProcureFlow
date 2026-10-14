@@ -39,6 +39,8 @@ DECLARE
     v_final_stage_id     INTEGER;
     v_cdc_count          INTEGER;
     v_final_count        INTEGER;
+    v_principal_max      NUMERIC;
+    v_cdc_max            NUMERIC;
 BEGIN
     IF app_current_user_id() IS NOT NULL
        AND p_actor_id IS DISTINCT FROM app_current_user_id() THEN
@@ -114,14 +116,33 @@ BEGIN
         END IF;
     END IF;
 
+    -- Load dynamic thresholds from authoritative configuration
+    v_principal_max := app_get_config_numeric('workflow.threshold.principal_max', 50000);
+    v_cdc_max       := app_get_config_numeric('workflow.threshold.cdc_max', 500000);
+
     -- Specific Stage Restrictions
     IF v_stage_code = 'PURCHASE_COMMITTEE' AND p_action IN ('APPROVE', 'PARTIAL_APPROVE') THEN
         RAISE EXCEPTION 'Purchase Committee performs validity review only and cannot approve requests'
             USING ERRCODE = 'SP005';
     END IF;
 
-    IF v_stage_code = 'PRINCIPAL' AND p_action IN ('APPROVE', 'PARTIAL_APPROVE') AND v_req.tentative_total_cost > 50000 THEN
-        RAISE EXCEPTION 'Principal cannot final-approve requests exceeding ₹50,000'
+    IF v_stage_code = 'PRINCIPAL' AND p_action IN ('APPROVE', 'PARTIAL_APPROVE') AND v_req.tentative_total_cost > v_principal_max THEN
+        RAISE EXCEPTION 'Principal cannot final-approve requests exceeding ₹%', v_principal_max
+            USING ERRCODE = 'SP005';
+    END IF;
+
+    IF v_stage_code = 'PRINCIPAL' AND p_action = 'ESCALATE' AND v_req.tentative_total_cost <= v_principal_max THEN
+        RAISE EXCEPTION 'Requests up to ₹% must be decided by the Principal and cannot be escalated', v_principal_max
+            USING ERRCODE = 'SP005';
+    END IF;
+
+    IF v_stage_code = 'CDC' AND p_action IN ('APPROVE', 'PARTIAL_APPROVE', 'REJECT') AND v_req.tentative_total_cost > v_cdc_max THEN
+        RAISE EXCEPTION 'CDC cannot decide requests exceeding ₹%; Chairman and Vice Chairman hold the final authority', v_cdc_max
+            USING ERRCODE = 'SP005';
+    END IF;
+
+    IF v_stage_code = 'CDC' AND p_action = 'ESCALATE' THEN
+        RAISE EXCEPTION 'CDC holds the decision at this amount and cannot escalate'
             USING ERRCODE = 'SP005';
     END IF;
 
@@ -180,7 +201,7 @@ BEGIN
         v_new_status := 'UNDER_PRINCIPAL_REVIEW';
 
     ELSIF v_stage_code = 'PRINCIPAL' AND p_action = 'ESCALATE' THEN
-        IF v_req.tentative_total_cost <= 500000 THEN
+        IF v_req.tentative_total_cost <= v_cdc_max THEN
             v_new_stage  := v_cdc_stage_id;
             v_new_status := 'UNDER_CDC_REVIEW';
         ELSE
@@ -277,7 +298,7 @@ BEGIN
 
     -- Evaluate multi-approver completion for CDC and Final Authority
     IF v_stage_code = 'CDC' AND p_action IN ('APPROVE', 'PARTIAL_APPROVE', 'ESCALATE') THEN
-        IF v_req.tentative_total_cost <= 500000 THEN
+        IF v_req.tentative_total_cost <= v_cdc_max THEN
             SELECT count(*),
                    count(*) FILTER (WHERE item_status = 'APPROVED'),
                    count(*) FILTER (WHERE item_status = 'REJECTED')
@@ -298,33 +319,19 @@ BEGIN
         UPDATE approval_actions SET new_status = v_new_status WHERE action_id = v_action_id;
 
     ELSIF v_stage_code = 'FINAL_AUTHORITY' AND p_action IN ('APPROVE', 'PARTIAL_APPROVE') THEN
-        SELECT COUNT(DISTINCT sa.role_id) INTO v_final_count
-        FROM approval_actions aa
-        JOIN stage_approvers sa ON sa.user_id = aa.performed_by AND sa.stage_id = v_final_stage_id
-        JOIN roles r ON r.role_id = sa.role_id
-        WHERE aa.request_id = p_request_id
-          AND aa.stage_id = v_final_stage_id
-          AND aa.action IN ('APPROVE', 'PARTIAL_APPROVE')
-          AND r.code IN ('CHAIRMAN', 'VICE_PRESIDENT');
+        SELECT count(*),
+               count(*) FILTER (WHERE item_status = 'APPROVED'),
+               count(*) FILTER (WHERE item_status = 'REJECTED')
+          INTO v_total, v_approved, v_rejected
+        FROM request_items WHERE request_id = p_request_id;
 
-        IF v_final_count >= 2 THEN
-            SELECT count(*),
-                   count(*) FILTER (WHERE item_status = 'APPROVED'),
-                   count(*) FILTER (WHERE item_status = 'REJECTED')
-              INTO v_total, v_approved, v_rejected
-            FROM request_items WHERE request_id = p_request_id;
-
-            v_new_status := CASE
-                WHEN v_total = 0 THEN 'APPROVED'
-                WHEN v_rejected = v_total THEN 'REJECTED'
-                WHEN v_approved = v_total THEN 'APPROVED'
-                ELSE 'PARTIALLY_APPROVED'
-            END::request_status;
-            v_new_stage := v_final_stage_id;
-        ELSE
-            v_new_status := 'UNDER_FINAL_AUTHORITY_REVIEW';
-            v_new_stage := v_final_stage_id;
-        END IF;
+        v_new_status := CASE
+            WHEN v_total = 0 THEN 'APPROVED'
+            WHEN v_rejected = v_total THEN 'REJECTED'
+            WHEN v_approved = v_total THEN 'APPROVED'
+            ELSE 'PARTIALLY_APPROVED'
+        END::request_status;
+        v_new_stage := v_final_stage_id;
         UPDATE approval_actions SET new_status = v_new_status WHERE action_id = v_action_id;
 
     ELSIF v_new_status IS NULL THEN

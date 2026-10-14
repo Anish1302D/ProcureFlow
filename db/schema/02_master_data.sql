@@ -34,6 +34,18 @@ CREATE TABLE user_roles (
     PRIMARY KEY (user_id, role_id)
 );
 
+CREATE TABLE account_setup_tokens (
+    token_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id        UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    token_hash     TEXT NOT NULL,
+    expires_at     TIMESTAMPTZ NOT NULL,
+    used_at        TIMESTAMPTZ,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX account_setup_tokens_user_idx ON account_setup_tokens(user_id);
+CREATE INDEX account_setup_tokens_hash_idx ON account_setup_tokens(token_hash);
+
 CREATE TABLE courses (
     course_id      SERIAL PRIMARY KEY,
     department_id  INTEGER NOT NULL REFERENCES departments(department_id) ON DELETE RESTRICT,
@@ -79,3 +91,16 @@ CREATE TABLE budget_items (
 );
 
 CREATE INDEX budget_items_head_idx ON budget_items(budget_head_id);
+
+CREATE TABLE system_configurations (
+    config_id    SERIAL PRIMARY KEY,
+    key          TEXT NOT NULL UNIQUE,
+    value        JSONB NOT NULL,
+    description  TEXT,
+    category     TEXT NOT NULL DEFAULT 'general',
+    is_secret    BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_by   UUID REFERENCES users(user_id) ON DELETE SET NULL
+);
+
+CREATE INDEX system_configurations_category_idx ON system_configurations(category);

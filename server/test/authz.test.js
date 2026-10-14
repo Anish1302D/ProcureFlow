@@ -142,14 +142,14 @@ test('5. Non-Grant request is approved solely by CDC Non-Grant member', async ()
   assert.equal(nonGrantApproval.request.status, 'APPROVED');
 });
 
-test('6. Single Chairman approval does not close final stage', async () => {
+test('6. Single Chairman approval finalizes final stage', async () => {
   const req = await createSubmittedRequest(tok.head, 'Authz test - Final authority single approve', 600000);
 
   expectStatus(await t.api('POST', `/api/requests/${req.id}/actions`, { token: tok.pc1, body: { action: 'FORWARD' } }), 201);
   expectStatus(await t.api('POST', `/api/requests/${req.id}/actions`, { token: tok.principal, body: { action: 'FORWARD' } }), 201);
 
   const res = expectStatus(await t.api('POST', `/api/requests/${req.id}/actions`, { token: tok.chairman, body: { action: 'APPROVE' } }), 201);
-  assert.equal(res.request.status, 'UNDER_FINAL_AUTHORITY_REVIEW');
+  assert.equal(res.request.status, 'APPROVED');
 });
 
 test('7. Resubmit by non-raiser is rejected', async () => {

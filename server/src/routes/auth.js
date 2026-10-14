@@ -1,10 +1,12 @@
+import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 import { issueToken, requireAuth } from '../auth.js';
 import { anonQuery, withUser } from '../db.js';
-import { HttpError } from '../errors.js';
+import { configService } from '../configService.js';
+import { HttpError, conflict } from '../errors.js';
 import { REQUESTER_ROLES, ISSUE_MANAGER_ROLES, INVENTORY_READER_ROLES, hasAnyRole } from '../roles.js';
 
 export const authRouter = Router();
@@ -12,6 +14,17 @@ export const authRouter = Router();
 const loginSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
   password: z.string().min(1).max(200),
+});
+
+const registerSchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  fullName: z.string().trim().min(2).max(200),
+  password: z.string().min(8, 'Password must be at least 8 characters').max(200),
+});
+
+const setupAccountSchema = z.object({
+  token: z.string().trim().min(16).max(256),
+  password: z.string().min(8, 'Password must be at least 8 characters').max(200),
 });
 
 // Global IP rate limiter to protect against credential stuffing across accounts.
@@ -40,6 +53,33 @@ export const loginLimiter = rateLimit({
     next(new HttpError(429, 'Too many sign-in attempts. Try again in a few minutes.'));
   },
 });
+
+// Thirty attempts per 15 minutes per IP for verifying setup tokens to mitigate brute-forcing.
+export const verifySetupLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator(req.ip),
+  skip: () => process.env.NODE_ENV === 'test',
+  handler: (_req, _res, next) => {
+    next(new HttpError(429, 'Too many token verification attempts. Try again later.'));
+  },
+});
+
+// Ten attempts per 15 minutes per IP for completing account setup.
+export const setupAccountLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator(req.ip),
+  skip: () => process.env.NODE_ENV === 'test',
+  handler: (_req, _res, next) => {
+    next(new HttpError(429, 'Too many account setup attempts. Try again later.'));
+  },
+});
+
 
 // An unknown address is checked against this hash anyway, so a missing
 // account and a wrong password take the same time to answer. Otherwise the
@@ -100,6 +140,260 @@ authRouter.post('/login', loginIpLimiter, loginLimiter, async (req, res) => {
 authRouter.post('/logout', requireAuth, (_req, res) => {
   res.status(204).end();
 });
+
+// ---------------------------------------------------------------------------
+// Public self-registration (controlled by dynamic configuration flag)
+// ---------------------------------------------------------------------------
+authRouter.get('/registration-status', async (_req, res) => {
+  const enabled = await configService.isSelfRegistrationEnabled();
+  res.json({ enabled });
+});
+
+authRouter.post('/register', loginIpLimiter, async (req, res) => {
+  const enabled = await configService.isSelfRegistrationEnabled();
+  if (!enabled) {
+    throw new HttpError(403, 'Self-registration is currently disabled by administrator');
+  }
+
+  // Prevent privilege escalation, role spoofing, or untrusted department assignment.
+  // Anonymous registrants can never select a role, department, or approval stage.
+  if (
+    req.body?.role ||
+    req.body?.roles ||
+    req.body?.roleIds ||
+    req.body?.departmentId ||
+    req.body?.department_id ||
+    req.body?.stageId ||
+    req.body?.stages ||
+    req.body?.permissions
+  ) {
+    throw new HttpError(400, 'Self-registration cannot specify roles, departments, or permissions');
+  }
+
+  const { email, fullName, password } = registerSchema.parse(req.body);
+
+  const dup = await anonQuery('SELECT 1 FROM users WHERE email = $1', [email]);
+  if (dup.rowCount) {
+    throw conflict('An account with this email already exists');
+  }
+
+  // Public registrants are strictly assigned the least-privileged valid requester role.
+  // Privileged roles (HEAD, CDC, PC, PRINCIPAL, FINAL_AUTHORITY, ADMIN) are strictly prohibited.
+  const assignedRoleCode = 'ACTIVITY_INCHARGE';
+  const roleRow = await anonQuery('SELECT role_id FROM roles WHERE code = $1', [assignedRoleCode]);
+  if (!roleRow.rowCount) {
+    throw new HttpError(500, 'Assigned role not found');
+  }
+  const roleId = roleRow.rows[0].role_id;
+
+  const passwordHash = await bcrypt.hash(password, 12);
+
+  // Department assignment requires institutional administrator verification and approval.
+  // Self-registered accounts start with department_id = NULL.
+  const { rows: userRows } = await anonQuery(
+    `INSERT INTO users (email, full_name, password_hash, department_id, is_active, token_version)
+     VALUES ($1, $2, $3, NULL, TRUE, 1)
+     RETURNING user_id`,
+    [email, fullName, passwordHash],
+  );
+  const newUserId = userRows[0].user_id;
+
+  await anonQuery(
+    `INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+    [newUserId, roleId],
+  );
+
+  await anonQuery(
+    `INSERT INTO audit_logs (entity_type, entity_id, action, after_json)
+     VALUES ('user', $1::text, 'SELF_REGISTER', jsonb_build_object('ip', $2::text, 'role', $3::text))`,
+    [newUserId, req.ip, assignedRoleCode],
+  );
+
+  res.status(201).json({
+    token: issueToken(newUserId, 1),
+    user: await describe(newUserId),
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Account setup & activation for admin-invited users
+// ---------------------------------------------------------------------------
+authRouter.get('/verify-setup-token', verifySetupLimiter, async (req, res) => {
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+    Pragma: 'no-cache',
+    Expires: '0',
+  });
+
+  const token = String(req.query.token ?? '').trim();
+  if (!token || token.length < 16) {
+    throw new HttpError(400, 'Invalid or missing setup token');
+  }
+
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+  let rows;
+  try {
+    const result = await anonQuery(
+      `SELECT status, user_id, email, full_name
+         FROM fn_verify_account_setup_token($1)`,
+      [tokenHash],
+    );
+    rows = result.rows;
+  } catch (err) {
+    // Fallback if stored function is not yet installed in a test environment
+    if (err.message && (err.message.includes('does not exist') || err.message.includes('undefined_function'))) {
+      const result = await anonQuery(
+        `SELECT t.token_id, t.user_id, t.expires_at, t.used_at,
+                u.email, u.full_name, u.is_active
+           FROM account_setup_tokens t
+           JOIN users u ON u.user_id = t.user_id
+          WHERE t.token_hash = $1`,
+        [tokenHash],
+      );
+      const entry = result.rows[0];
+      if (!entry) {
+        throw new HttpError(404, 'Invalid or unknown setup token');
+      }
+      if (entry.used_at) {
+        throw new HttpError(400, 'This setup link has already been used');
+      }
+      if (new Date(entry.expires_at) < new Date()) {
+        throw new HttpError(400, 'This setup link has expired. Please contact your administrator.');
+      }
+      return res.json({
+        valid: true,
+        email: entry.email,
+        fullName: entry.full_name,
+      });
+    }
+    throw err;
+  }
+
+  const statusRow = rows?.[0];
+  if (!statusRow || statusRow.status === 'INVALID') {
+    throw new HttpError(404, 'Invalid or unknown setup token');
+  }
+  if (statusRow.status === 'ALREADY_USED') {
+    throw new HttpError(400, 'This setup link has already been used');
+  }
+  if (statusRow.status === 'EXPIRED') {
+    throw new HttpError(400, 'This setup link has expired. Please contact your administrator.');
+  }
+
+  res.json({
+    valid: true,
+    email: statusRow.email,
+    fullName: statusRow.full_name,
+  });
+});
+
+authRouter.post('/setup-account', setupAccountLimiter, loginIpLimiter, async (req, res) => {
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+    Pragma: 'no-cache',
+    Expires: '0',
+  });
+
+  const { token, password } = setupAccountSchema.parse(req.body);
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const newHash = await bcrypt.hash(password, 12);
+  const clientIp = req.ip || 'unknown';
+
+  let userId;
+  let newVersion;
+
+  try {
+    const { rows } = await anonQuery(
+      `SELECT user_id, token_version
+         FROM fn_consume_account_setup_token($1, $2, $3)`,
+      [tokenHash, newHash, clientIp],
+    );
+    if (!rows || rows.length === 0) {
+      throw new HttpError(404, 'Invalid or unknown setup token');
+    }
+    userId = rows[0].user_id;
+    newVersion = rows[0].token_version ?? 1;
+  } catch (err) {
+    if (err instanceof HttpError) throw err;
+    if (err.code === 'ST001' || (err.message && err.message.includes('invalid or unknown'))) {
+      throw new HttpError(404, 'Invalid or unknown setup token');
+    }
+    if (err.code === 'ST002' || (err.message && err.message.includes('already been used'))) {
+      throw new HttpError(400, 'This setup link has already been used');
+    }
+    if (err.code === 'ST003' || (err.message && err.message.includes('expired'))) {
+      throw new HttpError(400, 'This setup link has expired. Please contact your administrator.');
+    }
+
+    // Transactional fallback with FOR UPDATE row locking if function is missing in mock environment
+    if (err.message && (err.message.includes('does not exist') || err.message.includes('undefined_function'))) {
+      const { pool } = await import('../db.js');
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows: tRows } = await client.query(
+          `SELECT token_id, user_id, expires_at, used_at
+             FROM account_setup_tokens
+            WHERE token_hash = $1
+              FOR UPDATE`,
+          [tokenHash],
+        );
+        const entry = tRows[0];
+        if (!entry) {
+          throw new HttpError(404, 'Invalid or unknown setup token');
+        }
+        if (entry.used_at) {
+          throw new HttpError(400, 'This setup link has already been used');
+        }
+        if (new Date(entry.expires_at) < new Date()) {
+          throw new HttpError(400, 'This setup link has expired. Please contact your administrator.');
+        }
+
+        await client.query(
+          `UPDATE account_setup_tokens
+              SET used_at = NOW()
+            WHERE token_id = $1`,
+          [entry.token_id],
+        );
+
+        const { rows: uRows } = await client.query(
+          `UPDATE users
+              SET password_hash = $1,
+                  is_active = TRUE,
+                  token_version = COALESCE(token_version, 1) + 1,
+                  updated_at = NOW()
+            WHERE user_id = $2
+        RETURNING COALESCE(token_version, 1) AS token_version`,
+          [newHash, entry.user_id],
+        );
+
+        await client.query(
+          `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
+           VALUES ('user', $1::text, $1::uuid, 'ACCOUNT_ACTIVATED', jsonb_build_object('ip', $2::text))`,
+          [entry.user_id, clientIp],
+        );
+
+        await client.query('COMMIT');
+        userId = entry.user_id;
+        newVersion = uRows[0]?.token_version ?? 1;
+      } catch (txErr) {
+        await client.query('ROLLBACK');
+        throw txErr;
+      } finally {
+        client.release();
+      }
+    } else {
+      throw err;
+    }
+  }
+
+  res.json({
+    token: issueToken(userId, newVersion),
+    user: await describe(userId),
+  });
+});
+
 
 // Five password change attempts per quarter hour per user/IP.
 const changePasswordLimiter = rateLimit({

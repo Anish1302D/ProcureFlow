@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { requireRole } from '../auth.js';
 import { config } from '../config.js';
+import { configService } from '../configService.js';
 import { pool, queryAll, withUser } from '../db.js';
 import { buildRequestStatusEmail } from '../emailTemplates.js';
 import { HttpError, conflict, forbidden, notFound, unprocessable } from '../errors.js';
@@ -24,10 +25,9 @@ const NOT_CARRYABLE = ['REJECTED', 'CLOSED', 'FULFILLED', 'CARRIED_FORWARD'];
 const ATTACH_CLOSED = ['CLOSED', 'CARRIED_FORWARD'];
 const isUnderReview = (status) => status.startsWith('UNDER_');
 
-// The bands the Principal's authority turns on (docs/plan/decisions.md):
-// up to ₹50,000 the Principal decides, above it the decision belongs to CDC
-// or — past ₹5,00,000 — to the Chairman and Vice Chairman jointly.
-const PRINCIPAL_DECIDES_UPTO = 50000;
+// The bands the Principal's authority turns on (authoritative configuration):
+// up to principal_max the Principal decides, above it the decision belongs to CDC
+// or — past cdc_max — to the Chairman and Vice Chairman.
 
 // Where a requester may still change the request: a draft nobody has seen, or
 // one an approver has sent back for correction.
@@ -38,21 +38,29 @@ const EDITABLE_STATUSES = ['DRAFT', 'AWAITING_RESUBMISSION'];
  * Mirrors fn_record_action's stage restrictions so the UI never offers a
  * button the database will refuse. The database remains the authority.
  */
-function actionsAt(stageCode, isFinalStage, amount) {
+export async function actionsAt(stageCode, _isFinalStage, amount) {
   if (stageCode === 'PURCHASE_COMMITTEE') {
-    // Validity review only — never a decision on the money.
+    // Review and verification only — never final approval or financial decision.
     return ['ESCALATE', 'RETURN', 'REJECT'];
   }
   if (stageCode === 'PRINCIPAL') {
-    return amount <= PRINCIPAL_DECIDES_UPTO
+    const { principalMax } = await configService.getThresholds();
+    return amount <= principalMax
       ? ['APPROVE', 'PARTIAL_APPROVE', 'REJECT', 'RETURN']
       : ['ESCALATE', 'REJECT', 'RETURN'];
   }
-  // CDC and the Chairman/Vice Chairman decide, and there is nowhere above them
-  // to send a request: the Principal already chose which of the two holds the
-  // decision, from the amount. Only the committee and the Principal may return
-  // a request for correction.
-  return ['APPROVE', 'PARTIAL_APPROVE', 'REJECT'];
+  if (stageCode === 'CDC') {
+    const { cdcMax } = await configService.getThresholds();
+    return amount <= cdcMax
+      ? ['APPROVE', 'PARTIAL_APPROVE', 'REJECT']
+      : ['ESCALATE', 'REJECT'];
+  }
+
+  if (stageCode === 'FINAL_AUTHORITY') {
+    // Chairman and Vice Chairman decide requests above cdcMax
+    return ['APPROVE', 'PARTIAL_APPROVE', 'REJECT'];
+  }
+  return [];
 }
 
 // ---------------------------------------------------------------------------
@@ -551,9 +559,7 @@ const attachmentRow = (r) => ({
 // Stages two people decide together, and the two roles that must each record a
 // decision before the request moves on (docs/plan/decisions.md). Order matters
 // only for display; either may act first.
-const JOINT_STAGE_ROLES = {
-  FINAL_AUTHORITY: ['CHAIRMAN', 'VICE_PRESIDENT'],
-};
+const JOINT_STAGE_ROLES = {};
 
 /**
  * Who has and has not yet decided at a two-person stage, so the UI can show
@@ -694,7 +700,7 @@ export async function loadDetail(db, requestId, user) {
       canSubmit: canEdit && r.current_status === 'DRAFT' && items.rowCount > 0,
       canResubmit: isOwner && r.current_status === 'AWAITING_RESUBMISSION' && items.rowCount > 0,
       canAct,
-      actions: canAct ? actionsAt(r.stage_code, r.stage_is_final, Number(r.tentative_total_cost)) : [],
+      actions: canAct ? await actionsAt(r.stage_code, r.stage_is_final, Number(r.tentative_total_cost)) : [],
       canAttach: !ATTACH_CLOSED.includes(r.current_status) && (isOwner || isAdmin || r.staffed_here),
       canCarryForward: (isOwner || isAdmin) && !NOT_CARRYABLE.includes(r.current_status),
     },
@@ -1214,23 +1220,28 @@ requestsRouter.post('/:id/actions', async (req, res) => {
       throw unprocessable('Purchase Committee performs validity review only and cannot approve requests');
     }
     if (stageCode === 'PRINCIPAL') {
-      if (['APPROVE', 'PARTIAL_APPROVE'].includes(dbAction) && amount > PRINCIPAL_DECIDES_UPTO) {
+      const { principalMax } = await configService.getThresholds();
+      if (['APPROVE', 'PARTIAL_APPROVE'].includes(dbAction) && amount > principalMax) {
         throw unprocessable(
-          `Requests above ₹${PRINCIPAL_DECIDES_UPTO.toLocaleString('en-IN')} are decided by CDC or the Chairman and Vice Chairman; forward it instead`);
+          `Requests above ₹${principalMax.toLocaleString('en-IN')} are decided by CDC or the Chairman and Vice Chairman; forward it instead`);
       }
-      if (dbAction === 'ESCALATE' && amount <= PRINCIPAL_DECIDES_UPTO) {
+      if (dbAction === 'ESCALATE' && amount <= principalMax) {
         throw unprocessable(
-          `Requests up to ₹${PRINCIPAL_DECIDES_UPTO.toLocaleString('en-IN')} must be decided by the Principal and cannot be escalated`);
+          `Requests up to ₹${principalMax.toLocaleString('en-IN')} must be decided by the Principal and cannot be escalated`);
+      }
+    }
+    if (stageCode === 'CDC') {
+      const { cdcMax } = await configService.getThresholds();
+      if (['APPROVE', 'PARTIAL_APPROVE', 'REJECT'].includes(dbAction) && amount > cdcMax) {
+        throw unprocessable(
+          `Requests above ₹${cdcMax.toLocaleString('en-IN')} must be decided by Chairman and Vice Chairman`);
+      }
+      if (dbAction === 'ESCALATE') {
+        throw unprocessable('CDC holds the decision at this amount; it cannot pass the request further up');
       }
     }
     if (dbAction === 'RETURN' && !['PURCHASE_COMMITTEE', 'PRINCIPAL'].includes(stageCode)) {
       throw unprocessable('Only the Purchase Committee and the Principal can return a request for correction');
-    }
-    // The Principal referred the request to whoever the amount says decides
-    // it, so CDC has nowhere to pass it: above ₹5,00,000 it would never have
-    // reached them.
-    if (dbAction === 'ESCALATE' && stageCode === 'CDC') {
-      throw unprocessable('CDC holds the decision at this amount; it cannot pass the request further up');
     }
 
     const decisions = await buildDecisions(db, requestId, body);

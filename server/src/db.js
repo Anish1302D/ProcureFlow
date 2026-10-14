@@ -12,6 +12,7 @@ pg.types.setTypeParser(pg.types.builtins.INT8, (value) => Number(value));
 export const pool = new pg.Pool({
   connectionString: config.databaseUrl,
   max: 10,
+  connectionTimeoutMillis: 3000,
 });
 
 /**

@@ -28,6 +28,8 @@ import { NotificationsCenter } from './pages/NotificationsCenter';
 import { SettingsPreferences } from './pages/SettingsPreferences';
 import { UserManagement } from './pages/UserManagement';
 
+import { SetupAccount } from './pages/SetupAccount';
+
 const PAGES = {
   dashboard: PrincipalDashboard,
   'requests-all': FinancialRequestsManagement,
@@ -63,7 +65,18 @@ const PageRenderer = () => {
       </div>
     );
   }
-  if (!user) return <Login />;
+
+  if (!user) {
+    const isSetup =
+      typeof window !== 'undefined' &&
+      (window.location.pathname.startsWith('/setup-account') ||
+        new URLSearchParams(window.location.search).has('token'));
+
+    if (isSetup) {
+      return <SetupAccount />;
+    }
+    return <Login />;
+  }
 
   // A page outside this portal (an old link, an edited URL) falls back to the
   // portal's home. The API would refuse its data anyway.
@@ -71,6 +84,7 @@ const PageRenderer = () => {
   const Page = PAGES[page] ?? PAGES[HOME[portal]];
   return <AppShell><Page /></AppShell>;
 };
+
 
 export default function App() {
   return (

@@ -205,9 +205,73 @@ function getMockResponse(path, { method = 'GET', body } = {}) {
     ];
   }
 
-  if (cleanPath === '/api/financial-years') {
+  if (cleanPath === '/api/auth/registration-status') {
+    return { enabled: false };
+  }
+
+  if (cleanPath === '/api/admin/config') {
+    if (method === 'PATCH') {
+      return body?.updates || {};
+    }
     return [
-      { id: 'fy-2026', code: '2026-2027', name: '2026-2027' },
+      { key: 'workflow.threshold.principal_max', value: 50000, description: 'Maximum request amount decided finally by Principal (₹50,000). Requests above this escalate.', category: 'approval_workflow' },
+      { key: 'workflow.threshold.cdc_max', value: 500000, description: 'Maximum request amount decided by CDC (₹5,00,000). Requests above this escalate to Chairman.', category: 'approval_workflow' },
+      { key: 'self_registration.enabled', value: false, description: 'Whether public user self-registration is enabled. Default false.', category: 'feature_flags' },
+      { key: 'roles.vice_chairman.title', value: 'Vice Chairman', description: 'Institutional title for Vice Chairman role', category: 'institutional' },
+      { key: 'cdc.teaching_members_limit', value: 3, description: 'Maximum number of teaching faculty members on CDC', category: 'institutional' },
+      { key: 'cdc.non_teaching_members_limit', value: 1, description: 'Maximum number of non-teaching staff members on CDC', category: 'institutional' },
+      { key: 'budget.warn_utilization_percent', value: 85, description: 'Budget utilization threshold percentage at which warnings are displayed', category: 'budget' },
+      { key: 'institution.name', value: 'S.P. College', description: 'Official institution name', category: 'institutional' },
+      { key: 'institution.system_name', value: 'College Procurement & Approval Workflow System', description: 'Institutional workflow system title', category: 'institutional' },
+      { key: 'institution.support_email', value: 'support@spcollege.edu.in', description: 'Institutional system support email address', category: 'institutional' },
+    ];
+  }
+
+  if (cleanPath === '/api/admin/stages') {
+    return [
+      {
+        stageId: 1,
+        code: 'PURCHASE_COMMITTEE',
+        name: 'Purchase Committee',
+        sequenceNo: 1,
+        isFinal: false,
+        approvers: [
+          { userId: 'u-pc1', name: 'Purchase Committee Member', email: 'pc1@spcollege.edu', roleCode: 'PURCHASE_COMMITTEE', roleName: 'Purchase Committee', memberClassification: 'TEACHING' }
+        ]
+      },
+      {
+        stageId: 2,
+        code: 'PRINCIPAL',
+        name: 'Principal',
+        sequenceNo: 2,
+        isFinal: false,
+        approvers: [
+          { userId: 'u-prin', name: 'Dr. Principal', email: 'principal@spcollege.edu', roleCode: 'PRINCIPAL', roleName: 'Principal', memberClassification: 'TEACHING' }
+        ]
+      },
+      {
+        stageId: 3,
+        code: 'CDC',
+        name: 'CDC',
+        sequenceNo: 3,
+        isFinal: false,
+        approvers: [
+          { userId: 'u-cdc-g', name: 'Prof. CDC Grant', email: 'cdc.grant@spcollege.edu', roleCode: 'CDC_GRANT_MEMBER', roleName: 'CDC Grant Member', memberClassification: 'TEACHING' },
+          { userId: 'u-cdc-ng', name: 'Prof. CDC Non-Grant', email: 'cdc.nongrant@spcollege.edu', roleCode: 'CDC_NON_GRANT_MEMBER', roleName: 'CDC Non-Grant Member', memberClassification: 'TEACHING' },
+          { userId: 'u-cdc-nt', name: 'Shri Staff Member', email: 'cdc.staff@spcollege.edu', roleCode: 'CDC_MEMBER', roleName: 'CDC Member', memberClassification: 'NON_TEACHING' }
+        ]
+      },
+      {
+        stageId: 4,
+        code: 'FINAL_AUTHORITY',
+        name: 'Chairman & Vice Chairman',
+        sequenceNo: 4,
+        isFinal: true,
+        approvers: [
+          { userId: 'u-chair', name: 'Hon. Chairman', email: 'chairman@spcollege.edu', roleCode: 'CHAIRMAN', roleName: 'Chairman', memberClassification: 'NON_TEACHING' },
+          { userId: 'u-vc', name: 'Hon. Vice Chairman', email: 'vp@spcollege.edu', roleCode: 'VICE_PRESIDENT', roleName: 'Vice Chairman', memberClassification: 'NON_TEACHING' }
+        ]
+      }
     ];
   }
 

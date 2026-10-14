@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { ArrowRight, Loader2, Lock } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { ArrowRight, Loader2, Lock, UserPlus } from 'lucide-react';
+import { api } from '../api/client';
 import { useApp } from '../context/AppContext';
 
 // Development-only demo accounts for local debugging.
@@ -14,7 +15,7 @@ const DEV_DEMO = import.meta.env.DEV
         ['CDC (Grant)', 'cdc.grant@spcollege.edu'],
         ['CDC (Non-Grant)', 'cdc.nongrant@spcollege.edu'],
         ['Chairman', 'chairman@spcollege.edu'],
-        ['Vice President', 'vp@spcollege.edu'],
+        ['Vice Chairman', 'vp@spcollege.edu'],
         ['Clerk', 'clerk@spcollege.edu'],
         ['Administrator', 'admin@spcollege.edu'],
       ],
@@ -22,21 +23,60 @@ const DEV_DEMO = import.meta.env.DEV
   : null;
 
 export const Login = () => {
-  const { signIn, showToast } = useApp();
+  const { signIn, signInWithSession, showToast } = useApp();
+  const [mode, setMode] = useState('login'); // 'login' | 'register'
+  const [canRegister, setCanRegister] = useState(false);
   const [email, setEmail] = useState('');
+  const [fullName, setFullName] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
+  useEffect(() => {
+    let active = true;
+    api('/api/auth/registration-status')
+      .then((res) => {
+        if (active && res && typeof res.enabled === 'boolean') {
+          setCanRegister(res.enabled);
+        }
+      })
+      .catch(() => {
+        if (active) setCanRegister(false);
+      });
+    return () => { active = false; };
+  }, []);
+
   const submit = async (e, as) => {
     e?.preventDefault();
-    const creds = as ?? { email, password };
     setBusy(true);
     setError('');
+
+    if (mode === 'register') {
+      try {
+        const res = await api('/api/auth/register', {
+          method: 'POST',
+          body: {
+            email: email.trim(),
+            fullName: fullName.trim(),
+            password,
+          },
+        });
+        showToast('Registration successful! Welcome to the portal.', 'success');
+        signInWithSession(res.token, res.user);
+      } catch (err) {
+        setError(err.message || 'Registration failed');
+        showToast(err.message, 'error');
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
+    const creds = as ?? { email, password };
     try {
       await signIn(creds.email.trim(), creds.password);
     } catch (err) {
-      setError(err.status === 401 ? 'That email and password don\'t match an active account.' : err.message);
+      setError(err.status === 401 ? "That email and password don't match an active account." : err.message);
       if (err.status !== 401) showToast(err.message, 'error');
     } finally {
       setBusy(false);
@@ -60,11 +100,47 @@ export const Login = () => {
 
       <div className="w-full max-w-md mx-auto my-12 space-y-6">
         <div className="text-center space-y-1.5">
-          <h2 className="text-2xl font-extrabold text-gray-900">Sign in</h2>
-          <p className="text-sm text-gray-500">Use your college email. What you see depends on your role.</p>
+          <h2 className="text-2xl font-extrabold text-gray-900">
+            {mode === 'register' ? 'Register Account' : 'Sign in'}
+          </h2>
+          <p className="text-sm text-gray-500">
+            {mode === 'register'
+              ? 'Institutional self-registration for authorized faculty and activity in-charges.'
+              : 'Use your college email. What you see depends on your role.'}
+          </p>
         </div>
 
+        {canRegister && (
+          <div className="flex bg-gray-200/80 p-1 rounded-xl">
+            <button
+              type="button"
+              onClick={() => { setMode('login'); setError(''); }}
+              className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                mode === 'login' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-900'
+              }`}
+            >
+              Sign in
+            </button>
+            <button
+              type="button"
+              onClick={() => { setMode('register'); setError(''); }}
+              className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                mode === 'register' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-900'
+              }`}
+            >
+              <UserPlus className="w-3.5 h-3.5 text-indigo-600" /> Register
+            </button>
+          </div>
+        )}
+
         <form onSubmit={submit} className="bg-white rounded-2xl border border-gray-200 p-6 space-y-4">
+          {mode === 'register' && (
+            <div>
+              <label htmlFor="fullName" className="block text-xs font-semibold text-gray-600 uppercase tracking-wider mb-1.5">Full Name</label>
+              <input id="fullName" type="text" required className={inputCls}
+                placeholder="Dr. / Prof. Full Name" value={fullName} onChange={(e) => setFullName(e.target.value)} />
+            </div>
+          )}
           <div>
             <label htmlFor="email" className="block text-xs font-semibold text-gray-600 uppercase tracking-wider mb-1.5">Email</label>
             <input id="email" type="email" autoComplete="username" required className={inputCls}
@@ -72,15 +148,35 @@ export const Login = () => {
           </div>
           <div>
             <label htmlFor="password" className="block text-xs font-semibold text-gray-600 uppercase tracking-wider mb-1.5">Password</label>
-            <input id="password" type="password" autoComplete="current-password" required className={inputCls}
+            <input id="password" type="password" autoComplete={mode === 'register' ? 'new-password' : 'current-password'} required className={inputCls}
+              placeholder={mode === 'register' ? 'Min 8 characters' : ''}
               value={password} onChange={(e) => setPassword(e.target.value)} />
           </div>
+          {mode === 'register' && (
+            <div className="rounded-lg bg-indigo-50/60 border border-indigo-100 p-3 text-xs text-indigo-900 space-y-1">
+              <p className="font-semibold">Institutional Requester Access</p>
+              <p className="text-[11px] text-indigo-700 leading-relaxed">
+                Self-registered accounts receive standard requester access. Department head, committee authority, and administrative roles are assigned solely by administrators.
+              </p>
+            </div>
+          )}
           {error && <p role="alert" className="text-xs text-red-600">{error}</p>}
           <button type="submit" disabled={busy}
             className="w-full py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-60">
-            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />} Sign in
+            {busy ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : mode === 'register' ? (
+              <UserPlus className="w-4 h-4" />
+            ) : (
+              <ArrowRight className="w-4 h-4" />
+            )}{' '}
+            {mode === 'register' ? 'Create account' : 'Sign in'}
           </button>
-          <p className="text-[11px] text-gray-400 text-center">Forgotten your password? Ask the college administrator to reset it.</p>
+          {mode === 'login' ? (
+            <p className="text-[11px] text-gray-400 text-center">Forgotten your password? Ask the college administrator to reset it.</p>
+          ) : (
+            <p className="text-[11px] text-gray-400 text-center">By registering, you confirm your institutional affiliation with S.P. College.</p>
+          )}
         </form>
 
         {import.meta.env.DEV && DEV_DEMO && (

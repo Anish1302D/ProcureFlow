@@ -51,26 +51,24 @@ const CHOICES = {
   },
 };
 
-// Where the request goes next, named rather than left as "escalate". The bands
-// are the Principal's: up to ₹50,000 they decide, then CDC, then the Chairman
-// and Vice Chairman (docs/plan/decisions.md).
 function escalateLabel(stageCode, amount, fundingType) {
-  if (stageCode === 'PURCHASE_COMMITTEE') return 'Pass to Principal';
+  if (stageCode === 'PURCHASE_COMMITTEE') return 'Verify & Refer to Principal';
   if (stageCode === 'PRINCIPAL') {
     if (amount <= 500000) {
-      return fundingType === 'NON_GRANT' ? 'Refer to CDC (Non-Grant)' : 'Refer to CDC (Grant)';
+      return fundingType === 'NON_GRANT' ? 'Review & Refer to CDC (Non-Grant)' : 'Review & Refer to CDC (Grant)';
     }
-    return 'Refer to Chairman & Vice Chairman';
+    return 'Review & Refer to Chairman & Vice Chairman';
   }
-  return 'Escalate';
+  return 'Refer to Next Stage';
 }
 
 const STAGE_NOTE = {
-  PURCHASE_COMMITTEE: 'The committee checks that the request is complete and properly documented. '
-    + 'It cannot approve the spending — passing it on sends it to the Principal, who decides.',
-  PRINCIPAL: 'Every request reaches you, whatever it costs. You decide up to ₹50,000; above that the '
-    + 'decision belongs to CDC (Grant or Non-Grant depending on department), and above ₹5,00,000 to the Chairman and Vice Chairman.',
-  CDC: 'You are reviewing this request as the designated CDC representative for this department\'s funding stream. Your decision finalizes the CDC review stage.',
+  PURCHASE_COMMITTEE: 'The Purchase Committee verifies request completeness and compliance. '
+    + 'It cannot make final purchase approvals — refer to the Principal for mandatory review and routing.',
+  PRINCIPAL: 'Every purchase request reaches the Principal stage. For amounts up to ₹50,000, Principal is the final approving authority. '
+    + 'For amounts above ₹50,000, this is a mandatory review stage — review details and forward to CDC (up to ₹5,00,000) or Chairman & Vice Chairman (above ₹5,00,000).',
+  CDC: 'You are reviewing this request as the authorized CDC approver for this department\'s funding partition. CDC approval finalizes requests between ₹50,000 and ₹5,00,000.',
+  FINAL_AUTHORITY: 'You are reviewing this request as the Chairman authority stage. Authorized Chairman or Vice Chairman decision completes requests exceeding ₹5,00,000.',
 };
 
 // Whole paise, so the preview total adds up the way the server's NUMERIC does.

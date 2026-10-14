@@ -23,9 +23,10 @@ CREATE TABLE stage_routing_rules (
 
 -- Users who can act at a given stage. A stage may have many approvers.
 CREATE TABLE stage_approvers (
-    stage_id  INTEGER NOT NULL REFERENCES workflow_stages(stage_id) ON DELETE CASCADE,
-    user_id   UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-    role_id   INTEGER REFERENCES roles(role_id),
+    stage_id              INTEGER NOT NULL REFERENCES workflow_stages(stage_id) ON DELETE CASCADE,
+    user_id               UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    role_id               INTEGER REFERENCES roles(role_id),
+    member_classification TEXT DEFAULT 'TEACHING' CHECK (member_classification IS NULL OR member_classification IN ('TEACHING', 'NON_TEACHING')),
     PRIMARY KEY (stage_id, user_id)
 );
 

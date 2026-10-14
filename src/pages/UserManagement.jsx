@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  Check, ChevronDown, Edit2, Loader2, Plus, Search,
+  Check, ChevronDown, Copy, Edit2, KeyRound, Loader2, Plus, Search,
   ShieldCheck, Trash2, UserCheck, UserX, X,
 } from 'lucide-react';
 import { api } from '../api/client';
@@ -39,9 +39,9 @@ const rolePill = (role) => (
 // Modal — add / edit a user
 // ---------------------------------------------------------------------------
 
-const BLANK = { email: '', fullName: '', password: '', roleIds: [], isActive: true };
+const BLANK = { email: '', fullName: '', password: '', departmentId: null, roleIds: [], isActive: true };
 
-function UserModal({ user, roles, onClose, onSaved }) {
+function UserModal({ user, roles, departments = [], onClose, onSaved }) {
   const isEdit = Boolean(user);
   const { showToast } = useApp();
   const [form, setForm] = useState(
@@ -50,6 +50,7 @@ function UserModal({ user, roles, onClose, onSaved }) {
           email: user.email,
           fullName: user.name,
           password: '',
+          departmentId: user.departmentId ?? null,
           roleIds: user.roles.map((r) => r.id),
           isActive: user.isActive,
         }
@@ -70,8 +71,6 @@ function UserModal({ user, roles, onClose, onSaved }) {
   const save = async () => {
     if (!form.email.trim()) return showToast('Email is required', 'error');
     if (!form.fullName.trim()) return showToast('Full name is required', 'error');
-    if (!isEdit && form.password.length < 8)
-      return showToast('Password must be at least 8 characters', 'error');
     if (isEdit && form.password && form.password.length < 8)
       return showToast('New password must be at least 8 characters', 'error');
     if (!form.roleIds.length) return showToast('Assign at least one role', 'error');
@@ -81,20 +80,21 @@ function UserModal({ user, roles, onClose, onSaved }) {
       const body = {
         email: form.email.trim().toLowerCase(),
         fullName: form.fullName.trim(),
+        departmentId: form.departmentId ? Number(form.departmentId) : null,
         roleIds: form.roleIds,
-        isActive: form.isActive,
       };
-      if (form.password) body.password = form.password;
 
       if (isEdit) {
+        body.isActive = form.isActive;
+        if (form.password) body.password = form.password;
         await api(`/api/admin/users/${user.id}`, { method: 'PATCH', body });
         showToast(`${form.fullName} updated`, 'success');
+        onSaved();
       } else {
-        body.password = form.password;
-        await api('/api/admin/users', { method: 'POST', body });
-        showToast(`${form.fullName} created`, 'success');
+        const res = await api('/api/admin/users', { method: 'POST', body });
+        showToast(`${form.fullName} invited`, 'success');
+        onSaved(res);
       }
-      onSaved();
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
@@ -118,12 +118,12 @@ function UserModal({ user, roles, onClose, onSaved }) {
         <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100">
           <div>
             <h2 className="text-base font-bold text-gray-900">
-              {isEdit ? 'Edit user' : 'Add new user'}
+              {isEdit ? 'Edit user' : 'Invite new user'}
             </h2>
             <p className="text-xs text-gray-400 mt-0.5">
               {isEdit
-                ? 'Leave password blank to keep the current one.'
-                : 'Passwords are stored securely with bcrypt hashing.'}
+                ? 'Leave password blank to keep current password.'
+                : 'Invited members activate their account via single-use setup link.'}
             </p>
           </div>
           <button
@@ -158,18 +158,45 @@ function UserModal({ user, roles, onClose, onSaved }) {
             />
           </div>
 
-          {/* Password */}
+          {/* Password (edit only) or Setup link notice (create) */}
+          {isEdit ? (
+            <div>
+              <label className={labelCls}>Password (leave blank to keep current)</label>
+              <input
+                type="password"
+                className={inputCls}
+                placeholder="Enter new password to change…"
+                value={form.password}
+                onChange={(e) => set({ password: e.target.value })}
+              />
+            </div>
+          ) : (
+            <div className="rounded-xl bg-indigo-50/70 border border-indigo-100 p-3.5 space-y-1">
+              <p className="text-xs font-semibold text-indigo-950 flex items-center gap-1.5">
+                <KeyRound className="w-4 h-4 text-indigo-600" /> Secure Setup Link Activation
+              </p>
+              <p className="text-[11px] text-indigo-800 leading-relaxed">
+                A single-use, 24-hour setup link will be generated. The invited institutional member will set their own password on activation.
+              </p>
+            </div>
+          )}
+
+
+          {/* Department picker */}
           <div>
-            <label className={labelCls}>
-              Password {isEdit ? '(leave blank to keep current)' : '*'}
-            </label>
-            <input
-              type="password"
+            <label className={labelCls}>Department (optional)</label>
+            <select
               className={inputCls}
-              placeholder={isEdit ? 'Enter new password to change…' : 'Min. 8 characters'}
-              value={form.password}
-              onChange={(e) => set({ password: e.target.value })}
-            />
+              value={form.departmentId ?? ''}
+              onChange={(e) => set({ departmentId: e.target.value ? Number(e.target.value) : null })}
+            >
+              <option value="">No Department Assigned</option>
+              {departments.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name} ({d.code} — {d.fundingType})
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Role picker */}
@@ -267,20 +294,111 @@ function UserModal({ user, roles, onClose, onSaved }) {
 }
 
 // ---------------------------------------------------------------------------
+// Modal — Account activation & setup link
+// ---------------------------------------------------------------------------
+
+function ActivationLinkModal({ data, onClose }) {
+  const [copied, setCopied] = useState(false);
+  const fullUrl = `${window.location.origin}${data.setupUrl}`;
+
+  const copy = () => {
+    navigator.clipboard.writeText(fullUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2500);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/40 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-4">
+        <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+          <div className="flex items-center gap-2 text-indigo-600">
+            <KeyRound className="w-5 h-5" />
+            <h2 className="text-base font-bold text-gray-900">Account Activation Link</h2>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="space-y-2">
+          <p className="text-xs text-gray-600">
+            One-time activation link for <span className="font-bold text-gray-900">{data.fullName || data.name}</span> (<span className="text-gray-500">{data.email}</span>):
+          </p>
+          <div className="flex items-center gap-2 p-2.5 rounded-xl bg-gray-50 border border-gray-200">
+            <input
+              readOnly
+              value={fullUrl}
+              className="bg-transparent text-xs text-gray-800 font-mono flex-1 outline-none select-all"
+            />
+            <button
+              onClick={copy}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                copied ? 'bg-emerald-600 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+              }`}
+            >
+              {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              {copied ? 'Copied!' : 'Copy'}
+            </button>
+          </div>
+        </div>
+
+        <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-900 space-y-1">
+          <p className="font-semibold flex items-center gap-1.5">
+            <ShieldCheck className="w-4 h-4 text-amber-700" />
+            Institutional Notice
+          </p>
+          <p className="text-[11px] text-amber-800 leading-relaxed">
+            Outbound email delivery is unconfigured in this environment. Provide this single-use setup link directly to the invited institutional member. The token expires in 24 hours.
+          </p>
+        </div>
+
+        <div className="flex justify-end pt-2">
+          <button
+            onClick={onClose}
+            className="px-5 py-2 rounded-lg text-xs font-semibold bg-gray-900 hover:bg-gray-800 text-white"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
 export const UserManagement = () => {
-  const { refresh } = useApp();
+  const { refresh, showToast } = useApp();
   const { run } = useAction();
   const users = useApi('/api/admin/users');
   const roles = useApi('/api/admin/roles');
+  const departments = useApi('/api/admin/departments');
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(null); // null | 'create' | <user object>
+  const [activationModal, setActivationModal] = useState(null); // null | { ... }
 
-  const closeModal = () => {
+  const closeModal = (createdRes) => {
     setModal(null);
+    users.reload();
     refresh();
+    if (createdRes?.setupUrl) {
+      setActivationModal(createdRes);
+    }
+  };
+
+  const handleGenerateSetupToken = async (user) => {
+    try {
+      const res = await api(`/api/admin/users/${user.id}/setup-token`, { method: 'POST' });
+      setActivationModal({ ...user, ...res });
+      showToast(`New setup link created for ${user.name}`, 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
   };
 
   const handleDeactivate = async (user) => {
@@ -303,6 +421,8 @@ export const UserManagement = () => {
     return (
       u.name.toLowerCase().includes(q) ||
       u.email.toLowerCase().includes(q) ||
+      (u.departmentName && u.departmentName.toLowerCase().includes(q)) ||
+      (u.departmentCode && u.departmentCode.toLowerCase().includes(q)) ||
       u.roles.some((r) => r.name.toLowerCase().includes(q))
     );
   });
@@ -334,7 +454,7 @@ export const UserManagement = () => {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
             className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-gray-200 bg-white text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400"
-            placeholder="Search by name, email, or role…"
+            placeholder="Search by name, email, department, or role…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -358,6 +478,7 @@ export const UserManagement = () => {
                 <thead>
                   <tr className="border-b border-gray-100 text-gray-400 font-semibold uppercase tracking-wider text-[10px]">
                     <th className="py-3 px-4">Name / Email</th>
+                    <th className="py-3 px-4">Department</th>
                     <th className="py-3 px-4">Roles</th>
                     <th className="py-3 px-4 text-center">Status</th>
                     <th className="py-3 px-4 text-center">Added</th>
@@ -380,6 +501,16 @@ export const UserManagement = () => {
                             <p className="text-gray-400 text-[11px]">{user.email}</p>
                           </div>
                         </div>
+                      </td>
+                      <td className="py-3.5 px-4">
+                        {user.departmentName ? (
+                          <div>
+                            <span className="font-semibold text-gray-800 text-xs">{user.departmentName}</span>
+                            <span className="ml-1 text-[10px] text-gray-400">({user.departmentCode})</span>
+                          </div>
+                        ) : (
+                          <span className="text-gray-400 italic text-[11px]">None</span>
+                        )}
                       </td>
                       <td className="py-3.5 px-4">
                         <div className="flex flex-wrap gap-1">
@@ -406,6 +537,13 @@ export const UserManagement = () => {
                       </td>
                       <td className="py-3.5 px-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            onClick={() => handleGenerateSetupToken(user)}
+                            className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                            title="Generate / view activation link"
+                          >
+                            <KeyRound className="w-3.5 h-3.5" />
+                          </button>
                           <button
                             onClick={() => setModal(user)}
                             className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
@@ -446,15 +584,25 @@ export const UserManagement = () => {
         </div>
       </div>
 
-      {/* Modal */}
+      {/* User Modal */}
       {modal && (
         <UserModal
           user={modal === 'create' ? null : modal}
           roles={roles.data ?? []}
+          departments={departments.data ?? []}
           onClose={() => setModal(null)}
           onSaved={closeModal}
         />
       )}
+
+      {/* Activation Link Modal */}
+      {activationModal && (
+        <ActivationLinkModal
+          data={activationModal}
+          onClose={() => setActivationModal(null)}
+        />
+      )}
     </>
+
   );
 };
