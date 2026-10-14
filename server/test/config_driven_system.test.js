@@ -7,9 +7,14 @@ import { test } from 'node:test';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 
-// Configure environment before importing server modules
+function withDatabase(connectionString, database) {
+  const url = new URL(connectionString);
+  url.pathname = `/${database}`;
+  return url.toString();
+}
+
 const defaultDbUrl = 'postgres://app_user:app_password@localhost:5433/spc_api_test';
-process.env.DATABASE_URL = (process.env.DATABASE_URL || defaultDbUrl).replace(/\/(?:sp_college|spc_approval)(?:\?|$)/, '/spc_api_test$1');
+process.env.DATABASE_URL = withDatabase(process.env.DATABASE_URL || defaultDbUrl, 'spc_api_test');
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret-minimum-32-characters-long!';
 process.env.SIGNING_SECRET = process.env.SIGNING_SECRET || 'test-signing-secret-minimum-32-characters-long!';
 process.env.NODE_ENV = 'test';
