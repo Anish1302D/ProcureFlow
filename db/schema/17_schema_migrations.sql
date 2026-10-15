@@ -27,6 +27,12 @@ INSERT INTO schema_migrations (filename) VALUES
     ('20260927T240000_budget_provision.sql'),
     ('20260929T120000_fix_return_action_and_resubmit_seal.sql'),
     ('20260929T130000_course_funding_type.sql'),
+    -- These two were never listed, so a database built from these files saw
+    -- them as pending and run-pending-migrations.js re-ran them — putting the
+    -- 4 October versions of fn_record_action, app_is_stage_participant and
+    -- fn_notify_request_status back over the current ones.
+    ('20261004T130000_notify_member_and_return_status.sql'),
+    ('20261004T170000_cdc_funding_separation.sql'),
     ('20261011T120000_add_user_token_version.sql'),
     ('20261011T200000_config_driven_system.sql'),
     ('20261011T220000_approval_workflow_and_user_mgmt_corrections.sql'),
