@@ -116,9 +116,18 @@ AS $$
                 )
           )
           AND (
-                ro.code NOT IN ('CDC_GRANT_MEMBER', 'CDC_NON_GRANT_MEMBER')
-             OR (ro.code = 'CDC_GRANT_MEMBER' AND app_request_funding_type(r.request_id) = 'GRANT')
-             OR (ro.code = 'CDC_NON_GRANT_MEMBER' AND app_request_funding_type(r.request_id) = 'NON_GRANT')
+                -- Non-CDC stages
+                (SELECT code FROM workflow_stages ws WHERE ws.stage_id = sa.stage_id) <> 'CDC'
+                -- CDC stages: Teaching classification / CDC_GRANT_MEMBER only for Grant funding
+             OR (app_request_funding_type(r.request_id) = 'GRANT' AND (
+                    ro.code = 'CDC_GRANT_MEMBER'
+                    OR (ro.code = 'CDC_MEMBER' AND COALESCE(sa.member_classification, 'TEACHING') = 'TEACHING')
+                ))
+                -- CDC stages: Non-Teaching classification / CDC_NON_GRANT_MEMBER only for Non-Grant funding
+             OR (app_request_funding_type(r.request_id) = 'NON_GRANT' AND (
+                    ro.code = 'CDC_NON_GRANT_MEMBER'
+                    OR (ro.code = 'CDC_MEMBER' AND sa.member_classification = 'NON_TEACHING')
+                ))
           )
     )
     OR EXISTS (

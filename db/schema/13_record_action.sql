@@ -79,9 +79,31 @@ BEGIN
     SELECT code, is_final INTO v_stage_code, v_is_final
     FROM workflow_stages WHERE stage_id = v_req.current_stage_id;
 
-    SELECT stage_id INTO v_principal_stage_id FROM workflow_stages WHERE code = 'PRINCIPAL';
-    SELECT stage_id INTO v_cdc_stage_id       FROM workflow_stages WHERE code = 'CDC';
-    SELECT stage_id INTO v_final_stage_id     FROM workflow_stages WHERE code = 'FINAL_AUTHORITY';
+    -- Load dynamic thresholds from authoritative configuration
+    v_principal_max := app_get_config_numeric('workflow.threshold.principal_max', 50000);
+    v_cdc_max       := app_get_config_numeric('workflow.threshold.cdc_max', 500000);
+
+    -- Load dynamic stage routing targets from configuration
+    SELECT stage_id INTO v_principal_stage_id
+      FROM workflow_stages
+     WHERE code = app_get_config_text('workflow.stage.principal', 'PRINCIPAL')::workflow_stage_code;
+    IF v_principal_stage_id IS NULL THEN
+        SELECT stage_id INTO v_principal_stage_id FROM workflow_stages WHERE code = 'PRINCIPAL';
+    END IF;
+
+    SELECT stage_id INTO v_cdc_stage_id
+      FROM workflow_stages
+     WHERE code = app_get_config_text('workflow.stage.intermediate', 'CDC')::workflow_stage_code;
+    IF v_cdc_stage_id IS NULL THEN
+        SELECT stage_id INTO v_cdc_stage_id FROM workflow_stages WHERE code = 'CDC';
+    END IF;
+
+    SELECT stage_id INTO v_final_stage_id
+      FROM workflow_stages
+     WHERE code = app_get_config_text('workflow.stage.final_authority', 'FINAL_AUTHORITY')::workflow_stage_code;
+    IF v_final_stage_id IS NULL THEN
+        SELECT stage_id INTO v_final_stage_id FROM workflow_stages WHERE code = 'FINAL_AUTHORITY';
+    END IF;
 
     -- Authority check
     IF NOT EXISTS (
@@ -105,24 +127,27 @@ BEGIN
          WHERE ra.user_id = p_actor_id
            AND (ra.stage_id = v_req.current_stage_id OR ra.stage_id IS NULL)
            AND ra.is_active
-         LIMIT 1;
+          LIMIT 1;
     END IF;
 
     IF v_actor_role_id IS NULL THEN
         SELECT ur.role_id INTO v_actor_role_id
           FROM user_roles ur
          WHERE ur.user_id = p_actor_id
-         LIMIT 1;
+          LIMIT 1;
     END IF;
 
-    -- CDC Grant vs Non-Grant role check
+    -- CDC Member classification check (Teaching for Grant, Non-Teaching for Non-Grant)
     IF v_stage_code = 'CDC' THEN
         IF app_request_funding_type(p_request_id) = 'GRANT' AND NOT (
             EXISTS (
                 SELECT 1 FROM stage_approvers sa
                 JOIN roles ro ON ro.role_id = sa.role_id
                 WHERE sa.stage_id = v_req.current_stage_id AND sa.user_id = p_actor_id
-                  AND ro.code = 'CDC_GRANT_MEMBER'
+                  AND (
+                      ro.code = 'CDC_GRANT_MEMBER'
+                      OR (ro.code = 'CDC_MEMBER' AND COALESCE(sa.member_classification, 'TEACHING') = 'TEACHING')
+                  )
             ) OR app_has_role('ADMIN')
         ) THEN
             RAISE EXCEPTION 'Only CDC Grant Member can decide requests for Grant departments'
@@ -132,17 +157,16 @@ BEGIN
                 SELECT 1 FROM stage_approvers sa
                 JOIN roles ro ON ro.role_id = sa.role_id
                 WHERE sa.stage_id = v_req.current_stage_id AND sa.user_id = p_actor_id
-                  AND ro.code = 'CDC_NON_GRANT_MEMBER'
+                  AND (
+                      ro.code = 'CDC_NON_GRANT_MEMBER'
+                      OR (ro.code = 'CDC_MEMBER' AND sa.member_classification = 'NON_TEACHING')
+                  )
             ) OR app_has_role('ADMIN')
         ) THEN
             RAISE EXCEPTION 'Only CDC Non-Grant Member can decide requests for Non-Grant departments'
                 USING ERRCODE = 'SP004';
         END IF;
     END IF;
-
-    -- Load dynamic thresholds from authoritative configuration
-    v_principal_max := app_get_config_numeric('workflow.threshold.principal_max', 50000);
-    v_cdc_max       := app_get_config_numeric('workflow.threshold.cdc_max', 500000);
 
     -- Specific Stage Restrictions
     IF v_stage_code = 'PURCHASE_COMMITTEE' AND p_action IN ('APPROVE', 'PARTIAL_APPROVE') THEN

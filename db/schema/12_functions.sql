@@ -28,23 +28,76 @@ AS $$
     );
 $$;
 
--- Picks the workflow stage a request should enter (Purchase Committee for validity review).
+CREATE OR REPLACE FUNCTION app_get_config_text(p_key TEXT, p_default TEXT)
+RETURNS TEXT
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT COALESCE(
+        (SELECT (value#>>'{}') FROM system_configurations WHERE key = p_key),
+        p_default
+    );
+$$;
+
+-- Picks the workflow stage a request should enter (configuration-driven via stage_routing_rules).
 CREATE OR REPLACE FUNCTION fn_route_stage(p_amount NUMERIC)
-RETURNS INTEGER AS $$
-    SELECT stage_id FROM workflow_stages WHERE code = 'PURCHASE_COMMITTEE';
-$$ LANGUAGE sql STABLE;
+RETURNS INTEGER
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT COALESCE(
+        (SELECT stage_id
+           FROM stage_routing_rules
+          WHERE p_amount >= min_amount
+            AND (max_amount IS NULL OR p_amount < max_amount)
+          ORDER BY min_amount ASC
+          LIMIT 1),
+        (SELECT stage_id
+           FROM workflow_stages
+          WHERE code = app_get_config_text('workflow.stage.entry', 'PURCHASE_COMMITTEE')::workflow_stage_code),
+        (SELECT stage_id FROM workflow_stages WHERE code = 'PURCHASE_COMMITTEE')
+    );
+$$;
 
 -- Database-level trigger to enforce stage progression rules
 CREATE OR REPLACE FUNCTION fn_enforce_stage_progression()
 RETURNS TRIGGER AS $$
 DECLARE
+    v_entry_stage_code   TEXT;
+    v_principal_code     TEXT;
+    v_cdc_code           TEXT;
+    v_final_code         TEXT;
+    v_entry_stage_id     INTEGER;
     v_principal_stage_id INTEGER;
     v_cdc_stage_id       INTEGER;
     v_final_stage_id     INTEGER;
 BEGIN
-    SELECT stage_id INTO v_principal_stage_id FROM workflow_stages WHERE code = 'PRINCIPAL';
-    SELECT stage_id INTO v_cdc_stage_id       FROM workflow_stages WHERE code = 'CDC';
-    SELECT stage_id INTO v_final_stage_id     FROM workflow_stages WHERE code = 'FINAL_AUTHORITY';
+    v_entry_stage_code := app_get_config_text('workflow.stage.entry', 'PURCHASE_COMMITTEE');
+    v_principal_code   := app_get_config_text('workflow.stage.principal', 'PRINCIPAL');
+    v_cdc_code         := app_get_config_text('workflow.stage.intermediate', 'CDC');
+    v_final_code       := app_get_config_text('workflow.stage.final_authority', 'FINAL_AUTHORITY');
+
+    SELECT stage_id INTO v_entry_stage_id     FROM workflow_stages WHERE code = v_entry_stage_code::workflow_stage_code;
+    SELECT stage_id INTO v_principal_stage_id FROM workflow_stages WHERE code = v_principal_code::workflow_stage_code;
+    SELECT stage_id INTO v_cdc_stage_id       FROM workflow_stages WHERE code = v_cdc_code::workflow_stage_code;
+    SELECT stage_id INTO v_final_stage_id     FROM workflow_stages WHERE code = v_final_code::workflow_stage_code;
+
+    IF v_entry_stage_id IS NULL THEN
+        SELECT stage_id INTO v_entry_stage_id FROM workflow_stages WHERE code = 'PURCHASE_COMMITTEE';
+    END IF;
+    IF v_principal_stage_id IS NULL THEN
+        SELECT stage_id INTO v_principal_stage_id FROM workflow_stages WHERE code = 'PRINCIPAL';
+    END IF;
+    IF v_cdc_stage_id IS NULL THEN
+        SELECT stage_id INTO v_cdc_stage_id FROM workflow_stages WHERE code = 'CDC';
+    END IF;
+    IF v_final_stage_id IS NULL THEN
+        SELECT stage_id INTO v_final_stage_id FROM workflow_stages WHERE code = 'FINAL_AUTHORITY';
+    END IF;
 
     -- Request in AWAITING_RESUBMISSION status cannot be advanced except by resubmission
     IF OLD.current_status = 'AWAITING_RESUBMISSION'
@@ -53,10 +106,8 @@ BEGIN
             USING ERRCODE = 'SP017';
     END IF;
 
-    -- Cannot enter CDC or FINAL_AUTHORITY without a prior Principal approval
-    -- action. A carried-forward copy inherits the stage it left off at, and
-    -- its history lives on the request it came from, so that is where the
-    -- Principal's decision is looked for.
+    -- Cannot enter CDC or FINAL_AUTHORITY without a prior Principal approval action.
+    -- Carried forward requests inherit the stage they left off at.
     IF NEW.current_stage_id IN (v_cdc_stage_id, v_final_stage_id)
        AND (OLD.current_stage_id IS NULL OR OLD.current_stage_id <> NEW.current_stage_id) THEN
         IF NOT EXISTS (
@@ -71,11 +122,25 @@ BEGIN
         END IF;
     END IF;
 
-    -- Cannot jump from PURCHASE_COMMITTEE directly to CDC or FINAL_AUTHORITY
+    -- Cannot jump from entry stage directly to CDC or FINAL_AUTHORITY
     IF NEW.current_stage_id IN (v_cdc_stage_id, v_final_stage_id)
-       AND OLD.current_stage_id = (SELECT stage_id FROM workflow_stages WHERE code = 'PURCHASE_COMMITTEE') THEN
+       AND OLD.current_stage_id = v_entry_stage_id THEN
         RAISE EXCEPTION 'Request cannot skip the Principal stage'
             USING ERRCODE = 'SP016';
+    END IF;
+
+    -- Cannot jump from DRAFT (or initial state) straight to PRINCIPAL skipping Purchase Committee
+    IF (OLD.current_stage_id IS NULL OR OLD.current_status = 'DRAFT')
+       AND NEW.current_stage_id = v_principal_stage_id
+       AND NEW.carried_forward_from_request_id IS NULL THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM approval_actions
+            WHERE request_id = NEW.request_id
+              AND stage_id = v_entry_stage_id
+        ) THEN
+            RAISE EXCEPTION 'Request cannot skip the % stage', v_entry_stage_code
+                USING ERRCODE = 'SP016';
+        END IF;
     END IF;
 
     RETURN NEW;

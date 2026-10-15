@@ -32,6 +32,11 @@ SELECT stage_id, 0::NUMERIC, NULL::NUMERIC FROM workflow_stages WHERE code = 'PU
 INSERT INTO system_configurations (key, value, description, category, is_secret) VALUES
     ('workflow.threshold.principal_max', '50000'::jsonb, 'Maximum request amount decided finally by Principal (₹50,000). Requests above this escalate.', 'approval_workflow', FALSE),
     ('workflow.threshold.cdc_max', '500000'::jsonb, 'Maximum request amount decided by CDC (₹5,00,000). Requests above this escalate to Chairman.', 'approval_workflow', FALSE),
+    ('workflow.stage.entry', '"PURCHASE_COMMITTEE"'::jsonb, 'Stage code where new requests enter for initial verification', 'approval_workflow', FALSE),
+    ('workflow.stage.principal', '"PRINCIPAL"'::jsonb, 'Stage code for the Principal approval gate', 'approval_workflow', FALSE),
+    ('workflow.stage.intermediate', '"CDC"'::jsonb, 'Stage code for College Development Committee intermediate authority', 'approval_workflow', FALSE),
+    ('workflow.stage.final_authority', '"FINAL_AUTHORITY"'::jsonb, 'Stage code for the final governing authority', 'approval_workflow', FALSE),
+    ('workflow.authority.final_role', '"CHAIRMAN"'::jsonb, 'Role code authorized for final sanction', 'approval_workflow', FALSE),
     ('self_registration.enabled', 'false'::jsonb, 'Whether public user self-registration is enabled. Default false.', 'feature_flags', FALSE),
     ('roles.vice_chairman.title', '"Vice Chairman"'::jsonb, 'Institutional title for Vice Chairman role', 'institutional', FALSE),
     ('cdc.teaching_members_limit', '3'::jsonb, 'Maximum number of teaching faculty members on the College Development Committee', 'institutional', FALSE),
