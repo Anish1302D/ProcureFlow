@@ -19,11 +19,13 @@ export function useApi(path) {
       return undefined;
     }
     const controller = new AbortController();
-    setState((s) => ({ ...s, loading: true, error: null }));
+    setState((s) => ({ ...s, loading: !s.data, error: null }));
     api(path, { signal: controller.signal })
       .then((data) => setState({ data, error: null, loading: false }))
       .catch((error) => {
-        if (error.name !== 'AbortError') setState({ data: null, error, loading: false });
+        if (error.name !== 'AbortError') {
+          setState((s) => ({ data: s.data, error: s.data ? null : error, loading: false }));
+        }
       });
     return () => controller.abort();
   }, [path, dataVersion, nonce]);

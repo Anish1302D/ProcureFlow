@@ -91,6 +91,10 @@ test('draft validation', async (s) => {
     expectStatus(await make({ ...base, items: [{ budgetItemId: ids['MIC-01'], quantity: 0, unitCost: 1 }] }), 422);
     expectStatus(await make({ ...base, items: [{ budgetItemId: ids['MIC-01'], quantity: -2, unitCost: 1 }] }), 422);
   });
+  await s.test('unit cost must be greater than zero (0 rupees not acceptable)', async () => {
+    expectStatus(await make({ ...base, items: [{ budgetItemId: ids['MIC-01'], quantity: 1, unitCost: 0 }] }), 422);
+    expectStatus(await make({ ...base, items: [{ budgetItemId: ids['MIC-01'], quantity: 1, unitCost: -50 }] }), 422);
+  });
   await s.test('no third decimal place', async () => {
     expectStatus(await make({ ...base, items: [{ budgetItemId: ids['MIC-01'], quantity: 1, unitCost: 1.005 }] }), 422);
   });

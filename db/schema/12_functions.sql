@@ -206,6 +206,11 @@ BEGIN
     END IF;
 
     v_amount := v_req.tentative_total_cost;
+    IF v_amount <= 0 THEN
+        RAISE EXCEPTION 'Request % total cost must be greater than zero', p_request_id
+            USING ERRCODE = 'SP012';
+    END IF;
+
     v_stage := fn_route_stage(v_amount);
     IF v_stage IS NULL THEN
         RAISE EXCEPTION 'No routing rule matches amount %', v_amount

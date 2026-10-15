@@ -11,7 +11,7 @@ import { REQUESTER_ROLES } from '../roles.js';
 import { seal, verifySeal } from '../signing.js';
 import { removeFile } from '../storage.js';
 import {
-  amount, approvedQuantity, flag, id, intId, pagination, param, quantity,
+  amount, approvedQuantity, flag, id, intId, pagination, param, positiveAmount, quantity,
 } from '../validate.js';
 
 export const requestsRouter = Router();
@@ -83,15 +83,18 @@ async function resolvePrincipal() {
          LEFT JOIN roles r ON r.role_id = ur.role_id
          LEFT JOIN stage_approvers sa ON sa.user_id = u.user_id
          LEFT JOIN workflow_stages ws ON ws.stage_id = sa.stage_id
-        WHERE (r.code = $1 OR ws.code = $1) AND u.is_active
+        WHERE (r.code = 'PRINCIPAL' OR ws.code::text = $1) AND u.is_active
+        ORDER BY sa.stage_id NULLS LAST
         LIMIT 1`,
       [stages.principalStage],
     );
     if (rows.length > 0) {
       name = rows[0].full_name;
-      email = rows[0].email || config.principalEmail;
+      email = config.principalEmail || rows[0].email;
     }
-  } catch { /* use defaults */ }
+  } catch (err) {
+    console.error('[requests] Failed to resolve principal:', err.message);
+  }
   return { email, name };
 }
 
@@ -207,12 +210,14 @@ function notifyRequestAsync({ request, actorId, action, comments, rejectionReaso
         // 2. Notify stage approvers (Purchase Committee approvers or Principal)
         try {
           const approversToNotify = [];
-          if (request.stage?.code === 'PURCHASE_COMMITTEE') {
+          const stages = await configService.getRoutingStages();
+          if (request.stage?.code === 'PURCHASE_COMMITTEE' || request.stage?.code === stages.entryStage) {
             const { rows: pcRows } = await pool.query(
               `SELECT u.full_name, u.email FROM stage_approvers sa
                  JOIN users u ON u.user_id = sa.user_id
                  JOIN workflow_stages ws ON ws.stage_id = sa.stage_id
-                WHERE ws.code = 'PURCHASE_COMMITTEE' AND u.is_active`,
+                WHERE ws.code::text = $1 AND u.is_active`,
+              [stages.entryStage],
             );
             for (const pc of pcRows) approversToNotify.push({ name: pc.full_name, email: pc.email });
           }
@@ -769,7 +774,7 @@ async function lockEditableRequest(db, requestId, user, statuses = EDITABLE_STAT
 const itemInput = z.object({
   budgetItemId: intId,
   quantity,
-  unitCost: amount,
+  unitCost: positiveAmount,
   remarks: z.string().trim().max(1000).optional(),
 });
 
@@ -1040,7 +1045,7 @@ requestsRouter.post('/:id/items', async (req, res) => {
 });
 
 const itemUpdate = z
-  .object({ quantity: quantity.optional(), unitCost: amount.optional(),
+  .object({ quantity: quantity.optional(), unitCost: positiveAmount.optional(),
             remarks: z.string().trim().max(1000).nullable().optional() })
   .refine((v) => Object.keys(v).length > 0, 'Nothing to update');
 
@@ -1096,8 +1101,9 @@ requestsRouter.post('/:id/submit', async (req, res) => {
   const detail = await withUser(req.user.id, async (db) => {
     await lockEditableRequest(db, requestId, req.user, ['DRAFT']);
     const { rows } = await db.query(
-      'SELECT count(*)::int AS n FROM request_items WHERE request_id = $1', [requestId]);
+      'SELECT count(*)::int AS n, COALESCE(SUM(estimated_total), 0)::numeric AS total FROM request_items WHERE request_id = $1', [requestId]);
     if (rows[0].n === 0) throw unprocessable('Add at least one item before submitting');
+    if (Number(rows[0].total) <= 0) throw unprocessable('Request total must be greater than ₹0 before submitting');
     await recalcTotal(db, requestId);
     await db.query('SELECT fn_submit_request($1)', [requestId]);
     return requireDetail(db, requestId, req.user);

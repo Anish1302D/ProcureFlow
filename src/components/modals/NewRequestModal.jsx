@@ -81,7 +81,7 @@ export const NewRequestModal = () => {
   // Determine which items are "filled" for total calculation
   // ---------------------------------------------------------------------------
   const filled = lines.filter((l) => l.budgetItemId || l.quantity || l.unitCost);
-  const totalPaise = filled.reduce((sum, l) => sum + (Number(l.quantity) > 0 && l.unitCost !== '' ? linePaise(l) : 0), 0);
+  const totalPaise = filled.reduce((sum, l) => sum + (Number(l.quantity) > 0 && Number(l.unitCost) > 0 ? linePaise(l) : 0), 0);
   const total = totalPaise / 100;
 
   const route = useMemo(() => (stages.data ?? []).find(
@@ -115,10 +115,13 @@ export const NewRequestModal = () => {
     if (!l.budgetItemId) problems.push(`Line ${n + 1}: choose an item.`);
     if (lineIsOther && !l.customItemName.trim()) problems.push(`Line ${n + 1}: describe the item (the "Other" field is empty).`);
     if (!(Number(l.quantity) > 0)) problems.push(`${label}: quantity must be more than 0.`);
-    if (l.unitCost === '' || Number(l.unitCost) < 0) problems.push(`${label}: enter a unit cost.`);
+    if (l.unitCost === '' || Number(l.unitCost) <= 0) problems.push(`${label}: unit cost must be greater than ₹0.`);
   });
   if (new Set(chosen).size !== chosen.length) problems.push('Each item can appear only once — change the quantity instead.');
-  const submitProblems = [...problems, ...(filled.length === 0 ? ['Add at least one item to submit.'] : [])];
+  const submitProblems = [
+    ...problems,
+    ...(filled.length === 0 ? ['Add at least one item to submit.'] : (total <= 0 ? ['Total request amount must be greater than ₹0 to submit.'] : [])),
+  ];
 
   // ---------------------------------------------------------------------------
   // Reset / close
@@ -357,7 +360,7 @@ export const NewRequestModal = () => {
 
                   <label className="col-span-4 md:col-span-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                     Unit cost ₹
-                    <input type="number" min="0" step="0.01" className={`${inputCls} mt-1`} value={l.unitCost}
+                    <input type="number" min="0.01" step="0.01" className={`${inputCls} mt-1`} value={l.unitCost}
                       onChange={(e) => setLine(l.key, { unitCost: e.target.value })} />
                   </label>
 

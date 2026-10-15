@@ -88,6 +88,33 @@ export const AppProvider = ({ children }) => {
     };
   }, []);
 
+  // Automatic real-time background sync: ensures incoming requests, status changes,
+  // and notification updates appear immediately without requiring manual page refresh.
+  useEffect(() => {
+    if (!user) return undefined;
+
+    const onFocus = () => refresh();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+
+    // Periodic heartbeat sync every 6 seconds while the page is visible
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        refresh();
+      }
+    }, 6000);
+
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+      clearInterval(timer);
+    };
+  }, [user, refresh]);
+
   const signIn = useCallback(async (email, password) => {
     const { token, user: me } = await api('/api/auth/login', { method: 'POST', body: { email, password } });
     setToken(token);

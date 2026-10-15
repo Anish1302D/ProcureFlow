@@ -719,3 +719,99 @@ test('14. Invalid transitions trigger enforcement: Skipping stages directly in D
     },
   );
 });
+
+test('Zero rupees request is rejected: unit cost 0 and 0 rupees requests are not acceptable', async () => {
+  // 1. Creating a request item with unit cost 0 is rejected with 422
+  const zeroUnitCostRes = await t.api('POST', '/api/requests', {
+    token: tok.headCs,
+    body: {
+      title: 'Free Items Zero Cost',
+      budgetHeadId: ids.headIt,
+      departmentId: ids.deptCs,
+      items: [{ budgetItemId: ids.itemMic, quantity: 1, unitCost: 0 }],
+    },
+  });
+  const zeroErr = expectStatus(zeroUnitCostRes, 422);
+  assert.equal(zeroErr.error.code, 'VALIDATION');
+  assert.match(JSON.stringify(zeroErr.error), /greater than zero/i);
+
+  // 2. Creating a request item with negative unit cost is rejected with 422
+  const negUnitCostRes = await t.api('POST', '/api/requests', {
+    token: tok.headCs,
+    body: {
+      title: 'Negative Cost Item',
+      budgetHeadId: ids.headIt,
+      departmentId: ids.deptCs,
+      items: [{ budgetItemId: ids.itemMic, quantity: 1, unitCost: -100 }],
+    },
+  });
+  expectStatus(negUnitCostRes, 422);
+
+  // 3. Creating a draft with valid item
+  const validDraft = expectStatus(await t.api('POST', '/api/requests', {
+    token: tok.headCs,
+    body: {
+      title: 'Draft For Item Tests',
+      budgetHeadId: ids.headIt,
+      departmentId: ids.deptCs,
+      items: [{ budgetItemId: ids.itemMic, quantity: 1, unitCost: 1000 }],
+    },
+  }), 201);
+
+  // 4. Adding an item with unit cost 0 via POST /api/requests/:id/items is rejected with 422
+  const addZeroRes = await t.api('POST', `/api/requests/${validDraft.id}/items`, {
+    token: tok.headCs,
+    body: { budgetItemId: ids.itemSpk, quantity: 2, unitCost: 0 },
+  });
+  expectStatus(addZeroRes, 422);
+
+  // 5. Updating an item with unit cost 0 via PATCH is rejected with 422
+  const patchZeroRes = await t.api('PATCH', `/api/requests/${validDraft.id}/items/${validDraft.items[0].id}`, {
+    token: tok.headCs,
+    body: { unitCost: 0 },
+  });
+  expectStatus(patchZeroRes, 422);
+
+  // Cleanup
+  expectStatus(await t.api('DELETE', `/api/requests/${validDraft.id}`, { token: tok.headCs }), 204);
+});
+
+test('Principal resolution correctly resolves active principal user without sql enum errors', async () => {
+  // Verify database resolution matches Dr. V. Rane with principal@spcollege.edu
+  const { rows } = await t.superuser.query(
+    `SELECT u.full_name, u.email FROM users u
+       LEFT JOIN user_roles ur ON ur.user_id = u.user_id
+       LEFT JOIN roles r ON r.role_id = ur.role_id
+       LEFT JOIN stage_approvers sa ON sa.user_id = u.user_id
+       LEFT JOIN workflow_stages ws ON ws.stage_id = sa.stage_id
+      WHERE (r.code = 'PRINCIPAL' OR ws.code::text = 'PRINCIPAL') AND u.is_active
+      ORDER BY sa.stage_id NULLS LAST
+      LIMIT 1`,
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].email, 'principal@spcollege.edu');
+  assert.match(rows[0].full_name, /Principal/i);
+
+  // Create and submit a request to exercise notifyRequestAsync with the principal resolution
+  const req = await createAndSubmitRequest({
+    token: tok.headCs,
+    deptId: ids.deptCs,
+    headId: ids.headIt,
+    itemId: ids.itemMic,
+    unitCost: 15000,
+    quantity: 1,
+    title: 'Principal Mail Probe Request',
+  });
+  assert.equal(req.status, 'UNDER_PURCHASE_COMMITTEE_REVIEW');
+
+  // PC refers to Principal -> triggers Principal Review Required notification
+  const forwarded = expectStatus(
+    await t.api('POST', `/api/requests/${req.id}/actions`, {
+      token: tok.pc1,
+      body: { action: 'ESCALATE', comments: 'Forwarding to Principal for review' },
+    }),
+    201,
+  );
+  assert.equal(forwarded.request.status, 'UNDER_PRINCIPAL_REVIEW');
+});
+

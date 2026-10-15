@@ -22,6 +22,13 @@ export const amount = z
   .max(999_999_999_999.99)
   .refine(twoDecimals, 'At most two decimal places');
 
+export const positiveAmount = z
+  .number()
+  .finite()
+  .positive('Amount must be greater than zero')
+  .max(999_999_999_999.99)
+  .refine(twoDecimals, 'At most two decimal places');
+
 export const quantity = z
   .number()
   .finite()

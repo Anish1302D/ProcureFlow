@@ -185,12 +185,13 @@ issuesRouter.post('/', async (req, res) => {
              LEFT JOIN roles r ON r.role_id = ur.role_id
              LEFT JOIN stage_approvers sa ON sa.user_id = u.user_id
              LEFT JOIN workflow_stages ws ON ws.stage_id = sa.stage_id
-            WHERE (r.code = 'PRINCIPAL' OR ws.code = 'PRINCIPAL') AND u.is_active
+            WHERE (r.code = 'PRINCIPAL' OR ws.code::text = 'PRINCIPAL') AND u.is_active
+            ORDER BY sa.stage_id NULLS LAST
             LIMIT 1`,
         );
         if (principalRows.length > 0) {
           principalName = principalRows[0].full_name;
-          principalEmail = principalRows[0].email || config.principalEmail;
+          principalEmail = config.principalEmail || principalRows[0].email;
         }
       } catch (dbErr) {
         console.warn('[issues] Principal lookup failed, using config fallback:', dbErr.message);

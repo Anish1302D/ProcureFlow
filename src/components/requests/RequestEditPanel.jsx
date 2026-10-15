@@ -47,7 +47,7 @@ export const RequestEditPanel = ({ request }) => {
     if (ok) closeRecord();
   };
 
-  const canAdd = line.budgetItemId && Number(line.quantity) > 0 && line.unitCost !== '' && Number(line.unitCost) >= 0;
+  const canAdd = line.budgetItemId && Number(line.quantity) > 0 && line.unitCost !== '' && Number(line.unitCost) > 0;
   const inputCls = 'bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400';
 
   return (
@@ -93,7 +93,7 @@ export const RequestEditPanel = ({ request }) => {
               onChange={(e) => setLine({ ...line, quantity: e.target.value })} />
           </label>
           <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Unit cost ₹
-            <input type="number" min="0" step="0.01" className={`${inputCls} block mt-1 w-28`} value={line.unitCost}
+            <input type="number" min="0.01" step="0.01" className={`${inputCls} block mt-1 w-28`} value={line.unitCost}
               onChange={(e) => setLine({ ...line, unitCost: e.target.value })} />
           </label>
           <button onClick={addLine} disabled={!canAdd || busy}
