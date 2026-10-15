@@ -870,9 +870,13 @@ adminRouter.post('/stages/:stageCode/approvers', async (req, res) => {
         throw new HttpError(422, `CDC non-teaching member limit reached (maximum ${nonTeachingLimit} non-teaching members allowed)`);
       }
 
+      // The classification picks the route: a non-teaching member sits on the
+      // Non-Grant side. Defaulting everyone to CDC_GRANT_MEMBER left Non-Grant
+      // requests with no one able to see or decide them.
       if (!resolvedRoleId) {
         const { rows: defRole } = await db.query(
-          "SELECT role_id FROM roles WHERE code = 'CDC_GRANT_MEMBER'"
+          'SELECT role_id FROM roles WHERE code = $1',
+          [classification === 'NON_TEACHING' ? 'CDC_NON_GRANT_MEMBER' : 'CDC_GRANT_MEMBER'],
         );
         resolvedRoleId = defRole[0]?.role_id;
       }
@@ -1290,6 +1294,31 @@ adminRouter.patch('/appointments/:id', async (req, res) => {
     if (!existing.rowCount) throw notFound('Appointment not found');
     const prev = existing.rows[0];
 
+    // A CDC member's classification is their route (teaching = Grant,
+    // non-teaching = Non-Grant), and routing reads stage_approvers. A change
+    // made only here left them notified of, and able to decide, the old route.
+    const { rows: stageRows } = prev.stage_id
+      ? await db.query('SELECT code FROM workflow_stages WHERE stage_id = $1', [prev.stage_id])
+      : { rows: [] };
+    const reclassifyCdc = stageRows[0]?.code === 'CDC'
+      && body.memberClassification
+      && body.memberClassification !== prev.member_classification;
+
+    if (reclassifyCdc) {
+      const limitKey = body.memberClassification === 'TEACHING'
+        ? 'cdc.teaching_members_limit' : 'cdc.non_teaching_members_limit';
+      const limit = await configService.get(limitKey);
+      const { rows: countRows } = await db.query(
+        `SELECT count(DISTINCT user_id) AS cnt FROM stage_approvers
+          WHERE stage_id = $1 AND member_classification = $2 AND user_id <> $3`,
+        [prev.stage_id, body.memberClassification, prev.user_id],
+      );
+      if (Number(countRows[0]?.cnt || 0) >= limit) {
+        const kind = body.memberClassification === 'TEACHING' ? 'teaching' : 'non-teaching';
+        throw new HttpError(422, `Cannot exceed statutory limit of ${limit} ${kind} CDC members`);
+      }
+    }
+
     const sets = [];
     const vals = [];
     const push = (col, val) => { vals.push(val); sets.push(`${col} = $${vals.length}`); };
@@ -1308,6 +1337,13 @@ adminRouter.patch('/appointments/:id', async (req, res) => {
       `UPDATE role_appointments SET ${sets.join(', ')} WHERE appointment_id = $${vals.length}`,
       vals,
     );
+
+    if (reclassifyCdc) {
+      await db.query(
+        'UPDATE stage_approvers SET member_classification = $1 WHERE stage_id = $2 AND user_id = $3',
+        [body.memberClassification, prev.stage_id, prev.user_id],
+      );
+    }
 
     // If deactivated and was seated at stage_approvers, update stage_approvers
     if (body.isActive === false && prev.stage_id) {
