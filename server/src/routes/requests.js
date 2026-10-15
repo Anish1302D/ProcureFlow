@@ -39,24 +39,25 @@ const EDITABLE_STATUSES = ['DRAFT', 'AWAITING_RESUBMISSION'];
  * button the database will refuse. The database remains the authority.
  */
 export async function actionsAt(stageCode, _isFinalStage, amount) {
-  if (stageCode === 'PURCHASE_COMMITTEE') {
+  const stages = await configService.getRoutingStages();
+  const { principalMax, cdcMax } = await configService.getThresholds();
+
+  if (stageCode === stages.entryStage) {
     // Review and verification only — never final approval or financial decision.
     return ['ESCALATE', 'RETURN', 'REJECT'];
   }
-  if (stageCode === 'PRINCIPAL') {
-    const { principalMax } = await configService.getThresholds();
+  if (stageCode === stages.principalStage) {
     return amount <= principalMax
       ? ['APPROVE', 'PARTIAL_APPROVE', 'REJECT', 'RETURN']
       : ['ESCALATE', 'REJECT', 'RETURN'];
   }
-  if (stageCode === 'CDC') {
-    const { cdcMax } = await configService.getThresholds();
+  if (stageCode === stages.intermediateStage) {
     return amount <= cdcMax
       ? ['APPROVE', 'PARTIAL_APPROVE', 'REJECT']
       : ['ESCALATE', 'REJECT'];
   }
 
-  if (stageCode === 'FINAL_AUTHORITY') {
+  if (stageCode === stages.finalAuthorityStage) {
     // Chairman and Vice Chairman decide requests above cdcMax
     return ['APPROVE', 'PARTIAL_APPROVE', 'REJECT'];
   }
@@ -75,14 +76,16 @@ async function resolvePrincipal() {
   let email = config.principalEmail;
   let name = 'Principal';
   try {
+    const stages = await configService.getRoutingStages();
     const { rows } = await pool.query(
       `SELECT u.full_name, u.email FROM users u
          LEFT JOIN user_roles ur ON ur.user_id = u.user_id
          LEFT JOIN roles r ON r.role_id = ur.role_id
          LEFT JOIN stage_approvers sa ON sa.user_id = u.user_id
          LEFT JOIN workflow_stages ws ON ws.stage_id = sa.stage_id
-        WHERE (r.code = 'PRINCIPAL' OR ws.code = 'PRINCIPAL') AND u.is_active
+        WHERE (r.code = $1 OR ws.code = $1) AND u.is_active
         LIMIT 1`,
+      [stages.principalStage],
     );
     if (rows.length > 0) {
       name = rows[0].full_name;
@@ -94,23 +97,35 @@ async function resolvePrincipal() {
 
 /**
  * Resolve the approvers staffed at a particular workflow stage.
+ * Supports multiple CDC members with classification attribution.
  * @returns {Array<{ email: string, name: string }>}
  */
 async function resolveCdcApprovers(requestId) {
   try {
+    const stages = await configService.getRoutingStages();
     const { rows: fundingRows } = await pool.query(
       `SELECT app_request_funding_type($1) AS funding_type`,
       [requestId],
     );
     const fundingType = fundingRows[0]?.funding_type || 'GRANT';
-    const roleCode = fundingType === 'NON_GRANT' ? 'CDC_NON_GRANT_MEMBER' : 'CDC_GRANT_MEMBER';
     const { rows } = await pool.query(
       `SELECT u.full_name, u.email FROM stage_approvers sa
          JOIN users u ON u.user_id = sa.user_id
          JOIN workflow_stages ws ON ws.stage_id = sa.stage_id
          JOIN roles r ON r.role_id = sa.role_id
-        WHERE ws.code = 'CDC' AND r.code = $1 AND u.is_active`,
-      [roleCode],
+        WHERE ws.code = $1 AND u.is_active
+          AND (
+            ($2 = 'GRANT' AND (
+              r.code = 'CDC_GRANT_MEMBER'
+              OR (r.code = 'CDC_MEMBER' AND COALESCE(sa.member_classification, 'TEACHING') = 'TEACHING')
+            ))
+            OR
+            ($2 = 'NON_GRANT' AND (
+              r.code = 'CDC_NON_GRANT_MEMBER'
+              OR (r.code = 'CDC_MEMBER' AND sa.member_classification = 'NON_TEACHING')
+            ))
+          )`,
+      [stages.intermediateStage, fundingType],
     );
     return rows.map((r) => ({ email: r.email, name: r.full_name, fundingType }));
   } catch { return []; }
@@ -118,11 +133,13 @@ async function resolveCdcApprovers(requestId) {
 
 async function resolveFinalApprovers() {
   try {
+    const stages = await configService.getRoutingStages();
     const { rows } = await pool.query(
       `SELECT u.full_name, u.email FROM stage_approvers sa
          JOIN users u ON u.user_id = sa.user_id
          JOIN workflow_stages ws ON ws.stage_id = sa.stage_id
-        WHERE ws.code = 'FINAL_AUTHORITY' AND u.is_active`,
+        WHERE ws.code = $1 AND u.is_active`,
+      [stages.finalAuthorityStage],
     );
     return rows.map((r) => ({ email: r.email, name: r.full_name }));
   } catch { return []; }
@@ -1199,20 +1216,27 @@ requestsRouter.post('/:id/actions', async (req, res) => {
   const dbAction = body.action === 'FORWARD' ? 'ESCALATE' : body.action;
 
   const result = await withUser(req.user.id, async (db) => {
+    const stages = await configService.getRoutingStages();
     const { rows: stageRows } = await db.query(
       `SELECT r.current_stage_id, ws.code AS stage_code, r.tentative_total_cost,
               EXISTS (SELECT 1 FROM stage_approvers sa
                        JOIN roles ro ON ro.role_id = sa.role_id
                       WHERE sa.stage_id = r.current_stage_id AND sa.user_id = $2
                         AND (
-                          ro.code NOT IN ('CDC_GRANT_MEMBER', 'CDC_NON_GRANT_MEMBER')
-                          OR (ro.code = 'CDC_GRANT_MEMBER' AND app_request_funding_type(r.request_id) = 'GRANT')
-                          OR (ro.code = 'CDC_NON_GRANT_MEMBER' AND app_request_funding_type(r.request_id) = 'NON_GRANT')
+                          (SELECT code FROM workflow_stages ws2 WHERE ws2.stage_id = sa.stage_id) <> $3
+                          OR (app_request_funding_type(r.request_id) = 'GRANT' AND (
+                            ro.code = 'CDC_GRANT_MEMBER'
+                            OR (ro.code = 'CDC_MEMBER' AND COALESCE(sa.member_classification, 'TEACHING') = 'TEACHING')
+                          ))
+                          OR (app_request_funding_type(r.request_id) = 'NON_GRANT' AND (
+                            ro.code = 'CDC_NON_GRANT_MEMBER'
+                            OR (ro.code = 'CDC_MEMBER' AND sa.member_classification = 'NON_TEACHING')
+                          ))
                         )) AS staffed_here
          FROM requests r
          LEFT JOIN workflow_stages ws ON ws.stage_id = r.current_stage_id
         WHERE r.request_id = $1`,
-      [requestId, req.user.id],
+      [requestId, req.user.id, stages.intermediateStage],
     );
     if (!stageRows[0]) throw notFound('Request not found');
     const stageCode = stageRows[0].stage_code;
@@ -1223,10 +1247,10 @@ requestsRouter.post('/:id/actions', async (req, res) => {
       throw new HttpError(403, 'You are not authorised to act on this request at its current stage', { code: 'SP004' });
     }
 
-    if (stageCode === 'PURCHASE_COMMITTEE' && ['APPROVE', 'PARTIAL_APPROVE'].includes(dbAction)) {
+    if (stageCode === stages.entryStage && ['APPROVE', 'PARTIAL_APPROVE'].includes(dbAction)) {
       throw unprocessable('Purchase Committee performs validity review only and cannot approve requests');
     }
-    if (stageCode === 'PRINCIPAL') {
+    if (stageCode === stages.principalStage) {
       const { principalMax } = await configService.getThresholds();
       if (['APPROVE', 'PARTIAL_APPROVE'].includes(dbAction) && amount > principalMax) {
         throw unprocessable(
@@ -1237,7 +1261,7 @@ requestsRouter.post('/:id/actions', async (req, res) => {
           `Requests up to ₹${principalMax.toLocaleString('en-IN')} must be decided by the Principal and cannot be escalated`);
       }
     }
-    if (stageCode === 'CDC') {
+    if (stageCode === stages.intermediateStage) {
       const { cdcMax } = await configService.getThresholds();
       if (['APPROVE', 'PARTIAL_APPROVE', 'REJECT'].includes(dbAction) && amount > cdcMax) {
         throw unprocessable(
@@ -1247,7 +1271,7 @@ requestsRouter.post('/:id/actions', async (req, res) => {
         throw unprocessable('CDC holds the decision at this amount; it cannot pass the request further up');
       }
     }
-    if (dbAction === 'RETURN' && !['PURCHASE_COMMITTEE', 'PRINCIPAL'].includes(stageCode)) {
+    if (dbAction === 'RETURN' && ![stages.entryStage, stages.principalStage].includes(stageCode)) {
       throw unprocessable('Only the Purchase Committee and the Principal can return a request for correction');
     }
 

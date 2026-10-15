@@ -9,6 +9,11 @@ import { HttpError } from './errors.js';
 export const CONFIG_SCHEMAS = {
   'workflow.threshold.principal_max': z.number().positive().max(10_000_000),
   'workflow.threshold.cdc_max': z.number().positive().max(100_000_000),
+  'workflow.stage.entry': z.string().trim().min(1).max(50),
+  'workflow.stage.principal': z.string().trim().min(1).max(50),
+  'workflow.stage.intermediate': z.string().trim().min(1).max(50),
+  'workflow.stage.final_authority': z.string().trim().min(1).max(50),
+  'workflow.authority.final_role': z.string().trim().min(1).max(50),
   'self_registration.enabled': z.boolean(),
   'roles.vice_chairman.title': z.string().trim().min(1).max(100),
   'cdc.teaching_members_limit': z.number().int().min(1).max(10),
@@ -25,6 +30,11 @@ export const CONFIG_SCHEMAS = {
 export const DEFAULT_CONFIGS = {
   'workflow.threshold.principal_max': 50000,
   'workflow.threshold.cdc_max': 500000,
+  'workflow.stage.entry': 'PURCHASE_COMMITTEE',
+  'workflow.stage.principal': 'PRINCIPAL',
+  'workflow.stage.intermediate': 'CDC',
+  'workflow.stage.final_authority': 'FINAL_AUTHORITY',
+  'workflow.authority.final_role': 'CHAIRMAN',
   'self_registration.enabled': false,
   'roles.vice_chairman.title': 'Vice Chairman',
   'cdc.teaching_members_limit': 3,
@@ -38,6 +48,11 @@ export const DEFAULT_CONFIGS = {
 export const CONFIG_DESCRIPTIONS = {
   'workflow.threshold.principal_max': 'Maximum request amount decided finally by Principal (₹50,000). Requests above this escalate.',
   'workflow.threshold.cdc_max': 'Maximum request amount decided by CDC (₹5,00,000). Requests above this escalate to Chairman.',
+  'workflow.stage.entry': 'Stage code where new requests enter for initial verification',
+  'workflow.stage.principal': 'Stage code for the Principal approval gate',
+  'workflow.stage.intermediate': 'Stage code for College Development Committee intermediate authority',
+  'workflow.stage.final_authority': 'Stage code for the final governing authority',
+  'workflow.authority.final_role': 'Role code authorized for final sanction',
   'self_registration.enabled': 'Whether public user self-registration is enabled. Default false.',
   'roles.vice_chairman.title': 'Institutional title for Vice Chairman role',
   'cdc.teaching_members_limit': 'Maximum number of teaching faculty members on the College Development Committee',
@@ -51,6 +66,11 @@ export const CONFIG_DESCRIPTIONS = {
 export const CONFIG_CATEGORIES = {
   'workflow.threshold.principal_max': 'approval_workflow',
   'workflow.threshold.cdc_max': 'approval_workflow',
+  'workflow.stage.entry': 'approval_workflow',
+  'workflow.stage.principal': 'approval_workflow',
+  'workflow.stage.intermediate': 'approval_workflow',
+  'workflow.stage.final_authority': 'approval_workflow',
+  'workflow.authority.final_role': 'approval_workflow',
   'self_registration.enabled': 'feature_flags',
   'roles.vice_chairman.title': 'institutional',
   'cdc.teaching_members_limit': 'institutional',
@@ -68,6 +88,11 @@ export const CONFIG_CATEGORIES = {
 export const CRITICAL_CONFIG_KEYS = new Set([
   'workflow.threshold.principal_max',
   'workflow.threshold.cdc_max',
+  'workflow.stage.entry',
+  'workflow.stage.principal',
+  'workflow.stage.intermediate',
+  'workflow.stage.final_authority',
+  'workflow.authority.final_role',
 ]);
 
 /**
@@ -375,6 +400,24 @@ class ConfigService {
     const teachingLimit = Number(await this.get('cdc.teaching_members_limit'));
     const nonTeachingLimit = Number(await this.get('cdc.non_teaching_members_limit'));
     return { teachingLimit, nonTeachingLimit };
+  }
+
+  /**
+   * Helper: Retrieve workflow routing stages and final authority role.
+   */
+  async getRoutingStages() {
+    const entryStage = await this.get('workflow.stage.entry');
+    const principalStage = await this.get('workflow.stage.principal');
+    const intermediateStage = await this.get('workflow.stage.intermediate');
+    const finalAuthorityStage = await this.get('workflow.stage.final_authority');
+    const finalAuthorityRole = await this.get('workflow.authority.final_role');
+    return {
+      entryStage: String(entryStage),
+      principalStage: String(principalStage),
+      intermediateStage: String(intermediateStage),
+      finalAuthorityStage: String(finalAuthorityStage),
+      finalAuthorityRole: String(finalAuthorityRole),
+    };
   }
 }
 
