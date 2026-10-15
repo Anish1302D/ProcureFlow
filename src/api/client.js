@@ -287,15 +287,9 @@ export async function api(path, { method = 'GET', body, form, signal } = {}) {
     init.headers = headers({ 'Content-Type': 'application/json' });
     init.body = JSON.stringify(body);
   }
+  let res;
   try {
-    const res = await fetch(`${BASE}${path}`, init);
-    if (res.status >= 502 && res.status <= 504) {
-      if (import.meta.env.DEV) {
-        return getMockResponse(path, { method, body });
-      }
-      return await handle(res);
-    }
-    return await handle(res);
+    res = await fetch(`${BASE}${path}`, init);
   } catch (err) {
     if (err?.name === 'AbortError') {
       throw err;
@@ -307,6 +301,14 @@ export async function api(path, { method = 'GET', body, form, signal } = {}) {
       error: { message: 'Network connection failed. The server is currently unreachable.' },
     });
   }
+
+  if (res.status >= 502 && res.status <= 504) {
+    if (import.meta.env.DEV) {
+      return getMockResponse(path, { method, body });
+    }
+    return await handle(res);
+  }
+  return await handle(res);
 }
 
 /**
