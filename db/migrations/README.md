@@ -69,6 +69,12 @@ Points that matter in practice:
 - Adding an index on a large live table? Use `CREATE INDEX CONCURRENTLY` — but that
   cannot run inside a transaction, so put it in its own migration with no `BEGIN`.
 
+## Applying them on production (Neon)
+
+Production is hosted on Neon. Follow [docs/DEPLOY_DB_NEON.md](../../docs/DEPLOY_DB_NEON.md):
+back up with a Neon branch, pre-flight check, then `node scripts/run-pending-migrations.js`
+from `server/`. Run migrations **before** deploying code that depends on them.
+
 ## Applying them
 
 Track what has been applied:
