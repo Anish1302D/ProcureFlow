@@ -117,18 +117,8 @@ async function resolveCdcApprovers(requestId) {
          JOIN workflow_stages ws ON ws.stage_id = sa.stage_id
          JOIN roles r ON r.role_id = sa.role_id
         WHERE ws.code = $1 AND u.is_active
-          AND (
-            ($2 = 'GRANT' AND (
-              r.code = 'CDC_GRANT_MEMBER'
-              OR (r.code = 'CDC_MEMBER' AND COALESCE(sa.member_classification, 'TEACHING') = 'TEACHING')
-            ))
-            OR
-            ($2 = 'NON_GRANT' AND (
-              r.code = 'CDC_NON_GRANT_MEMBER'
-              OR (r.code = 'CDC_MEMBER' AND sa.member_classification = 'NON_TEACHING')
-            ))
-          )`,
-      [stages.intermediateStage, fundingType],
+          AND app_cdc_on_route($2, r.code, sa.member_classification)`,
+      [stages.intermediateStage, requestId],
     );
     return rows.map((r) => ({ email: r.email, name: r.full_name, fundingType }));
   } catch { return []; }
@@ -641,11 +631,8 @@ export async function loadDetail(db, requestId, user) {
             EXISTS (SELECT 1 FROM stage_approvers sa
                      JOIN roles ro ON ro.role_id = sa.role_id
                     WHERE sa.stage_id = r.current_stage_id AND sa.user_id = $2
-                      AND (
-                        ro.code NOT IN ('CDC_GRANT_MEMBER', 'CDC_NON_GRANT_MEMBER')
-                        OR (ro.code = 'CDC_GRANT_MEMBER' AND app_request_funding_type(r.request_id) = 'GRANT')
-                        OR (ro.code = 'CDC_NON_GRANT_MEMBER' AND app_request_funding_type(r.request_id) = 'NON_GRANT')
-                      )) AS staffed_here
+                      AND (ws.code <> 'CDC'
+                           OR app_cdc_on_route(r.request_id, ro.code, sa.member_classification))) AS staffed_here
        FROM requests r
        JOIN users u            ON u.user_id = r.raised_by
        JOIN budget_heads bh    ON bh.budget_head_id = r.budget_head_id
@@ -886,11 +873,8 @@ requestsRouter.get('/', async (req, res) => {
                SELECT 1 FROM stage_approvers sa
                 JOIN roles ro ON ro.role_id = sa.role_id
                 WHERE sa.stage_id = r.current_stage_id AND sa.user_id = $6
-                  AND (
-                    ro.code NOT IN ('CDC_GRANT_MEMBER', 'CDC_NON_GRANT_MEMBER')
-                    OR (ro.code = 'CDC_GRANT_MEMBER' AND app_request_funding_type(r.request_id) = 'GRANT')
-                    OR (ro.code = 'CDC_NON_GRANT_MEMBER' AND app_request_funding_type(r.request_id) = 'NON_GRANT')
-                  ))))
+                  AND (ws.code <> 'CDC'
+                       OR app_cdc_on_route(r.request_id, ro.code, sa.member_classification)))))
         AND ($7::text IS NULL OR r.title ILIKE $7 OR r.request_number ILIKE $7)
       ORDER BY r.updated_at DESC, r.request_id
       LIMIT $8 OFFSET $9`,
@@ -1230,14 +1214,7 @@ requestsRouter.post('/:id/actions', async (req, res) => {
                       WHERE sa.stage_id = r.current_stage_id AND sa.user_id = $2
                         AND (
                           (SELECT code FROM workflow_stages ws2 WHERE ws2.stage_id = sa.stage_id) <> $3
-                          OR (app_request_funding_type(r.request_id) = 'GRANT' AND (
-                            ro.code = 'CDC_GRANT_MEMBER'
-                            OR (ro.code = 'CDC_MEMBER' AND COALESCE(sa.member_classification, 'TEACHING') = 'TEACHING')
-                          ))
-                          OR (app_request_funding_type(r.request_id) = 'NON_GRANT' AND (
-                            ro.code = 'CDC_NON_GRANT_MEMBER'
-                            OR (ro.code = 'CDC_MEMBER' AND sa.member_classification = 'NON_TEACHING')
-                          ))
+                          OR app_cdc_on_route(r.request_id, ro.code, sa.member_classification)
                         )) AS staffed_here
          FROM requests r
          LEFT JOIN workflow_stages ws ON ws.stage_id = r.current_stage_id
