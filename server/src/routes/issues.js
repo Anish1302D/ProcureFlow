@@ -191,7 +191,7 @@ issuesRouter.post('/', async (req, res) => {
         );
         if (principalRows.length > 0) {
           principalName = principalRows[0].full_name;
-          principalEmail = config.principalEmail || principalRows[0].email;
+          principalEmail = principalRows[0].email || config.principalEmail;
         }
       } catch (dbErr) {
         console.warn('[issues] Principal lookup failed, using config fallback:', dbErr.message);

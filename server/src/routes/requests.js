@@ -90,7 +90,7 @@ async function resolvePrincipal() {
     );
     if (rows.length > 0) {
       name = rows[0].full_name;
-      email = config.principalEmail || rows[0].email;
+      email = rows[0].email || config.principalEmail;
     }
   } catch (err) {
     console.error('[requests] Failed to resolve principal:', err.message);
