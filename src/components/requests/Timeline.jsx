@@ -40,7 +40,12 @@ export const Timeline = ({ requestId }) => {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="font-semibold text-gray-800">
                   {ACTION_LABELS[e.action] ?? e.action}
-                  <span className="font-normal text-gray-500"> by {e.by.name}{e.stage ? ` · ${e.stage.name}` : ''}</span>
+                  <span className="font-normal text-gray-500">
+                    {' '}by {e.by?.name ?? 'Unknown'}
+                    {e.role ? ` (${e.role.name})` : ''}
+                    {e.by?.employeeId ? ` · ID: ${e.by.employeeId}` : ''}
+                    {e.stage ? ` · ${e.stage.name}` : ''}
+                  </span>
                 </span>
                 <span className="flex items-center gap-2 text-[11px] text-gray-400">
                   <Seal seal={e.seal} /> {dateTime(e.at)}

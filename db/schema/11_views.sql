@@ -83,11 +83,17 @@ SELECT
     a.rejection_reason,
     a.comments,
     u.full_name        AS performed_by_name,
+    u.email            AS performed_by_email,
+    u.employee_id      AS performed_by_employee_id,
+    a.role_id,
+    ro.code            AS role_code,
+    ro.name            AS role_name,
     a.signature_id
 FROM approval_actions a
 JOIN requests r              ON r.request_id = a.request_id
 LEFT JOIN workflow_stages ws ON ws.stage_id = a.stage_id
 JOIN users u                 ON u.user_id = a.performed_by
+LEFT JOIN roles ro           ON ro.role_id = a.role_id
 ORDER BY a.request_id, a.created_at;
 
 -- Roll-up of item-level decisions for a request.

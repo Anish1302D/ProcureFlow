@@ -23,7 +23,7 @@ export async function loadUser(userId) {
   let rows;
   try {
     const res = await anonQuery(
-      `SELECT u.user_id, u.email, u.full_name, u.department_id,
+      `SELECT u.user_id, u.email, u.full_name, u.employee_id, u.department_id,
               COALESCE(u.token_version, 1) AS token_version,
               ARRAY(SELECT r.code FROM user_roles ur
                       JOIN roles r ON r.role_id = ur.role_id
@@ -45,11 +45,12 @@ export async function loadUser(userId) {
     throw err;
   }
   if (!rows[0]) return null;
-  const { user_id, email, full_name, department_id, token_version, roles } = rows[0];
+  const { user_id, email, full_name, employee_id, department_id, token_version, roles } = rows[0];
   return {
     id: user_id,
     email,
     name: full_name,
+    employeeId: employee_id ?? null,
     departmentId: department_id,
     tokenVersion: Number(token_version ?? 1),
     roles,

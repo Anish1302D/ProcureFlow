@@ -31,3 +31,26 @@ CREATE TABLE stage_approvers (
 );
 
 CREATE INDEX stage_approvers_user_idx ON stage_approvers(user_id);
+
+CREATE TABLE role_appointments (
+    appointment_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id               UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    role_id               INTEGER NOT NULL REFERENCES roles(role_id) ON DELETE RESTRICT,
+    department_id         INTEGER REFERENCES departments(department_id) ON DELETE SET NULL,
+    stage_id              INTEGER REFERENCES workflow_stages(stage_id) ON DELETE SET NULL,
+    member_classification TEXT CHECK (member_classification IS NULL OR member_classification IN ('TEACHING', 'NON_TEACHING')),
+    start_date            DATE NOT NULL DEFAULT CURRENT_DATE,
+    end_date              DATE,
+    is_active             BOOLEAN NOT NULL DEFAULT TRUE,
+    appointment_order_no  TEXT,
+    remarks               TEXT,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (end_date IS NULL OR end_date >= start_date)
+);
+
+CREATE INDEX role_appointments_user_idx   ON role_appointments(user_id);
+CREATE INDEX role_appointments_role_idx   ON role_appointments(role_id);
+CREATE INDEX role_appointments_active_idx ON role_appointments(role_id, is_active);
+CREATE INDEX role_appointments_dept_idx   ON role_appointments(department_id);
+CREATE INDEX role_appointments_stage_idx  ON role_appointments(stage_id);

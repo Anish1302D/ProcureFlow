@@ -34,7 +34,7 @@ const ALLOWED_INSTITUTIONAL_ROLES = [
 
 async function userDetail(userId) {
   const { rows } = await anonQuery(
-    `SELECT u.user_id, u.email, u.full_name, u.is_active, u.created_at, u.updated_at,
+    `SELECT u.user_id, u.email, u.full_name, u.employee_id, u.is_active, u.created_at, u.updated_at,
             u.department_id, d.name AS department_name, d.code AS department_code,
             COALESCE(
               json_agg(
@@ -57,6 +57,7 @@ async function userDetail(userId) {
     id: u.user_id,
     email: u.email,
     name: u.full_name,
+    employeeId: u.employee_id ?? null,
     isActive: u.is_active,
     createdAt: u.created_at,
     updatedAt: u.updated_at,
@@ -99,7 +100,7 @@ async function validateDepartmentId(db, departmentId) {
 // ---------------------------------------------------------------------------
 adminRouter.get('/users', async (_req, res) => {
   const { rows } = await anonQuery(
-    `SELECT u.user_id, u.email, u.full_name, u.is_active, u.created_at, u.updated_at,
+    `SELECT u.user_id, u.email, u.full_name, u.employee_id, u.is_active, u.created_at, u.updated_at,
             u.department_id, d.name AS department_name, d.code AS department_code,
             COALESCE(
               json_agg(
@@ -119,6 +120,7 @@ adminRouter.get('/users', async (_req, res) => {
     id: u.user_id,
     email: u.email,
     name: u.full_name,
+    employeeId: u.employee_id ?? null,
     isActive: u.is_active,
     createdAt: u.created_at,
     updatedAt: u.updated_at,
@@ -150,6 +152,7 @@ adminRouter.get('/roles', async (_req, res) => {
 const createUserSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
   fullName: z.string().trim().min(2).max(200),
+  employeeId: z.string().trim().max(100).nullable().optional(),
   departmentId: z.number().int().positive().nullable().optional(),
   roleIds: z.array(z.number().int().positive()).min(1, 'Assign at least one role'),
   isActive: z.boolean().optional(),
@@ -174,14 +177,21 @@ adminRouter.post('/users', async (req, res) => {
     );
     if (dup.rowCount) throw conflict('A user with this email already exists');
 
+    if (body.employeeId) {
+      const dupEmp = await db.query(
+        'SELECT 1 FROM users WHERE employee_id = $1', [body.employeeId],
+      );
+      if (dupEmp.rowCount) throw conflict('A user with this employee ID already exists');
+    }
+
     await validateDepartmentId(db, body.departmentId);
     await validateRoleIds(db, body.roleIds);
 
     // Accounts start unactivated (is_active = FALSE) until the invitee completes password setup.
     const { rows } = await db.query(
-      `INSERT INTO users (email, full_name, password_hash, department_id, is_active, token_version)
-       VALUES ($1, $2, $3, $4, FALSE, 1) RETURNING user_id`,
-      [body.email, body.fullName, initialPasswordHash, body.departmentId ?? null],
+      `INSERT INTO users (email, full_name, password_hash, department_id, employee_id, is_active, token_version)
+       VALUES ($1, $2, $3, $4, $5, FALSE, 1) RETURNING user_id`,
+      [body.email, body.fullName, initialPasswordHash, body.departmentId ?? null, body.employeeId ?? null],
     );
     const userId = rows[0].user_id;
 
@@ -192,6 +202,15 @@ adminRouter.post('/users', async (req, res) => {
     );
 
     if (body.roleIds && body.roleIds.length) {
+      for (const rId of body.roleIds) {
+        await db.query(
+          `INSERT INTO role_appointments (user_id, role_id, department_id, start_date, is_active, remarks)
+           VALUES ($1, $2, $3, CURRENT_DATE, TRUE, 'Initial institutional appointment')
+           ON CONFLICT DO NOTHING`,
+          [userId, rId, body.departmentId ?? null],
+        );
+      }
+
       await db.query(
         `INSERT INTO stage_approvers (stage_id, user_id, role_id)
          SELECT ws.stage_id, $1, r.role_id
@@ -223,6 +242,7 @@ adminRouter.post('/users', async (req, res) => {
         JSON.stringify({
           email: body.email,
           fullName: body.fullName,
+          employeeId: body.employeeId ?? null,
           departmentId: body.departmentId ?? null,
           roleIds: body.roleIds,
           isActive: false,
@@ -300,6 +320,7 @@ const updateUserSchema = z
   .object({
     email: z.string().trim().toLowerCase().email().max(254).optional(),
     fullName: z.string().trim().min(2).max(200).optional(),
+    employeeId: z.string().trim().max(100).nullable().optional(),
     password: z.string().min(8).max(200).optional(),
     departmentId: z.number().int().positive().nullable().optional(),
     roleIds: z.array(z.number().int().positive()).min(1).optional(),
@@ -340,6 +361,13 @@ adminRouter.patch('/users/:id', async (req, res) => {
         'SELECT 1 FROM users WHERE email = $1 AND user_id != $2', [body.email, userId],
       );
       if (dup.rowCount) throw conflict('This email is already taken by another user');
+    }
+
+    if (body.employeeId) {
+      const dupEmp = await db.query(
+        'SELECT 1 FROM users WHERE employee_id = $1 AND user_id != $2', [body.employeeId, userId],
+      );
+      if (dupEmp.rowCount) throw conflict('This employee ID is already in use by another user');
     }
 
     const adminRoleRes = await db.query("SELECT role_id FROM roles WHERE code = 'ADMIN'");
@@ -388,6 +416,7 @@ adminRouter.patch('/users/:id', async (req, res) => {
 
     if (body.email !== undefined) push('email', body.email);
     if (body.fullName !== undefined) push('full_name', body.fullName);
+    if (body.employeeId !== undefined) push('employee_id', body.employeeId || null);
     if (hash !== undefined) push('password_hash', hash);
     if (body.departmentId !== undefined) push('department_id', body.departmentId);
     if (body.isActive !== undefined) push('is_active', body.isActive);
@@ -946,4 +975,415 @@ adminRouter.delete('/stages/:stageCode/approvers/:userId', async (req, res) => {
   res.status(204).end();
 });
 
+// ---------------------------------------------------------------------------
+// GET /api/admin/appointments  —  list historical and active role appointments
+// ---------------------------------------------------------------------------
+const appointmentQuerySchema = z.object({
+  roleId: z.coerce.number().int().positive().optional(),
+  userId: z.string().uuid().optional(),
+  isActive: z.enum(['true', 'false']).transform((v) => v === 'true').optional(),
+});
 
+adminRouter.get('/appointments', async (req, res) => {
+  const query = appointmentQuerySchema.parse(req.query);
+
+  const { rows } = await anonQuery(
+    `SELECT ra.appointment_id, ra.user_id, ra.role_id, ra.department_id, ra.stage_id,
+            ra.member_classification, ra.start_date, ra.end_date, ra.is_active,
+            ra.appointment_order_no, ra.remarks, ra.created_at, ra.updated_at,
+            u.full_name AS user_name, u.email AS user_email, u.employee_id,
+            r.code AS role_code, r.name AS role_name,
+            d.name AS department_name, d.code AS department_code,
+            ws.code AS stage_code, ws.name AS stage_name
+       FROM role_appointments ra
+       JOIN users u ON u.user_id = ra.user_id
+       JOIN roles r ON r.role_id = ra.role_id
+       LEFT JOIN departments d ON d.department_id = ra.department_id
+       LEFT JOIN workflow_stages ws ON ws.stage_id = ra.stage_id
+      WHERE ($1::int IS NULL OR ra.role_id = $1)
+        AND ($2::uuid IS NULL OR ra.user_id = $2)
+        AND ($3::boolean IS NULL OR ra.is_active = $3)
+      ORDER BY r.name, ra.is_active DESC, ra.start_date DESC`,
+    [query.roleId ?? null, query.userId ?? null, query.isActive ?? null],
+  );
+
+  res.json(rows.map((ra) => ({
+    appointmentId: ra.appointment_id,
+    user: {
+      id: ra.user_id,
+      name: ra.user_name,
+      email: ra.user_email,
+      employeeId: ra.employee_id,
+    },
+    role: {
+      id: ra.role_id,
+      code: ra.role_code,
+      name: ra.role_name,
+    },
+    department: ra.department_id ? {
+      id: ra.department_id,
+      name: ra.department_name,
+      code: ra.department_code,
+    } : null,
+    stage: ra.stage_id ? {
+      id: ra.stage_id,
+      code: ra.stage_code,
+      name: ra.stage_name,
+    } : null,
+    memberClassification: ra.member_classification,
+    startDate: ra.start_date,
+    endDate: ra.end_date,
+    isActive: ra.is_active,
+    appointmentOrderNo: ra.appointment_order_no,
+    remarks: ra.remarks,
+    createdAt: ra.created_at,
+    updatedAt: ra.updated_at,
+  })));
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/admin/appointments  —  appoint or transition a member to a role
+// ---------------------------------------------------------------------------
+const SINGLE_HOLDER_ROLES = ['PRINCIPAL', 'CHAIRMAN', 'VICE_PRESIDENT'];
+
+const createAppointmentSchema = z.object({
+  userId: z.string().uuid(),
+  roleId: z.number().int().positive(),
+  departmentId: z.number().int().positive().nullable().optional(),
+  stageId: z.number().int().positive().nullable().optional(),
+  memberClassification: z.enum(['TEACHING', 'NON_TEACHING']).nullable().optional(),
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  isActive: z.boolean().optional().default(true),
+  appointmentOrderNo: z.string().trim().max(100).nullable().optional(),
+  remarks: z.string().trim().max(500).nullable().optional(),
+  autoTransitionPrevious: z.boolean().optional().default(true),
+});
+
+adminRouter.post('/appointments', async (req, res) => {
+  const body = createAppointmentSchema.parse(req.body);
+  const startDate = body.startDate || new Date().toISOString().split('T')[0];
+
+  const appointmentId = await withUser(req.user.id, async (db) => {
+    const userRes = await db.query('SELECT user_id, full_name, is_active FROM users WHERE user_id = $1', [body.userId]);
+    if (!userRes.rowCount) throw notFound('User not found');
+
+    const roleRes = await db.query('SELECT role_id, code, name FROM roles WHERE role_id = $1', [body.roleId]);
+    if (!roleRes.rowCount) throw notFound('Role not found');
+    const role = roleRes.rows[0];
+
+    if (body.departmentId) {
+      await validateDepartmentId(db, body.departmentId);
+    }
+
+    // Resolve stageId if not provided
+    let stageId = body.stageId ?? null;
+    if (!stageId) {
+      if (role.code === 'PURCHASE_COMMITTEE') {
+        const s = await db.query("SELECT stage_id FROM workflow_stages WHERE code = 'PURCHASE_COMMITTEE'");
+        stageId = s.rows[0]?.stage_id ?? null;
+      } else if (role.code === 'PRINCIPAL') {
+        const s = await db.query("SELECT stage_id FROM workflow_stages WHERE code = 'PRINCIPAL'");
+        stageId = s.rows[0]?.stage_id ?? null;
+      } else if (['CDC_MEMBER', 'CDC_GRANT_MEMBER', 'CDC_NON_GRANT_MEMBER'].includes(role.code)) {
+        const s = await db.query("SELECT stage_id FROM workflow_stages WHERE code = 'CDC'");
+        stageId = s.rows[0]?.stage_id ?? null;
+      } else if (['CHAIRMAN', 'VICE_PRESIDENT'].includes(role.code)) {
+        const s = await db.query("SELECT stage_id FROM workflow_stages WHERE code = 'FINAL_AUTHORITY'");
+        stageId = s.rows[0]?.stage_id ?? null;
+      }
+    }
+
+    // Classification defaults for CDC members
+    let classification = body.memberClassification;
+    if (!classification) {
+      if (role.code === 'CDC_NON_GRANT_MEMBER') {
+        classification = 'NON_TEACHING';
+      } else if (role.code === 'CDC_GRANT_MEMBER') {
+        classification = 'TEACHING';
+      }
+    }
+
+    // Statutory member limits check for CDC
+    if (body.isActive && ['CDC_MEMBER', 'CDC_GRANT_MEMBER', 'CDC_NON_GRANT_MEMBER'].includes(role.code)) {
+      if (classification === 'TEACHING') {
+        const teachingLimit = await configService.get('cdc.teaching_members_limit');
+        const countRes = await db.query(
+          `SELECT count(DISTINCT user_id) AS cnt FROM stage_approvers sa
+             JOIN workflow_stages ws ON ws.stage_id = sa.stage_id
+            WHERE ws.code = 'CDC' AND sa.member_classification = 'TEACHING' AND sa.user_id <> $1`,
+          [body.userId],
+        );
+        if (Number(countRes.rows[0]?.cnt || 0) >= teachingLimit) {
+          throw new HttpError(422, `Cannot exceed statutory limit of ${teachingLimit} teaching CDC members`);
+        }
+      } else if (classification === 'NON_TEACHING') {
+        const nonTeachingLimit = await configService.get('cdc.non_teaching_members_limit');
+        const countRes = await db.query(
+          `SELECT count(DISTINCT user_id) AS cnt FROM stage_approvers sa
+             JOIN workflow_stages ws ON ws.stage_id = sa.stage_id
+            WHERE ws.code = 'CDC' AND sa.member_classification = 'NON_TEACHING' AND sa.user_id <> $1`,
+          [body.userId],
+        );
+        if (Number(countRes.rows[0]?.cnt || 0) >= nonTeachingLimit) {
+          throw new HttpError(422, `Cannot exceed statutory limit of ${nonTeachingLimit} non-teaching CDC members`);
+        }
+      }
+    }
+
+    // Single-holder role automatic transition
+    if (body.isActive && SINGLE_HOLDER_ROLES.includes(role.code) && body.autoTransitionPrevious) {
+      // Deactivate previous active appointments for this role
+      await db.query(
+        `UPDATE role_appointments
+            SET is_active = FALSE,
+                end_date = COALESCE(end_date, $1::date),
+                updated_at = NOW()
+          WHERE role_id = $2 AND is_active = TRUE AND user_id <> $3`,
+        [startDate, body.roleId, body.userId],
+      );
+
+      // Remove previous holder from stage_approvers for single-holder stage
+      if (stageId && role.code === 'PRINCIPAL') {
+        await db.query(
+          'DELETE FROM stage_approvers WHERE stage_id = $1 AND user_id <> $2',
+          [stageId, body.userId],
+        );
+      }
+    }
+
+    // Insert new appointment
+    const { rows: apptRows } = await db.query(
+      `INSERT INTO role_appointments (
+         user_id, role_id, department_id, stage_id, member_classification,
+         start_date, end_date, is_active, appointment_order_no, remarks
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING appointment_id`,
+      [
+        body.userId,
+        body.roleId,
+        body.departmentId ?? null,
+        stageId,
+        classification ?? null,
+        startDate,
+        body.endDate ?? null,
+        body.isActive,
+        body.appointmentOrderNo ?? null,
+        body.remarks ?? null,
+      ],
+    );
+
+    const newApptId = apptRows[0].appointment_id;
+
+    // Maintain user_roles and stage_approvers if active
+    if (body.isActive) {
+      await db.query(
+        'INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+        [body.userId, body.roleId],
+      );
+
+      if (stageId) {
+        await db.query(
+          `INSERT INTO stage_approvers (stage_id, user_id, role_id, member_classification)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (stage_id, user_id) DO UPDATE
+             SET role_id = EXCLUDED.role_id,
+                 member_classification = EXCLUDED.member_classification`,
+          [stageId, body.userId, body.roleId, classification ?? null],
+        );
+      }
+    }
+
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
+       VALUES ('role_appointment', $1::text, $2::uuid, 'CREATE', $3::jsonb)`,
+      [
+        newApptId,
+        req.user.id,
+        JSON.stringify({
+          appointmentId: newApptId,
+          userId: body.userId,
+          roleCode: role.code,
+          startDate,
+          endDate: body.endDate,
+          isActive: body.isActive,
+        }),
+      ],
+    );
+
+    return newApptId;
+  });
+
+  const { rows } = await anonQuery(
+    `SELECT ra.appointment_id, ra.user_id, ra.role_id, ra.department_id, ra.stage_id,
+            ra.member_classification, ra.start_date, ra.end_date, ra.is_active,
+            ra.appointment_order_no, ra.remarks, ra.created_at, ra.updated_at,
+            u.full_name AS user_name, u.email AS user_email, u.employee_id,
+            r.code AS role_code, r.name AS role_name,
+            d.name AS department_name, d.code AS department_code,
+            ws.code AS stage_code, ws.name AS stage_name
+       FROM role_appointments ra
+       JOIN users u ON u.user_id = ra.user_id
+       JOIN roles r ON r.role_id = ra.role_id
+       LEFT JOIN departments d ON d.department_id = ra.department_id
+       LEFT JOIN workflow_stages ws ON ws.stage_id = ra.stage_id
+      WHERE ra.appointment_id = $1`,
+    [appointmentId],
+  );
+
+  const ra = rows[0];
+  res.status(201).json({
+    appointmentId: ra.appointment_id,
+    user: {
+      id: ra.user_id,
+      name: ra.user_name,
+      email: ra.user_email,
+      employeeId: ra.employee_id,
+    },
+    role: {
+      id: ra.role_id,
+      code: ra.role_code,
+      name: ra.role_name,
+    },
+    department: ra.department_id ? {
+      id: ra.department_id,
+      name: ra.department_name,
+      code: ra.department_code,
+    } : null,
+    stage: ra.stage_id ? {
+      id: ra.stage_id,
+      code: ra.stage_code,
+      name: ra.stage_name,
+    } : null,
+    memberClassification: ra.member_classification,
+    startDate: ra.start_date,
+    endDate: ra.end_date,
+    isActive: ra.is_active,
+    appointmentOrderNo: ra.appointment_order_no,
+    remarks: ra.remarks,
+    createdAt: ra.created_at,
+    updatedAt: ra.updated_at,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /api/admin/appointments/:id  —  update tenure, dates, active status
+// ---------------------------------------------------------------------------
+const updateAppointmentSchema = z.object({
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  isActive: z.boolean().optional(),
+  memberClassification: z.enum(['TEACHING', 'NON_TEACHING']).nullable().optional(),
+  appointmentOrderNo: z.string().trim().max(100).nullable().optional(),
+  remarks: z.string().trim().max(500).nullable().optional(),
+}).refine((v) => Object.keys(v).length > 0, 'Nothing to update');
+
+adminRouter.patch('/appointments/:id', async (req, res) => {
+  const appointmentId = req.params.id;
+  const body = updateAppointmentSchema.parse(req.body);
+
+  await withUser(req.user.id, async (db) => {
+    const existing = await db.query(
+      'SELECT * FROM role_appointments WHERE appointment_id = $1',
+      [appointmentId],
+    );
+    if (!existing.rowCount) throw notFound('Appointment not found');
+    const prev = existing.rows[0];
+
+    const sets = [];
+    const vals = [];
+    const push = (col, val) => { vals.push(val); sets.push(`${col} = $${vals.length}`); };
+
+    if (body.startDate !== undefined) push('start_date', body.startDate);
+    if (body.endDate !== undefined) push('end_date', body.endDate);
+    if (body.isActive !== undefined) push('is_active', body.isActive);
+    if (body.memberClassification !== undefined) push('member_classification', body.memberClassification);
+    if (body.appointmentOrderNo !== undefined) push('appointment_order_no', body.appointmentOrderNo);
+    if (body.remarks !== undefined) push('remarks', body.remarks);
+
+    push('updated_at', new Date());
+    vals.push(appointmentId);
+
+    await db.query(
+      `UPDATE role_appointments SET ${sets.join(', ')} WHERE appointment_id = $${vals.length}`,
+      vals,
+    );
+
+    // If deactivated and was seated at stage_approvers, update stage_approvers
+    if (body.isActive === false && prev.stage_id) {
+      // Check if user has any other active appointment for this stage
+      const otherActive = await db.query(
+        `SELECT 1 FROM role_appointments
+          WHERE user_id = $1 AND stage_id = $2 AND is_active = TRUE AND appointment_id <> $3`,
+        [prev.user_id, prev.stage_id, appointmentId],
+      );
+      if (!otherActive.rowCount) {
+        await db.query(
+          'DELETE FROM stage_approvers WHERE stage_id = $1 AND user_id = $2',
+          [prev.stage_id, prev.user_id],
+        );
+      }
+    }
+
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
+       VALUES ('role_appointment', $1::text, $2::uuid, 'UPDATE', $3::jsonb)`,
+      [
+        appointmentId,
+        req.user.id,
+        JSON.stringify(body),
+      ],
+    );
+  });
+
+  const { rows } = await anonQuery(
+    `SELECT ra.appointment_id, ra.user_id, ra.role_id, ra.department_id, ra.stage_id,
+            ra.member_classification, ra.start_date, ra.end_date, ra.is_active,
+            ra.appointment_order_no, ra.remarks, ra.created_at, ra.updated_at,
+            u.full_name AS user_name, u.email AS user_email, u.employee_id,
+            r.code AS role_code, r.name AS role_name,
+            d.name AS department_name, d.code AS department_code,
+            ws.code AS stage_code, ws.name AS stage_name
+       FROM role_appointments ra
+       JOIN users u ON u.user_id = ra.user_id
+       JOIN roles r ON r.role_id = ra.role_id
+       LEFT JOIN departments d ON d.department_id = ra.department_id
+       LEFT JOIN workflow_stages ws ON ws.stage_id = ra.stage_id
+      WHERE ra.appointment_id = $1`,
+    [appointmentId],
+  );
+
+  const ra = rows[0];
+  res.json({
+    appointmentId: ra.appointment_id,
+    user: {
+      id: ra.user_id,
+      name: ra.user_name,
+      email: ra.user_email,
+      employeeId: ra.employee_id,
+    },
+    role: {
+      id: ra.role_id,
+      code: ra.role_code,
+      name: ra.role_name,
+    },
+    department: ra.department_id ? {
+      id: ra.department_id,
+      name: ra.department_name,
+      code: ra.department_code,
+    } : null,
+    stage: ra.stage_id ? {
+      id: ra.stage_id,
+      code: ra.stage_code,
+      name: ra.stage_name,
+    } : null,
+    memberClassification: ra.member_classification,
+    startDate: ra.start_date,
+    endDate: ra.end_date,
+    isActive: ra.is_active,
+    appointmentOrderNo: ra.appointment_order_no,
+    remarks: ra.remarks,
+    createdAt: ra.created_at,
+    updatedAt: ra.updated_at,
+  });
+});

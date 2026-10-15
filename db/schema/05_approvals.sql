@@ -13,6 +13,7 @@ CREATE TABLE approval_actions (
     request_id           UUID NOT NULL REFERENCES requests(request_id) ON DELETE CASCADE,
     stage_id             INTEGER REFERENCES workflow_stages(stage_id),
     performed_by         UUID NOT NULL REFERENCES users(user_id) ON DELETE RESTRICT,
+    role_id              INTEGER REFERENCES roles(role_id) ON DELETE SET NULL,
     action               approval_action_type NOT NULL,
     previous_status      request_status,
     new_status           request_status,
@@ -27,6 +28,7 @@ CREATE TABLE approval_actions (
 CREATE INDEX approval_actions_request_idx  ON approval_actions(request_id, created_at);
 CREATE INDEX approval_actions_stage_idx    ON approval_actions(stage_id);
 CREATE INDEX approval_actions_actor_idx    ON approval_actions(performed_by);
+CREATE INDEX approval_actions_role_idx     ON approval_actions(role_id);
 
 -- Targets for the composite foreign keys below. Both columns are already
 -- unique on their own; these let a child row reference the pair.

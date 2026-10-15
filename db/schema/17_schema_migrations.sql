@@ -30,5 +30,6 @@ INSERT INTO schema_migrations (filename) VALUES
     ('20261011T120000_add_user_token_version.sql'),
     ('20261011T200000_config_driven_system.sql'),
     ('20261011T220000_approval_workflow_and_user_mgmt_corrections.sql'),
-    ('20261011T230000_secure_account_activation.sql')
+    ('20261011T230000_secure_account_activation.sql'),
+    ('20261014T100000_historical_user_member_architecture.sql')
 ON CONFLICT (filename) DO NOTHING;

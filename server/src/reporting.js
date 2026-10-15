@@ -141,6 +141,8 @@ export async function assembleReport(db, detail) {
     action: r.action,
     stage: r.stage_code ? { code: r.stage_code, name: r.stage_name } : null,
     by: r.performed_by_name,
+    role: r.role_name || r.role_code || null,
+    employeeId: r.performed_by_employee_id || null,
     previousStatus: r.previous_status,
     newStatus: r.new_status,
     amountRequested: r.amount_requested_snapshot === null ? null : Number(r.amount_requested_snapshot),

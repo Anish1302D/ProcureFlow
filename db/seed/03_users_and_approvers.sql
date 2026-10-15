@@ -1,8 +1,8 @@
 -- ===========================================================================
 -- DEVELOPMENT SEED ONLY — DO NOT LOAD ON THE COLLEGE SERVER
 -- ===========================================================================
--- Creates one account per role plus the stage_approvers wiring, so the
--- approval workflow can actually be exercised end to end locally.
+-- Creates institutional accounts per role, multiple committee members,
+-- historical tenure records, and stage_approvers wiring.
 --
 -- Every account below shares the same throwaway password:
 --
@@ -13,57 +13,122 @@
 -- either skip this file entirely or reset every password.
 -- ===========================================================================
 
-INSERT INTO users (email, full_name, password_hash, department_id) VALUES
-    ('head.cs@spcollege.edu',    'Dr. A. Deshpande (Head, CS)',   crypt('ChangeMe#2026', gen_salt('bf', 12)), (SELECT department_id FROM departments WHERE code = 'CS')),
-    ('head.chem@spcollege.edu',  'Dr. B. Chemist (Head, Chemistry)', crypt('ChangeMe#2026', gen_salt('bf', 12)), (SELECT department_id FROM departments WHERE code = 'CHEM')),
-    ('incharge@spcollege.edu',   'S. Kulkarni (Activity In-charge)', crypt('ChangeMe#2026', gen_salt('bf', 12)), (SELECT department_id FROM departments WHERE code = 'CS')),
-    ('pc1@spcollege.edu',        'R. Joshi (Purchase Committee)', crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL),
-    ('pc2@spcollege.edu',        'M. Patil (Purchase Committee)', crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL),
-    ('principal@spcollege.edu',  'Dr. V. Rane (Principal)',       crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL),
-    ('cdc.grant@spcollege.edu',  'P. Shinde (CDC Grant)',         crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL),
-    ('cdc.nongrant@spcollege.edu','N. Gokhale (CDC Non-Grant)',   crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL),
-    ('chairman@spcollege.edu',   'Shri. K. Bhave (Chairman)',     crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL),
-    ('vp@spcollege.edu',         'Smt. L. Karve (Vice President)',crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL),
-    ('clerk@spcollege.edu',      'D. Sawant (Clerk)',             crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL),
-    ('admin@spcollege.edu',      'System Administrator',          crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL)
-ON CONFLICT (email) DO UPDATE SET department_id = EXCLUDED.department_id;
+INSERT INTO users (email, full_name, password_hash, department_id, employee_id, is_active) VALUES
+    ('head.cs@spcollege.edu',          'Dr. A. Deshpande (Head, CS)',            crypt('ChangeMe#2026', gen_salt('bf', 12)), (SELECT department_id FROM departments WHERE code = 'CS'),   'EMP-CS-001',   TRUE),
+    ('head.chem@spcollege.edu',        'Dr. B. Chemist (Head, Chemistry)',       crypt('ChangeMe#2026', gen_salt('bf', 12)), (SELECT department_id FROM departments WHERE code = 'CHEM'), 'EMP-CHEM-001', TRUE),
+    ('head.phy@spcollege.edu',         'Dr. K. Raman (Head, Physics)',           crypt('ChangeMe#2026', gen_salt('bf', 12)), (SELECT department_id FROM departments WHERE code = 'PHY'),  'EMP-PHY-001',  TRUE),
+    ('incharge@spcollege.edu',         'S. Kulkarni (Activity In-charge)',       crypt('ChangeMe#2026', gen_salt('bf', 12)), (SELECT department_id FROM departments WHERE code = 'CS'),   'EMP-ACT-001',  TRUE),
+    ('pc1@spcollege.edu',              'R. Joshi (Purchase Committee)',          crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                         'EMP-PC-001',   TRUE),
+    ('pc2@spcollege.edu',              'M. Patil (Purchase Committee)',          crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                         'EMP-PC-002',   TRUE),
+    ('principal.a@spcollege.edu',      'Dr. S. N. Patil (Principal A - Former)', crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                         'EMP-PRIN-001', FALSE),
+    ('principal.b@spcollege.edu',      'Dr. M. G. Ranade (Principal B - Former)',crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                         'EMP-PRIN-002', FALSE),
+    ('principal@spcollege.edu',        'Dr. V. Rane (Principal)',                crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                         'EMP-PRIN-003', TRUE),
+    ('cdc.grant@spcollege.edu',        'P. Shinde (CDC Teaching Member 1)',      crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                         'EMP-CDC-001',  TRUE),
+    ('cdc.teach2@spcollege.edu',       'Dr. M. Joshi (CDC Teaching Member 2)',   crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                         'EMP-CDC-002',  TRUE),
+    ('cdc.teach3@spcollege.edu',       'Dr. S. Kulkarni (CDC Teaching Member 3)', crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                        'EMP-CDC-003',  TRUE),
+    ('cdc.nongrant@spcollege.edu',     'N. Gokhale (CDC Non-Teaching Member)',   crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                         'EMP-CDC-004',  TRUE),
+    ('chairman.former@spcollege.edu',  'Shri. R. S. Kelkar (Chairman - Former)', crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                         'EMP-GOV-001',  FALSE),
+    ('chairman@spcollege.edu',         'Shri. K. Bhave (Chairman)',              crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                         'EMP-GOV-002',  TRUE),
+    ('vp.former@spcollege.edu',        'Dr. H. V. Gadgil (Vice Chairman - Former)', crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                      'EMP-GOV-003',  FALSE),
+    ('vp@spcollege.edu',               'Smt. L. Karve (Vice President)',         crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                         'EMP-GOV-004',  TRUE),
+    ('clerk@spcollege.edu',            'D. Sawant (Clerk)',                      crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                         'EMP-ADM-001',  TRUE),
+    ('admin@spcollege.edu',            'System Administrator',                   crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                         'EMP-ADM-000',  TRUE)
+ON CONFLICT (email) DO UPDATE SET
+    department_id = EXCLUDED.department_id,
+    employee_id   = EXCLUDED.employee_id,
+    is_active     = EXCLUDED.is_active;
 
 -- Role assignments.
 INSERT INTO user_roles (user_id, role_id)
 SELECT u.user_id, r.role_id
 FROM (VALUES
-    ('head.cs@spcollege.edu',      'HEAD'),
-    ('head.chem@spcollege.edu',    'HEAD'),
-    ('incharge@spcollege.edu',     'ACTIVITY_INCHARGE'),
-    ('pc1@spcollege.edu',          'PURCHASE_COMMITTEE'),
-    ('pc2@spcollege.edu',          'PURCHASE_COMMITTEE'),
-    ('principal@spcollege.edu',    'PRINCIPAL'),
-    ('cdc.grant@spcollege.edu',    'CDC_GRANT_MEMBER'),
-    ('cdc.grant@spcollege.edu',    'CDC_MEMBER'),
-    ('cdc.nongrant@spcollege.edu', 'CDC_NON_GRANT_MEMBER'),
-    ('cdc.nongrant@spcollege.edu', 'CDC_MEMBER'),
-    ('chairman@spcollege.edu',     'CHAIRMAN'),
-    ('vp@spcollege.edu',           'VICE_PRESIDENT'),
-    ('admin@spcollege.edu',        'ADMIN')
+    ('head.cs@spcollege.edu',          'HEAD'),
+    ('head.chem@spcollege.edu',        'HEAD'),
+    ('head.phy@spcollege.edu',         'HEAD'),
+    ('incharge@spcollege.edu',         'ACTIVITY_INCHARGE'),
+    ('pc1@spcollege.edu',              'PURCHASE_COMMITTEE'),
+    ('pc2@spcollege.edu',              'PURCHASE_COMMITTEE'),
+    ('principal.a@spcollege.edu',      'PRINCIPAL'),
+    ('principal.b@spcollege.edu',      'PRINCIPAL'),
+    ('principal@spcollege.edu',        'PRINCIPAL'),
+    ('cdc.grant@spcollege.edu',        'CDC_GRANT_MEMBER'),
+    ('cdc.grant@spcollege.edu',        'CDC_MEMBER'),
+    ('cdc.teach2@spcollege.edu',       'CDC_MEMBER'),
+    ('cdc.teach3@spcollege.edu',       'CDC_MEMBER'),
+    ('cdc.nongrant@spcollege.edu',     'CDC_NON_GRANT_MEMBER'),
+    ('cdc.nongrant@spcollege.edu',     'CDC_MEMBER'),
+    ('chairman.former@spcollege.edu',  'CHAIRMAN'),
+    ('chairman@spcollege.edu',         'CHAIRMAN'),
+    ('vp.former@spcollege.edu',        'VICE_PRESIDENT'),
+    ('vp@spcollege.edu',               'VICE_PRESIDENT'),
+    ('admin@spcollege.edu',            'ADMIN')
 ) AS v(email, role_code)
 JOIN users u ON u.email = v.email
 JOIN roles r ON r.code  = v.role_code
 ON CONFLICT (user_id, role_id) DO NOTHING;
 
--- Stage staffing. This is the part that makes fn_record_action work: without
--- rows here, nobody has authority to decide anything at any stage.
-INSERT INTO stage_approvers (stage_id, user_id, role_id)
-SELECT ws.stage_id, u.user_id, r.role_id
+-- Stage staffing. Only active approvers are seated at stages.
+INSERT INTO stage_approvers (stage_id, user_id, role_id, member_classification)
+SELECT ws.stage_id, u.user_id, r.role_id, v.classification
 FROM (VALUES
-    ('PURCHASE_COMMITTEE', 'pc1@spcollege.edu',          'PURCHASE_COMMITTEE'),
-    ('PURCHASE_COMMITTEE', 'pc2@spcollege.edu',          'PURCHASE_COMMITTEE'),
-    ('PRINCIPAL',          'principal@spcollege.edu',    'PRINCIPAL'),
-    ('CDC',                'cdc.grant@spcollege.edu',    'CDC_GRANT_MEMBER'),
-    ('CDC',                'cdc.nongrant@spcollege.edu', 'CDC_NON_GRANT_MEMBER'),
-    ('FINAL_AUTHORITY',    'chairman@spcollege.edu',     'CHAIRMAN'),
-    ('FINAL_AUTHORITY',    'vp@spcollege.edu',           'VICE_PRESIDENT')
-) AS v(stage_code, email, role_code)
+    ('PURCHASE_COMMITTEE', 'pc1@spcollege.edu',          'PURCHASE_COMMITTEE',   NULL),
+    ('PURCHASE_COMMITTEE', 'pc2@spcollege.edu',          'PURCHASE_COMMITTEE',   NULL),
+    ('PRINCIPAL',          'principal@spcollege.edu',    'PRINCIPAL',            NULL),
+    ('CDC',                'cdc.grant@spcollege.edu',    'CDC_GRANT_MEMBER',     'TEACHING'),
+    ('CDC',                'cdc.teach2@spcollege.edu',   'CDC_MEMBER',           'TEACHING'),
+    ('CDC',                'cdc.teach3@spcollege.edu',   'CDC_MEMBER',           'TEACHING'),
+    ('CDC',                'cdc.nongrant@spcollege.edu', 'CDC_NON_GRANT_MEMBER', 'NON_TEACHING'),
+    ('FINAL_AUTHORITY',    'chairman@spcollege.edu',     'CHAIRMAN',             NULL),
+    ('FINAL_AUTHORITY',    'vp@spcollege.edu',           'VICE_PRESIDENT',       NULL)
+) AS v(stage_code, email, role_code, classification)
 JOIN workflow_stages ws ON ws.code = v.stage_code::workflow_stage_code
 JOIN users u            ON u.email = v.email
 JOIN roles r            ON r.code  = v.role_code
-ON CONFLICT (stage_id, user_id) DO NOTHING;
+ON CONFLICT (stage_id, user_id) DO UPDATE
+   SET role_id = EXCLUDED.role_id,
+       member_classification = EXCLUDED.member_classification;
+
+-- Institutional role appointment & tenure history records.
+INSERT INTO role_appointments (
+    user_id, role_id, department_id, stage_id, member_classification,
+    start_date, end_date, is_active, remarks
+)
+SELECT u.user_id,
+       r.role_id,
+       dept.department_id,
+       ws.stage_id,
+       v.classification,
+       v.start_date::date,
+       v.end_date::date,
+       v.is_active,
+       v.remarks
+FROM (VALUES
+    ('principal.a@spcollege.edu',     'PRINCIPAL',            NULL,   'PRINCIPAL',          NULL,           '2024-04-01', '2025-03-31', FALSE, 'Principal A - Former (2024-2025)'),
+    ('principal.b@spcollege.edu',     'PRINCIPAL',            NULL,   'PRINCIPAL',          NULL,           '2025-04-01', '2026-03-31', FALSE, 'Principal B - Former (2025-2026)'),
+    ('principal@spcollege.edu',       'PRINCIPAL',            NULL,   'PRINCIPAL',          NULL,           '2026-04-01', NULL,         TRUE,  'Principal C - Current (2026-present)'),
+    ('chairman.former@spcollege.edu', 'CHAIRMAN',             NULL,   'FINAL_AUTHORITY',    NULL,           '2023-04-01', '2025-03-31', FALSE, 'Chairman - Former (2023-2025)'),
+    ('chairman@spcollege.edu',        'CHAIRMAN',             NULL,   'FINAL_AUTHORITY',    NULL,           '2025-04-01', NULL,         TRUE,  'Chairman - Current (2025-present)'),
+    ('vp.former@spcollege.edu',       'VICE_PRESIDENT',       NULL,   'FINAL_AUTHORITY',    NULL,           '2023-04-01', '2025-03-31', FALSE, 'Vice Chairman - Former (2023-2025)'),
+    ('vp@spcollege.edu',              'VICE_PRESIDENT',       NULL,   'FINAL_AUTHORITY',    NULL,           '2025-04-01', NULL,         TRUE,  'Vice Chairman - Current (2025-present)'),
+    ('cdc.grant@spcollege.edu',       'CDC_GRANT_MEMBER',     NULL,   'CDC',                'TEACHING',     '2024-04-01', NULL,         TRUE,  'CDC Teaching Member 1 (Grant)'),
+    ('cdc.teach2@spcollege.edu',      'CDC_MEMBER',           NULL,   'CDC',                'TEACHING',     '2025-04-01', NULL,         TRUE,  'CDC Teaching Member 2'),
+    ('cdc.teach3@spcollege.edu',      'CDC_MEMBER',           NULL,   'CDC',                'TEACHING',     '2025-04-01', NULL,         TRUE,  'CDC Teaching Member 3'),
+    ('cdc.nongrant@spcollege.edu',    'CDC_NON_GRANT_MEMBER', NULL,   'CDC',                'NON_TEACHING', '2024-04-01', NULL,         TRUE,  'CDC Non-Teaching Member'),
+    ('pc1@spcollege.edu',             'PURCHASE_COMMITTEE',   NULL,   'PURCHASE_COMMITTEE', NULL,           '2025-04-01', NULL,         TRUE,  'Purchase Committee Member 1'),
+    ('pc2@spcollege.edu',             'PURCHASE_COMMITTEE',   NULL,   'PURCHASE_COMMITTEE', NULL,           '2025-04-01', NULL,         TRUE,  'Purchase Committee Member 2'),
+    ('head.cs@spcollege.edu',         'HEAD',                 'CS',   NULL,                 'TEACHING',     '2024-04-01', NULL,         TRUE,  'Head of Computer Science'),
+    ('head.chem@spcollege.edu',       'HEAD',                 'CHEM', NULL,                 'TEACHING',     '2024-04-01', NULL,         TRUE,  'Head of Chemistry'),
+    ('head.phy@spcollege.edu',        'HEAD',                 'PHY',  NULL,                 'TEACHING',     '2024-04-01', NULL,         TRUE,  'Head of Physics'),
+    ('incharge@spcollege.edu',        'ACTIVITY_INCHARGE',    'CS',   NULL,                 'TEACHING',     '2024-04-01', NULL,         TRUE,  'Activity In-charge (CS)'),
+    ('admin@spcollege.edu',           'ADMIN',                NULL,   NULL,                 NULL,           '2024-04-01', NULL,         TRUE,  'System Administrator')
+) AS v(email, role_code, dept_code, stage_code, classification, start_date, end_date, is_active, remarks)
+JOIN users u            ON u.email = v.email
+JOIN roles r            ON r.code  = v.role_code
+LEFT JOIN departments dept ON dept.code = v.dept_code
+LEFT JOIN workflow_stages ws ON ws.code = v.stage_code::workflow_stage_code
+WHERE NOT EXISTS (
+    SELECT 1 FROM role_appointments ra
+     WHERE ra.user_id = u.user_id
+       AND ra.role_id = r.role_id
+       AND ra.start_date = v.start_date::date
+);

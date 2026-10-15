@@ -120,8 +120,14 @@ AS $$
              OR (ro.code = 'CDC_GRANT_MEMBER' AND app_request_funding_type(r.request_id) = 'GRANT')
              OR (ro.code = 'CDC_NON_GRANT_MEMBER' AND app_request_funding_type(r.request_id) = 'NON_GRANT')
           )
+    )
+    OR EXISTS (
+        SELECT 1 FROM approval_actions aa
+        WHERE aa.request_id = p_request_id
+          AND aa.performed_by = p_user_id
     );
 $$;
+
 
 CREATE OR REPLACE FUNCTION app_can_see_request(p_request_id UUID)
 RETURNS BOOLEAN
@@ -525,3 +531,19 @@ CREATE POLICY account_setup_tokens_admin ON account_setup_tokens
     WITH CHECK (app_has_role('ADMIN'));
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON account_setup_tokens TO app_user;
+
+-- Role appointments / Tenure history RLS
+ALTER TABLE role_appointments ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS role_appointments_read ON role_appointments;
+CREATE POLICY role_appointments_read ON role_appointments
+    FOR SELECT
+    USING (true);
+
+DROP POLICY IF EXISTS role_appointments_admin ON role_appointments;
+CREATE POLICY role_appointments_admin ON role_appointments
+    FOR ALL
+    USING (app_has_role('ADMIN'))
+    WITH CHECK (app_has_role('ADMIN'));
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON role_appointments TO app_user;

@@ -465,7 +465,7 @@ export const APPROVAL_BUDGET_ROLES = [
 
 async function describe(userId) {
   const { rows } = await anonQuery(
-    `SELECT u.user_id, u.email, u.full_name, u.department_id,
+    `SELECT u.user_id, u.email, u.full_name, u.employee_id, u.department_id,
             d.name AS department_name, d.code AS department_code,
             ARRAY(SELECT r.code FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id
                    WHERE ur.user_id = u.user_id ORDER BY r.code) AS roles,
@@ -484,6 +484,7 @@ async function describe(userId) {
     id: u.user_id,
     email: u.email,
     name: u.full_name,
+    employeeId: u.employee_id ?? null,
     departmentId: u.department_id,
     departmentName: u.department_name,
     departmentCode: u.department_code,
