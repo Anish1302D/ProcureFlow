@@ -69,9 +69,10 @@ BEGIN
         JOIN roles ro ON ro.role_id = sa.role_id
         WHERE sa.stage_id = NEW.current_stage_id
           AND (
-            ro.code NOT IN ('CDC_GRANT_MEMBER', 'CDC_NON_GRANT_MEMBER')
-            OR (ro.code = 'CDC_GRANT_MEMBER' AND app_request_funding_type(NEW.request_id) = 'GRANT')
-            OR (ro.code = 'CDC_NON_GRANT_MEMBER' AND app_request_funding_type(NEW.request_id) = 'NON_GRANT')
+            -- At CDC, only the seats on the request's route: the same rule RLS
+            -- uses, so nobody is told about a request they cannot open.
+            (SELECT code FROM workflow_stages WHERE stage_id = NEW.current_stage_id) <> 'CDC'
+            OR app_cdc_on_route(NEW.request_id, ro.code, sa.member_classification)
           );
 
         IF left(OLD.current_status::TEXT, 6) = 'UNDER_' THEN

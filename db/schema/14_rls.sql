@@ -91,6 +91,35 @@ AS $$
     WHERE r.request_id = p_request_id;
 $$;
 
+-- Whether a CDC seat (its role and member classification) is on a request's
+-- route. Grant requests belong to the teaching side — CDC_GRANT_MEMBER, or a
+-- CDC_MEMBER classified TEACHING (the default); Non-Grant requests to the
+-- non-teaching side — CDC_NON_GRANT_MEMBER, or a CDC_MEMBER classified
+-- NON_TEACHING.
+--
+-- This is the one copy of the rule. Visibility (app_is_stage_participant),
+-- decisions (fn_record_action), notifications and the API's queues all call it.
+-- When they each had their own copy, the notification trigger lost the
+-- CDC_MEMBER half: teaching members were told about Non-Grant requests that
+-- RLS then hid from them.
+CREATE OR REPLACE FUNCTION app_cdc_on_route(p_request_id UUID, p_role_code TEXT, p_classification TEXT)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT CASE app_request_funding_type(p_request_id)
+        WHEN 'GRANT' THEN
+            p_role_code = 'CDC_GRANT_MEMBER'
+            OR (p_role_code = 'CDC_MEMBER' AND COALESCE(p_classification, 'TEACHING') = 'TEACHING')
+        WHEN 'NON_GRANT' THEN
+            p_role_code = 'CDC_NON_GRANT_MEMBER'
+            OR (p_role_code = 'CDC_MEMBER' AND p_classification = 'NON_TEACHING')
+        ELSE FALSE
+    END;
+$$;
+
 -- True when the user is a configured approver on a stage this request sits at
 -- now, or passed through earlier (so approvers keep visibility after escalating).
 -- For CDC, grants visibility only to the matching Grant vs Non-Grant member.
@@ -118,16 +147,8 @@ AS $$
           AND (
                 -- Non-CDC stages
                 (SELECT code FROM workflow_stages ws WHERE ws.stage_id = sa.stage_id) <> 'CDC'
-                -- CDC stages: Teaching classification / CDC_GRANT_MEMBER only for Grant funding
-             OR (app_request_funding_type(r.request_id) = 'GRANT' AND (
-                    ro.code = 'CDC_GRANT_MEMBER'
-                    OR (ro.code = 'CDC_MEMBER' AND COALESCE(sa.member_classification, 'TEACHING') = 'TEACHING')
-                ))
-                -- CDC stages: Non-Teaching classification / CDC_NON_GRANT_MEMBER only for Non-Grant funding
-             OR (app_request_funding_type(r.request_id) = 'NON_GRANT' AND (
-                    ro.code = 'CDC_NON_GRANT_MEMBER'
-                    OR (ro.code = 'CDC_MEMBER' AND sa.member_classification = 'NON_TEACHING')
-                ))
+                -- CDC: only the seat on the request's Grant / Non-Grant route
+             OR app_cdc_on_route(r.request_id, ro.code, sa.member_classification)
           )
     )
     OR EXISTS (

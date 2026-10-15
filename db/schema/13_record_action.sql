@@ -137,32 +137,20 @@ BEGIN
           LIMIT 1;
     END IF;
 
-    -- CDC Member classification check (Teaching for Grant, Non-Teaching for Non-Grant)
-    IF v_stage_code = 'CDC' THEN
-        IF app_request_funding_type(p_request_id) = 'GRANT' AND NOT (
-            EXISTS (
-                SELECT 1 FROM stage_approvers sa
-                JOIN roles ro ON ro.role_id = sa.role_id
-                WHERE sa.stage_id = v_req.current_stage_id AND sa.user_id = p_actor_id
-                  AND (
-                      ro.code = 'CDC_GRANT_MEMBER'
-                      OR (ro.code = 'CDC_MEMBER' AND COALESCE(sa.member_classification, 'TEACHING') = 'TEACHING')
-                  )
-            ) OR app_has_role('ADMIN')
-        ) THEN
+    -- CDC Member classification check (Teaching for Grant, Non-Teaching for
+    -- Non-Grant), by the shared rule in app_cdc_on_route.
+    IF v_stage_code = 'CDC' AND NOT (
+        EXISTS (
+            SELECT 1 FROM stage_approvers sa
+            JOIN roles ro ON ro.role_id = sa.role_id
+            WHERE sa.stage_id = v_req.current_stage_id AND sa.user_id = p_actor_id
+              AND app_cdc_on_route(p_request_id, ro.code, sa.member_classification)
+        ) OR app_has_role('ADMIN')
+    ) THEN
+        IF app_request_funding_type(p_request_id) = 'GRANT' THEN
             RAISE EXCEPTION 'Only CDC Grant Member can decide requests for Grant departments'
                 USING ERRCODE = 'SP004';
-        ELSIF app_request_funding_type(p_request_id) = 'NON_GRANT' AND NOT (
-            EXISTS (
-                SELECT 1 FROM stage_approvers sa
-                JOIN roles ro ON ro.role_id = sa.role_id
-                WHERE sa.stage_id = v_req.current_stage_id AND sa.user_id = p_actor_id
-                  AND (
-                      ro.code = 'CDC_NON_GRANT_MEMBER'
-                      OR (ro.code = 'CDC_MEMBER' AND sa.member_classification = 'NON_TEACHING')
-                  )
-            ) OR app_has_role('ADMIN')
-        ) THEN
+        ELSE
             RAISE EXCEPTION 'Only CDC Non-Grant Member can decide requests for Non-Grant departments'
                 USING ERRCODE = 'SP004';
         END IF;
