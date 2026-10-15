@@ -142,6 +142,7 @@ SELECT ur.user_id,
 -- ---------------------------------------------------------------------------
 -- 6. Update v_request_timeline to reflect actual historical actor and role
 -- ---------------------------------------------------------------------------
+DROP VIEW IF EXISTS v_request_timeline;
 CREATE OR REPLACE VIEW v_request_timeline
     WITH (security_invoker = true) AS
 SELECT
