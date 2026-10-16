@@ -299,9 +299,6 @@ test('generatePdfReport displays user-typed custom item names (e.g. Computers, S
   const buffer = await generatePdfReport(customItemsReport);
   assert.ok(Buffer.isBuffer(buffer));
   const rawStr = buffer.toString('latin1');
-  const compHex = Buffer.from('Computers').toString('hex');
-  const srvHex = Buffer.from('Servers').toString('hex');
-  const otherHex = Buffer.from('Other (specify)').toString('hex');
 
   let foundComputers = false;
   let foundServers = false;
@@ -324,7 +321,9 @@ test('generatePdfReport displays user-typed custom item names (e.g. Computers, S
         if (text.includes('Servers')) foundServers = true;
         if (text.includes('Other (specify)')) foundOther = true;
       }
-    } catch {}
+    } catch (_err) {
+      // Ignore streams that are not zlib deflate streams
+    }
   }
 
   assert.ok(foundComputers, 'PDF must include custom item name "Computers"');
