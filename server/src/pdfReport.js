@@ -1,4 +1,5 @@
 import PDFDocument from 'pdfkit';
+import { parseCustomItem } from './customItem.js';
 
 /**
  * Format date to Indian Standard Time: DD/MM/YYYY HH:MM IST
@@ -297,17 +298,27 @@ export async function generatePdfReport(report, _spec = {}, streamOrRes = null) 
       const itemWidths = [18, 142, 52, 42, 42, 54, 57, 57, 59];
       const itemAlign = ['center', 'left', 'left', 'right', 'right', 'right', 'right', 'right', 'center'];
 
-      const itemRows = items.map((i, idx) => [
-        idx + 1,
-        i.name || i.budgetItem || '—',
-        i.code || i.budgetItem || '—',
-        i.quantity != null ? String(i.quantity) : (i.requestedQuantity != null ? String(i.requestedQuantity) : '—'),
-        i.approvedQuantity != null ? String(i.approvedQuantity) : '—',
-        formatMoney(i.unitCost),
-        formatMoney(i.totalCost ?? i.requestedAmount),
-        formatMoney(i.approvedAmount ?? i.sanctionedAmount),
-        i.status || (i.approvedQuantity > 0 ? 'APPROVED' : 'PENDING'),
-      ]);
+      const itemRows = items.map((i, idx) => {
+        const { displayName } = parseCustomItem(
+          typeof i.budgetItem === 'object' ? i.budgetItem : { code: i.code || i.budgetItem, name: i.name },
+          i.remarks,
+        );
+        const resolvedName = (displayName && displayName !== 'Other (specify)' && displayName !== 'Other (custom item)')
+          ? displayName
+          : (i.name || (typeof i.budgetItem === 'string' ? i.budgetItem : i.budgetItem?.name) || '—');
+        const budgetCode = i.code || (typeof i.budgetItem === 'string' ? i.budgetItem : i.budgetItem?.code) || '—';
+        return [
+          idx + 1,
+          resolvedName,
+          budgetCode,
+          i.quantity != null ? String(i.quantity) : (i.requestedQuantity != null ? String(i.requestedQuantity) : '—'),
+          i.approvedQuantity != null ? String(i.approvedQuantity) : '—',
+          formatMoney(i.unitCost),
+          formatMoney(i.totalCost ?? i.requestedAmount),
+          formatMoney(i.approvedAmount ?? i.sanctionedAmount),
+          i.status || (i.approvedQuantity > 0 ? 'APPROVED' : 'PENDING'),
+        ];
+      });
 
       // Add totals row
       const totalsRow = [

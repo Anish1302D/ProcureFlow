@@ -9,6 +9,7 @@ import { hasAnyRole } from '../roles.js';
 import { APPROVAL_BUDGET_ROLES } from './auth.js';
 import { loadDetail } from './requests.js';
 import { flag, intId, pagination, param } from '../validate.js';
+import { parseCustomItem } from '../customItem.js';
 
 // Dashboards, reports, exports, the audit log and notifications. All request
 // figures come through security_invoker views, so every number is scoped to
@@ -280,7 +281,7 @@ reportsRouter.get('/reports/summary', async (req, res) => {
              AND ($3::int IS NULL OR u.department_id = $3)
            GROUP BY i.status ORDER BY n DESC`, [year.start_date, year.end_date, targetDeptId ?? null]],
         [`SELECT ri.request_item_id, ri.request_id, r.request_number, r.title AS request_title,
-                 bi.name AS item_name, bi.unit, ri.item_type_snapshot::text AS item_type,
+                 bi.code AS item_code, bi.name AS item_name, bi.unit, ri.item_type_snapshot::text AS item_type,
                  ri.requested_quantity, ri.approved_quantity,
                  ri.estimated_unit_cost, ri.estimated_total, ri.approved_amount,
                  ri.item_status::text AS item_status, ri.remarks
@@ -341,22 +342,25 @@ reportsRouter.get('/reports/summary', async (req, res) => {
         department: r.department, budgetHead: r.budget_head, stage: r.stage,
         requested: r.requested, sanctioned: r.sanctioned, submittedAt: r.submitted_at, closedAt: r.closed_at,
       })),
-      lineItems: lineItems.rows.map((r) => ({
-        id: r.request_item_id,
-        requestId: r.request_id,
-        requestNumber: r.request_number,
-        requestTitle: r.request_title,
-        itemName: r.item_name,
-        unit: r.unit,
-        itemType: r.item_type,
-        requestedQuantity: r.requested_quantity,
-        approvedQuantity: r.approved_quantity,
-        estimatedUnitCost: r.estimated_unit_cost,
-        estimatedTotal: r.estimated_total,
-        approvedAmount: r.approved_amount,
-        itemStatus: r.item_status,
-        remarks: r.remarks,
-      })),
+      lineItems: lineItems.rows.map((r) => {
+        const { displayName, displayRemarks } = parseCustomItem({ code: r.item_code, name: r.item_name }, r.remarks);
+        return {
+          id: r.request_item_id,
+          requestId: r.request_id,
+          requestNumber: r.request_number,
+          requestTitle: r.request_title,
+          itemName: displayName || r.item_name,
+          unit: r.unit,
+          itemType: r.item_type,
+          requestedQuantity: r.requested_quantity,
+          approvedQuantity: r.approved_quantity,
+          estimatedUnitCost: r.estimated_unit_cost,
+          estimatedTotal: r.estimated_total,
+          approvedAmount: r.approved_amount,
+          itemStatus: r.item_status,
+          remarks: displayRemarks ?? r.remarks,
+        };
+      }),
       issues: issuesCounts.rows,
       issuesDetailed: issuesDetailed.rows.map((r) => ({
         id: r.issue_id,

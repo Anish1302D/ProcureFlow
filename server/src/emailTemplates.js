@@ -7,6 +7,8 @@
  * required, and workflow status.
  */
 
+import { parseCustomItem } from './customItem.js';
+
 const SYSTEM_NAME = 'College Procurement & Approval Workflow System';
 const COLLEGE_NAME = 'S.P. College';
 const SUPPORT_EMAIL = 'support@spcollege.edu.in';
@@ -234,8 +236,12 @@ function buildItemsTable(items, showApproved = false) {
   if (showApproved) html += `<th>Approved Qty</th><th>Approved Amt</th>`;
   html += `<th>Status</th></tr></thead><tbody>`;
   for (const item of items) {
+    const { displayName } = parseCustomItem(item.budgetItem || { name: item.name }, item.remarks);
+    const itemName = (displayName && displayName !== 'Other (specify)' && displayName !== 'Other (custom item)')
+      ? displayName
+      : (item.budgetItem?.name || item.name || '—');
     html += `<tr>
-      <td>${escapeHtml(item.budgetItem?.name || item.name || '—')}</td>
+      <td>${escapeHtml(itemName)}</td>
       <td>${item.requestedQuantity ?? item.requested_quantity ?? '—'}</td>
       <td>${formatAmount(item.unitCost ?? item.estimated_unit_cost)}</td>
       <td>${formatAmount(item.estimatedTotal ?? item.estimated_total)}</td>`;

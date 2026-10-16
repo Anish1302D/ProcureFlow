@@ -2,6 +2,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { statusInfo } from '../api/format.js';
 import { formatIST, formatMoney } from './officialPdfGenerator.js';
+import { parseCustomItem } from './customItem.js';
 
 /*
  * Official SP College Department Requisitions & Itemised Requests Report.
@@ -288,19 +289,26 @@ export function generateDepartmentRequestsPdf(data, saveAsFilename = null) {
     const totalLineReq = lineItems.reduce((acc, item) => acc + num(item.estimatedTotal), 0);
     const totalLineAppr = lineItems.reduce((acc, item) => acc + num(item.approvedAmount), 0);
 
-    const body = lineItems.map((item, i) => [
-      i + 1,
-      item.requestNumber,
-      doc.splitTextToSize(clean(item.itemName), 110),
-      item.itemType || '—',
-      `${num(item.requestedQuantity)} ${item.unit || ''}`.trim(),
-      `${num(item.approvedQuantity)} ${item.unit || ''}`.trim(),
-      formatMoney(item.estimatedUnitCost),
-      formatMoney(item.estimatedTotal),
-      formatMoney(item.approvedAmount),
-      item.itemStatus || '—',
-      doc.splitTextToSize(clean(item.remarks || '—'), 60),
-    ]);
+    const body = lineItems.map((item, i) => {
+      const { displayName, displayRemarks } = parseCustomItem({ name: item.itemName }, item.remarks);
+      const name = (displayName && displayName !== 'Other (specify)' && displayName !== 'Other (custom item)')
+        ? displayName
+        : (item.itemName || '—');
+      const rem = displayRemarks ?? item.remarks;
+      return [
+        i + 1,
+        item.requestNumber,
+        doc.splitTextToSize(clean(name), 110),
+        item.itemType || '—',
+        `${num(item.requestedQuantity)} ${item.unit || ''}`.trim(),
+        `${num(item.approvedQuantity)} ${item.unit || ''}`.trim(),
+        formatMoney(item.estimatedUnitCost),
+        formatMoney(item.estimatedTotal),
+        formatMoney(item.approvedAmount),
+        item.itemStatus || '—',
+        doc.splitTextToSize(clean(rem || '—'), 60),
+      ];
+    });
     body.push(['', 'TOTAL', '', '', '', '', '', formatMoney(totalLineReq), formatMoney(totalLineAppr), '', '']);
 
     table({

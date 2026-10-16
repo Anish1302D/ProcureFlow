@@ -88,3 +88,52 @@ test('client generateOfficialPdf builds a valid jsPDF instance with expected pag
   const headerStr = Buffer.from(outputBlob).subarray(0, 8).toString('utf8');
   assert.ok(headerStr.startsWith('%PDF-1.'), 'PDF magic header valid');
 });
+
+test('client generateOfficialPdf renders custom item names (Computers, Servers) instead of "Other (specify)"', async () => {
+  const customData = {
+    title: 'Purchase Request Report',
+    requestNumber: 'REQ-2026-CUSTOM',
+    generatedAt: '2026-10-16T10:00:00Z',
+    request: {
+      requestNumber: 'REQ-2026-CUSTOM',
+      title: 'IT Requisition',
+      department: 'Computer Science',
+      status: 'APPROVED',
+      requestedAmount: 500000,
+      sanctionedAmount: 500000,
+      financialYear: '2026-2027',
+      budgetHead: 'IT Infrastructure',
+    },
+    items: [
+      {
+        name: 'Other (specify)',
+        budgetItem: 'OTHER',
+        remarks: '[Custom item: Computers] — 5 Desktop PCs',
+        requestedQuantity: 5,
+        unitCost: 50000,
+        requestedAmount: 250000,
+        approvedAmount: 250000,
+        approvedQuantity: 5,
+        status: 'APPROVED',
+      },
+      {
+        name: 'Other (specify)',
+        budgetItem: 'OTHER',
+        remarks: '[Custom item: Servers] — 2 Rack Servers',
+        requestedQuantity: 2,
+        unitCost: 125000,
+        requestedAmount: 250000,
+        approvedAmount: 250000,
+        approvedQuantity: 2,
+        status: 'APPROVED',
+      },
+    ],
+  };
+
+  const doc = await generateOfficialPdf(customData);
+  const pdfText = doc.output();
+  assert.ok(pdfText.includes('Computers'), 'PDF output text must include "Computers"');
+  assert.ok(pdfText.includes('Servers'), 'PDF output text must include "Servers"');
+  assert.ok(!pdfText.includes('Other (specify)'), 'PDF output text must not include "Other (specify)"');
+});
+
