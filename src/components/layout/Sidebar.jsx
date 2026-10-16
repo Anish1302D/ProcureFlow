@@ -100,11 +100,9 @@ export const Sidebar = ({ isOpen, closeSidebar }) => {
       <aside className={`fixed lg:static top-0 left-0 bottom-0 z-40 w-60 bg-white border-r border-gray-200 flex flex-col transition-transform duration-300 ${
         isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
       }`}>
-        <div className="h-14 px-5 flex items-center gap-3 border-b border-gray-200">
-          <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-extrabold text-xs shadow-sm">SP</div>
-          <div>
-            <h2 className="text-sm font-bold text-gray-900 tracking-tight leading-none">S.P. College</h2>
-            <p className="text-[10px] text-gray-400 font-medium tracking-wide uppercase">Approval Hub</p>
+        <div className="h-14 px-5 flex items-center border-b border-gray-200">
+          <div className="h-8 overflow-hidden flex items-center">
+            <img src="/ProcureFlow-logo-horizontal.png" alt="ProcureFlow" className="h-28 w-auto max-w-none object-contain -ml-1.5" />
           </div>
         </div>
 
