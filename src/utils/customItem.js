@@ -12,9 +12,6 @@ export function serializeCustomItem(name = '', remarks = '') {
 }
 
 export function parseCustomItem(item, remarks) {
-  if (item?.code !== 'OTHER') {
-    return { displayName: item?.name ?? '—', displayRemarks: remarks ?? null };
-  }
   const str = String(remarks ?? '');
   const match = /^\[Custom item: ((?:\\\]|[^\]])+)\](?:\s*—\s*)?(.*)$/s.exec(str);
   if (match) {
@@ -23,5 +20,10 @@ export function parseCustomItem(item, remarks) {
     const displayRemarks = match[2].trim() || null;
     return { displayName: unescapedName, displayRemarks };
   }
-  return { displayName: 'Other (custom item)', displayRemarks: remarks ?? null };
+  const code = (typeof item === 'string' ? item : (item?.code || item?.budgetItem)) ?? '';
+  const isOther = code === 'OTHER' || (item?.name && /^other/i.test(item.name.trim()));
+  if (isOther) {
+    return { displayName: item?.name || 'Other (custom item)', displayRemarks: remarks ?? null };
+  }
+  return { displayName: item?.name ?? (typeof item === 'string' ? item : '—'), displayRemarks: remarks ?? null };
 }

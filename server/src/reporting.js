@@ -7,6 +7,8 @@
 // separate report total, so a report cannot drift out of step with the
 // approvals it describes.
 
+import { parseCustomItem } from './customItem.js';
+
 const inr = new Intl.NumberFormat('en-IN', {
   style: 'currency', currency: 'INR', minimumFractionDigits: 0, maximumFractionDigits: 2,
 });
@@ -206,19 +208,22 @@ export async function assembleReport(db, detail) {
       carriedForwardFrom: detail.carriedForwardFrom,
     },
     // B. Item details
-    items: detail.items.map((i) => ({
-      name: i.budgetItem.name,
-      budgetItem: i.budgetItem.code,
-      requestedQuantity: i.requestedQuantity,
-      approvedQuantity: i.approvedQuantity,
-      unapprovedQuantity: i.unapprovedQuantity,
-      unitCost: i.unitCost,
-      requestedAmount: i.estimatedTotal,
-      approvedAmount: i.approvedAmount,
-      unapprovedAmount: Math.round((i.estimatedTotal - i.approvedAmount) * 100) / 100,
-      status: i.status,
-      remarks: i.remarks,
-    })),
+    items: detail.items.map((i) => {
+      const { displayName, displayRemarks } = parseCustomItem(i.budgetItem, i.remarks);
+      return {
+        name: displayName,
+        budgetItem: i.budgetItem.code,
+        requestedQuantity: i.requestedQuantity,
+        approvedQuantity: i.approvedQuantity,
+        unapprovedQuantity: i.unapprovedQuantity,
+        unitCost: i.unitCost,
+        requestedAmount: i.estimatedTotal,
+        approvedAmount: i.approvedAmount,
+        unapprovedAmount: Math.round((i.estimatedTotal - i.approvedAmount) * 100) / 100,
+        status: i.status,
+        remarks: displayRemarks ?? i.remarks,
+      };
+    }),
     // C. Budget information
     budget,
     // D. Supporting documents, every version of each

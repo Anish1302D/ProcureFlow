@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import zlib from 'node:zlib';
 import { generatePdfReport } from '../src/pdfReport.js';
 
 test('generatePdfReport produces a valid PDF buffer for comprehensive report data', async () => {
@@ -251,3 +252,83 @@ test('generatePdfReport formats multi-page histories and long messages without e
   assert.ok(buffer.length > 10000, 'multi-page PDF is substantially sized');
   assert.ok(buffer.toString('utf8', 0, 8).startsWith('%PDF-1.'));
 });
+
+test('generatePdfReport displays user-typed custom item names (e.g. Computers, Servers, Laptops) instead of "Other (specify)"', async () => {
+  const customItemsReport = {
+    title: 'Department Equipment Report',
+    requestNumber: 'REQ-2026-0001',
+    generatedAt: '2026-10-16T10:00:00Z',
+    request: {
+      requestNumber: 'REQ-2026-0001',
+      title: 'IT Infrastructure Requisition',
+      department: 'Computer Science',
+      status: 'APPROVED',
+      requestedAmount: 500000,
+      sanctionedAmount: 500000,
+      financialYear: '2026-2027',
+      budgetHead: 'Information Technology Infrastructure',
+    },
+    items: [
+      {
+        id: 'item-1',
+        name: 'Other (specify)',
+        budgetItem: 'OTHER',
+        code: 'OTHER',
+        remarks: '[Custom item: Computers] — Lab systems',
+        quantity: 5,
+        unitCost: 50000,
+        totalCost: 250000,
+        approvedQuantity: 5,
+        approvedAmount: 250000,
+      },
+      {
+        id: 'item-2',
+        name: 'Other (specify)',
+        budgetItem: 'OTHER',
+        code: 'OTHER',
+        remarks: '[Custom item: Servers] — Department server racks',
+        quantity: 2,
+        unitCost: 125000,
+        totalCost: 250000,
+        approvedQuantity: 2,
+        approvedAmount: 250000,
+      },
+    ],
+  };
+
+  const buffer = await generatePdfReport(customItemsReport);
+  assert.ok(Buffer.isBuffer(buffer));
+  const rawStr = buffer.toString('latin1');
+
+  let foundComputers = false;
+  let foundServers = false;
+  let foundOther = false;
+
+  const re = /stream\r?\n/g;
+  let m;
+  while ((m = re.exec(rawStr)) !== null) {
+    const start = m.index + m[0].length;
+    let end = rawStr.indexOf('\rendstream', start);
+    if (end === -1) end = rawStr.indexOf('\nendstream', start);
+    if (end === -1) continue;
+    try {
+      const inflated = zlib.inflateSync(buffer.subarray(start, end)).toString('utf8');
+      for (const tj of inflated.matchAll(/\[(.*?)\]\s*TJ/gs)) {
+        const text = [...tj[1].matchAll(/<([0-9a-fA-F]+)>/g)]
+          .map((x) => Buffer.from(x[1], 'hex').toString('utf8'))
+          .join('');
+        if (text.includes('Computers')) foundComputers = true;
+        if (text.includes('Servers')) foundServers = true;
+        if (text.includes('Other (specify)')) foundOther = true;
+      }
+    } catch (_err) {
+      // Ignore streams that are not zlib deflate streams
+    }
+  }
+
+  assert.ok(foundComputers, 'PDF must include custom item name "Computers"');
+  assert.ok(foundServers, 'PDF must include custom item name "Servers"');
+  assert.ok(!foundOther, 'PDF must not show "Other (specify)"');
+});
+
+

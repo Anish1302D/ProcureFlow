@@ -1,5 +1,6 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { parseCustomItem } from './customItem.js';
 
 /**
  * Formats a date to Indian Standard Time: DD/MM/YYYY HH:MM IST
@@ -233,17 +234,27 @@ export async function generateOfficialPdf(reportData, saveAsFilename = null) {
   doc.text('Itemised Requirements & Sanction Breakdown:', left, curY);
   curY += 7;
 
-  const itemBody = items.map((i, idx) => [
-    idx + 1,
-    i.name || i.budgetItem || '—',
-    i.budgetItem || '—',
-    i.requestedQuantity != null ? String(i.requestedQuantity) : '—',
-    i.approvedQuantity != null ? String(i.approvedQuantity) : '—',
-    formatMoney(i.unitCost),
-    formatMoney(i.requestedAmount),
-    formatMoney(i.approvedAmount),
-    i.status || 'PENDING',
-  ]);
+  const itemBody = items.map((i, idx) => {
+    const { displayName } = parseCustomItem(
+      typeof i.budgetItem === 'object' ? i.budgetItem : { code: i.code || i.budgetItem, name: i.name },
+      i.remarks,
+    );
+    const resolvedName = (displayName && displayName !== 'Other (specify)' && displayName !== 'Other (custom item)')
+      ? displayName
+      : (i.name || (typeof i.budgetItem === 'string' ? i.budgetItem : i.budgetItem?.name) || '—');
+    const budgetCode = typeof i.budgetItem === 'string' ? i.budgetItem : (i.code || i.budgetItem?.code || '—');
+    return [
+      idx + 1,
+      resolvedName,
+      budgetCode,
+      i.requestedQuantity != null ? String(i.requestedQuantity) : '—',
+      i.approvedQuantity != null ? String(i.approvedQuantity) : '—',
+      formatMoney(i.unitCost),
+      formatMoney(i.requestedAmount),
+      formatMoney(i.approvedAmount),
+      i.status || 'PENDING',
+    ];
+  });
 
   itemBody.push([
     '',

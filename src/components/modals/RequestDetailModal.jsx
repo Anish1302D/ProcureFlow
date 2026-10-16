@@ -83,19 +83,22 @@ export const RequestDetailModal = () => {
             extra: r.extra,
             carriedForwardFrom: r.carriedForwardFrom,
           },
-          items: (r.items || []).map((i) => ({
-            name: i.budgetItem?.name,
-            budgetItem: i.budgetItem?.code,
-            requestedQuantity: i.requestedQuantity,
-            approvedQuantity: i.approvedQuantity,
-            unapprovedQuantity: i.unapprovedQuantity,
-            unitCost: i.unitCost,
-            requestedAmount: i.estimatedTotal,
-            approvedAmount: i.approvedAmount,
-            unapprovedAmount: (i.estimatedTotal || 0) - (i.approvedAmount || 0),
-            status: i.status,
-            remarks: i.remarks,
-          })),
+          items: (r.items || []).map((i) => {
+            const { displayName, displayRemarks } = parseCustomItem(i.budgetItem, i.remarks);
+            return {
+              name: displayName,
+              budgetItem: i.budgetItem?.code,
+              requestedQuantity: i.requestedQuantity,
+              approvedQuantity: i.approvedQuantity,
+              unapprovedQuantity: i.unapprovedQuantity,
+              unitCost: i.unitCost,
+              requestedAmount: i.estimatedTotal,
+              approvedAmount: i.approvedAmount,
+              unapprovedAmount: (i.estimatedTotal || 0) - (i.approvedAmount || 0),
+              status: i.status,
+              remarks: displayRemarks ?? i.remarks,
+            };
+          }),
           documents: (r.attachments || []).map((a) => ({
             fileName: a.fileName,
             versionNumber: a.versionNumber,
