@@ -8,7 +8,7 @@ import { RequestTable } from '../components/requests/RequestTable';
 
 /**
  * Home for the Purchase Committee, CDC members, the Chairman and the Vice
- * President: what is waiting at their stage, and what has passed through it.
+ * Chairman: what is waiting at their stage, and what has passed through it.
  */
 export const ApproverDashboard = () => {
   const { user, setActivePage } = useApp();

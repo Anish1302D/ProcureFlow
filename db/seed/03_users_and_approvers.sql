@@ -30,7 +30,7 @@ INSERT INTO users (email, full_name, password_hash, department_id, employee_id, 
     ('chairman.former@spcollege.edu',  'Shri. R. S. Kelkar (Chairman - Former)', crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                         'EMP-GOV-001',  FALSE),
     ('chairman@spcollege.edu',         'Shri. K. Bhave (Chairman)',              crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                         'EMP-GOV-002',  TRUE),
     ('vp.former@spcollege.edu',        'Dr. H. V. Gadgil (Vice Chairman - Former)', crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                      'EMP-GOV-003',  FALSE),
-    ('vp@spcollege.edu',               'Smt. L. Karve (Vice President)',         crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                         'EMP-GOV-004',  TRUE),
+    ('vp@spcollege.edu',               'Smt. L. Karve (Vice Chairman)',          crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                         'EMP-GOV-004',  TRUE),
     ('clerk@spcollege.edu',            'D. Sawant (Clerk)',                      crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                         'EMP-ADM-001',  TRUE),
     ('admin@spcollege.edu',            'System Administrator',                   crypt('ChangeMe#2026', gen_salt('bf', 12)), NULL,                                                         'EMP-ADM-000',  TRUE)
 ON CONFLICT (email) DO UPDATE SET

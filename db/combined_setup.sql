@@ -1744,7 +1744,7 @@ INSERT INTO users (email, full_name, password_hash) VALUES
     ('cdc.grant@spcollege.edu',  'P. Shinde (CDC Grant)',         crypt('ChangeMe#2026', gen_salt('bf', 12))),
     ('cdc.nongrant@spcollege.edu','N. Gokhale (CDC Non-Grant)',   crypt('ChangeMe#2026', gen_salt('bf', 12))),
     ('chairman@spcollege.edu',   'Shri. K. Bhave (Chairman)',     crypt('ChangeMe#2026', gen_salt('bf', 12))),
-    ('vp@spcollege.edu',         'Smt. L. Karve (Vice President)',crypt('ChangeMe#2026', gen_salt('bf', 12))),
+    ('vp@spcollege.edu',         'Smt. L. Karve (Vice Chairman)',crypt('ChangeMe#2026', gen_salt('bf', 12))),
     ('clerk@spcollege.edu',      'D. Sawant (Clerk)',             crypt('ChangeMe#2026', gen_salt('bf', 12))),
     ('admin@spcollege.edu',      'System Administrator',          crypt('ChangeMe#2026', gen_salt('bf', 12)))
 ON CONFLICT (email) DO NOTHING;

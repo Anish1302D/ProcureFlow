@@ -9,7 +9,7 @@ sequenceDiagram
     participant NS as Notification Service
     actor P as Principal
     actor C as CDC (Grant + Non-Grant)
-    actor F as Chairman + VP
+    actor F as Chairman + Vice Chairman
 
     H->>UI: Fill request, add budget items
     UI->>API: POST /requests (items[], budget_head, FY)

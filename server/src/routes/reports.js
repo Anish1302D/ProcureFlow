@@ -161,9 +161,9 @@ reportsRouter.get('/reports/summary', async (req, res) => {
 
   const isHigherAuthority = hasAnyRole(req.user, APPROVAL_BUDGET_ROLES);
 
-  // Approval & budget reports are restricted to Principal, CDC, Chairman, Vice President, Admin.
+  // Approval & budget reports are restricted to Principal, CDC, Chairman, Vice Chairman, Admin.
   if (reportType === 'approval-budget' && !isHigherAuthority) {
-    throw forbidden('Approval & Budget Reports are restricted to Principal, CDC, Chairman and Vice President');
+    throw forbidden('Approval & Budget Reports are restricted to Principal, CDC, Chairman and Vice Chairman');
   }
 
   // A requester/HOD who is not higher authority cannot inspect another department's separate data.

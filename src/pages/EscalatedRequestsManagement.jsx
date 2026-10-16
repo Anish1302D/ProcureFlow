@@ -4,7 +4,7 @@ import { RequestTable } from '../components/requests/RequestTable';
 
 /**
  * Requests with the higher authorities: CDC, then the Chairman and Vice
- * President. Requests of ₹5 lakh and more go to CDC directly; others arrive
+ * Chairman. Requests of ₹5 lakh and more go to CDC directly; others arrive
  * here when a lower stage escalates them.
  */
 export const EscalatedRequestsManagement = () => (

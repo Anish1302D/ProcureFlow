@@ -243,7 +243,7 @@ test('department-wise report filtering and role-based download permissions', asy
   // HOD / regular members CANNOT download Approval & Budget reports (HTTP 403 Forbidden)
   const headForbidden = await t.api('GET', `/api/reports/summary?financialYearId=${ids.fy}&reportType=approval-budget`, { token: tok.head });
   expectStatus(headForbidden, 403);
-  assert.match(headForbidden.body?.error?.message ?? '', /restricted to Principal, CDC, Chairman and Vice President/i);
+  assert.match(headForbidden.body?.error?.message ?? '', /restricted to Principal, CDC, Chairman and Vice Chairman/i);
 
   // HOD CAN download Requests report for their department
   const headRequestsReport = expectStatus(

@@ -392,7 +392,7 @@ function notifyRequestAsync({ request, actorId, action, comments, rejectionReaso
           }
         }
 
-        // 3. Notify BOTH Chairman and VP on entering Final Authority stage
+        // 3. Notify BOTH Chairman and Vice Chairman on entering Final Authority stage
         if (request.status === 'UNDER_FINAL_AUTHORITY_REVIEW') {
           try {
             const finalApprovers = await resolveFinalApprovers();
@@ -404,7 +404,7 @@ function notifyRequestAsync({ request, actorId, action, comments, rejectionReaso
                   recipientName: finalMember.name,
                   notificationType: 'FINAL AUTHORITY REVIEW REQUIRED',
                   emailAction: 'Request Awaiting Final Approval',
-                  eventDescription: `Financial request "${request.title}" requires joint Chairman/VP review.`,
+                  eventDescription: `Financial request "${request.title}" requires joint Chairman/Vice Chairman review.`,
                   decision: 'PENDING REVIEW',
                   approverName: actor.full_name,
                   approverRole: 'Approver',
@@ -439,7 +439,7 @@ function notifyRequestAsync({ request, actorId, action, comments, rejectionReaso
               } else if (request.status === 'UNDER_CDC_REVIEW') {
                 desc = `Your financial request "${request.title}" has been reviewed by the Principal and forwarded to the CDC for review.`;
               } else if (request.status === 'UNDER_FINAL_AUTHORITY_REVIEW') {
-                desc = `Your financial request "${request.title}" has been forwarded to the Chairman & Vice President for final approval.`;
+                desc = `Your financial request "${request.title}" has been forwarded to the Chairman & Vice Chairman for final approval.`;
               }
             }
 

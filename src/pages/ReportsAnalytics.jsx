@@ -21,7 +21,7 @@ import { DataState } from '../components/ui/States';
 
 /**
  * Spending by budget head and department, from real requests.
- * Higher authorities (Principal, CDC, Chairman, VP, Admin) can download Approval & Budget reports
+ * Higher authorities (Principal, CDC, Chairman, Vice Chairman, Admin) can download Approval & Budget reports
  * (both combined and department-wise), Requisitions reports, and Issues reports.
  * HODs and faculty members can download Requisitions and Issues reports for their department.
  */
@@ -238,7 +238,7 @@ export const ReportsAnalytics = () => {
               )}
             </>
           ) : (
-            <div className="flex items-center gap-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5" title="Only Principal, CDC Members, Chairman and Vice President may download the financial budget sanction report">
+            <div className="flex items-center gap-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5" title="Only Principal, CDC Members, Chairman and Vice Chairman may download the financial budget sanction report">
               <Lock className="w-3.5 h-3.5 text-amber-600" />
               <span>Budget Sanction Report: Reserved for Principal & CDC</span>
             </div>

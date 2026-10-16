@@ -31,7 +31,7 @@ anywhere Mermaid is supported (GitHub, mermaid.live, VS Code).
 | `02_erd.mmd` | Entity relationships — the full relational model |
 | `03_class.mmd` | Class model, including the workflow engine |
 | `04_state.mmd` | Request lifecycle — all fourteen states |
-| `05_sequence.mmd` | Escalation of a ₹6,00,000 request to Chairman + VP |
+| `05_sequence.mmd` | Escalation of a ₹6,00,000 request to Chairman + Vice Chairman |
 | `06_workflow.mmd` | Approval workflow — routing and escalation |
 
 ## Backend Build Plan

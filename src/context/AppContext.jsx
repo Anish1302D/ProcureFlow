@@ -9,7 +9,7 @@ export function portalFor(user) {
   if (!user) return null;
   if (user.roles.includes('ADMIN')) return 'admin';
   if (user.roles.includes('PRINCIPAL')) return 'principal';
-  if (user.stages.length > 0) return 'approver'; // Purchase Committee, CDC, Chairman, VP
+  if (user.stages.length > 0) return 'approver'; // Purchase Committee, CDC, Chairman, Vice Chairman
   return 'faculty';
 }
 

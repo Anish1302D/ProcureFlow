@@ -20,7 +20,7 @@ Roles are data, not code: adding a CDC member is a row, not a release.
 | Purchase Committee | Check every request for completeness; pass it to the Principal or send it back for correction. Never decides the spending |
 | Principal | Sees every request whatever its size; decides up to ₹50,000; refers larger ones on; read all college data; manage faculty issues |
 | CDC (Grant and Non-Grant members) | Decide ₹50,000 to ₹5 lakh — **both** must record a decision |
-| Chairman, Vice President | Decide above ₹5 lakh jointly — **both** must record a decision; no further escalation |
+| Chairman, Vice Chairman | Decide above ₹5 lakh jointly — **both** must record a decision; no further escalation |
 | Administrator | Inventory, purchase bills, exports, audit log |
 | Anyone signed in | Raise and follow faculty issues |
 

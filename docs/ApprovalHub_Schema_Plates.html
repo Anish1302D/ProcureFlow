@@ -562,7 +562,7 @@ flowchart LR
     PC(("Purchase&lt;br/&gt;Committee"))
     PR(("Principal"))
     CDC(("CDC Member&lt;br/&gt;Grant / Non-Grant"))
-    FA(("Chairman +&lt;br/&gt;Vice President"))
+    FA(("Chairman +&lt;br/&gt;Vice Chairman"))
     ADM(("Admin / Clerk"))
 
     subgraph System["Approval &amp; Workflow Management System"]
@@ -646,7 +646,7 @@ flowchart LR
       <h2>Approval workflow</h2>
       <p class="lede">
         A request enters at the stage whose amount window contains its total, then escalates
-        upward. Each authority holds the same four verbs; only Chairman + Vice President
+        upward. Each authority holds the same four verbs; only Chairman + Vice Chairman
         cannot escalate further.
       </p>
 
@@ -679,7 +679,7 @@ flowchart TD
     CDCD --&gt;|Approve| APPROVED
     CDCD --&gt;|Partial Approve| PARTIAL
     CDCD --&gt;|Reject| REJECTED
-    CDCD --&gt;|Escalate| FA[Chairman + Vice President&lt;br/&gt;final authority]
+    CDCD --&gt;|Escalate| FA[Chairman + Vice Chairman&lt;br/&gt;final authority]
 
     FA --&gt; FAD{Decision - final}
     FAD --&gt;|Approve| APPROVED
@@ -1140,7 +1140,7 @@ stateDiagram-v2
       <span class="sec-num">Figure 6 — Interaction</span>
       <h2>Escalation sequence</h2>
       <p class="lede">
-        One ₹6,00,000 request travelling from a department head to Chairman + Vice President,
+        One ₹6,00,000 request travelling from a department head to Chairman + Vice Chairman,
         ending in a partial approval of ₹2,50,000 — and every row the database writes along the way.
       </p>
 
@@ -1157,7 +1157,7 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant NS as Notifications
     actor C as CDC
-    actor F as Chairman + VP
+    actor F as Chairman + Vice Chairman
 
     H-&gt;&gt;UI: Fill request, add budget items
     UI-&gt;&gt;API: POST /requests
