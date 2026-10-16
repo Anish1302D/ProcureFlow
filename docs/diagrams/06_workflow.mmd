@@ -24,7 +24,7 @@ flowchart TD
     CDCD -->|Approve| APPROVED
     CDCD -->|Partial Approve| PARTIAL
     CDCD -->|Reject| REJECTED
-    CDCD -->|Escalate| FA[Chairman + Vice President<br/>UNDER_FINAL_AUTHORITY_REVIEW]
+    CDCD -->|Escalate| FA[Chairman + Vice Chairman<br/>UNDER_FINAL_AUTHORITY_REVIEW]
 
     FA --> FAD{Decision - final}
     FAD -->|Approve| APPROVED

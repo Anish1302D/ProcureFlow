@@ -58,7 +58,7 @@ const STATUS = {
     UNDER_PURCHASE_COMMITTEE_REVIEW: ['With Purchase Committee', 'amber'],
     UNDER_PRINCIPAL_REVIEW: ['With Principal', 'amber'],
     UNDER_CDC_REVIEW: ['With CDC', 'violet'],
-    UNDER_FINAL_AUTHORITY_REVIEW: ['With Chairman & VP', 'violet'],
+    UNDER_FINAL_AUTHORITY_REVIEW: ['With Chairman & Vice Chairman', 'violet'],
     AWAITING_RESUBMISSION: ['Back for correction', 'orange'],
     APPROVED: ['Approved', 'emerald'],
     PARTIALLY_APPROVED: ['Partially approved', 'teal'],
@@ -125,7 +125,7 @@ export const ROLE_LABELS = {
   CDC_GRANT_MEMBER: 'CDC Grant Member',
   CDC_NON_GRANT_MEMBER: 'CDC Non-Grant Member',
   CHAIRMAN: 'Chairman',
-  VICE_PRESIDENT: 'Vice President',
+  VICE_PRESIDENT: 'Vice Chairman',
   ADMIN: 'Administrator',
 };
 

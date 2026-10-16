@@ -439,7 +439,7 @@ column of its own.
 - [ ] Add a stage-addressed or downward feedback channel for Principal → Purchase
       Committee (§3.3)
 - [ ] Add a review action/state to budget provisions for the Principal (§3.5)
-- [ ] Correct Vice President / Vice Chairman terminology once confirmed (§4.3)
+- [x] Correct Vice President / Vice Chairman terminology once confirmed (§4.3)
 - [ ] Confirm and remove the legacy `CDC_MEMBER` role (Q11)
 
 #### P2 — Reporting / documents
@@ -797,7 +797,7 @@ appears for an administrator and not for the requester.
 | Purchase Committee | Requests at or past their stage | Pass to Principal, send back, reject, comment. **Cannot approve** |
 | Principal | Every submitted request (read-all, never edit-all) | Decide ≤ ₹50k, refer above, reject, send back, comment |
 | CDC Grant / Non-Grant | Requests at or past the CDC stage | Approve / partially approve / reject; both required |
-| Chairman / Vice President | Requests at or past the final stage | Approve / partially approve / reject; both required; cannot escalate |
+| Chairman / Vice Chairman | Requests at or past the final stage | Approve / partially approve / reject; both required; cannot escalate |
 | Administrator | Everything, plus the audit log | Master data, users, inventory, bills, exports. **Not an approver** |
 | Clerk | Nothing by default | Issues only |
 | Not signed in | Nothing | Fails closed |
