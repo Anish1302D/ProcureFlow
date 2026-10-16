@@ -91,12 +91,11 @@ export const Login = () => {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col justify-between p-6">
       <div className="max-w-6xl w-full mx-auto flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-extrabold text-base">SP</div>
-          <div>
-            <h1 className="text-base font-extrabold text-gray-900">S.P. College</h1>
-            <p className="text-[10px] text-gray-400 font-semibold tracking-widest uppercase">Approval &amp; Workflow Management</p>
+        <div className="flex flex-col justify-center">
+          <div className="h-9 overflow-hidden flex items-center">
+            <img src="/ProcureFlow-logo-horizontal.png" alt="ProcureFlow" className="h-32 w-auto max-w-none object-contain -ml-2" />
           </div>
+          <p className="text-[10px] text-gray-400 font-semibold tracking-widest uppercase pl-0.5">Approval &amp; Workflow Management</p>
         </div>
         <div className="flex items-center gap-1.5 text-xs text-gray-400"><Lock className="w-3.5 h-3.5" /> Institutional access</div>
       </div>
@@ -199,7 +198,7 @@ export const Login = () => {
 
       <div className="max-w-6xl w-full mx-auto flex flex-col sm:flex-row items-center justify-between text-xs text-gray-400 border-t border-gray-200 pt-4">
         <p>© 2026 S.P. College</p>
-        <p>Approval Hub</p>
+        <p>ProcureFlow</p>
       </div>
     </div>
   );
