@@ -39,5 +39,6 @@ INSERT INTO schema_migrations (filename) VALUES
     ('20261011T230000_secure_account_activation.sql'),
     ('20261014T100000_historical_user_member_architecture.sql'),
     ('20261015T100000_workflow_engine_enhancements.sql'),
-    ('20261015T180000_cdc_route_single_rule.sql')
+    ('20261015T180000_cdc_route_single_rule.sql'),
+    ('20261017T120000_remove_issue_assignment_and_escalation.sql')
 ON CONFLICT (filename) DO NOTHING;

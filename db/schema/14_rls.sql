@@ -194,7 +194,7 @@ AS $$
        );
 $$;
 
--- Issue participants: raiser, assignee, escalation target, and the Principal.
+-- Issue participants: raiser and the Principal.
 CREATE OR REPLACE FUNCTION app_can_see_issue(p_issue_id UUID)
 RETURNS BOOLEAN
 LANGUAGE sql
@@ -206,7 +206,7 @@ AS $$
         OR EXISTS (
             SELECT 1 FROM issues i
             WHERE i.issue_id = p_issue_id
-              AND app_current_user_id() IN (i.raised_by, i.assigned_to, i.escalated_to)
+              AND app_current_user_id() = i.raised_by
         );
 $$;
 
@@ -457,11 +457,9 @@ CREATE POLICY budget_provisions_write ON budget_provisions
         )
     );
 
--- Non-financial issues: raiser, assignee, escalation target, Principal, Admin.
--- Split so the Principal and assignee can move an issue along (review,
--- assign, resolve) — previously only the raiser could update it, so the
--- Principal could see an issue but never resolve it. There is no DELETE
--- policy: issues are part of the record.
+-- Non-financial issues: raiser, Principal, Admin.
+-- Admin is view-only; only the Principal can change status.
+-- There is no DELETE policy: issues are part of the record.
 ALTER TABLE issues ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY issues_read ON issues
@@ -469,7 +467,7 @@ CREATE POLICY issues_read ON issues
     USING (
         app_has_role('ADMIN')
         OR app_has_role('PRINCIPAL')
-        OR app_current_user_id() IN (raised_by, assigned_to, escalated_to)
+        OR raised_by = app_current_user_id()
     );
 
 CREATE POLICY issues_insert ON issues
@@ -481,12 +479,12 @@ CREATE POLICY issues_update ON issues
     USING (
         app_has_role('ADMIN')
         OR app_has_role('PRINCIPAL')
-        OR app_current_user_id() IN (raised_by, assigned_to, escalated_to)
+        OR raised_by = app_current_user_id()
     )
     WITH CHECK (
         app_has_role('ADMIN')
         OR app_has_role('PRINCIPAL')
-        OR app_current_user_id() IN (raised_by, assigned_to, escalated_to)
+        OR raised_by = app_current_user_id()
     );
 
 -- The audit log is append-only for everyone; only Admin reads it back.

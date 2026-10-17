@@ -3,33 +3,29 @@ import { z } from 'zod';
 import { config } from '../config.js';
 import { pool, queryAll, withUser } from '../db.js';
 import { buildIssueCreatedEmail } from '../emailTemplates.js';
-import { conflict, forbidden, notFound, unprocessable } from '../errors.js';
+import { conflict, forbidden, notFound } from '../errors.js';
 import { sendMail } from '../mailer.js';
 import { ISSUE_MANAGER_ROLES, hasAnyRole } from '../roles.js';
-import { flag, id, pagination, param } from '../validate.js';
+import { flag, pagination, param } from '../validate.js';
 
 // Non-financial issues: deliberately lightweight (requirements §3.2) — free
 // text, no mandatory categories, a short status trail.
 export const issuesRouter = Router();
 
-const STATUSES = ['SUBMITTED', 'IN_REVIEW', 'ESCALATED', 'RESOLVED', 'CLOSED'];
+const STATUSES = ['SUBMITTED', 'IN_REVIEW', 'RESOLVED', 'CLOSED'];
 
 // Where an issue may go next. RESOLVED can reopen to IN_REVIEW; CLOSED is final.
 const NEXT = {
-  SUBMITTED: ['IN_REVIEW', 'ESCALATED', 'RESOLVED', 'CLOSED'],
-  IN_REVIEW: ['ESCALATED', 'RESOLVED', 'CLOSED'],
-  ESCALATED: ['IN_REVIEW', 'RESOLVED', 'CLOSED'],
+  SUBMITTED: ['IN_REVIEW', 'RESOLVED', 'CLOSED'],
+  IN_REVIEW: ['RESOLVED', 'CLOSED'],
   RESOLVED: ['IN_REVIEW', 'CLOSED'],
   CLOSED: [],
 };
 
 const SELECT_ISSUE = `
-  SELECT i.*, rb.full_name AS raised_by_name, at.full_name AS assigned_to_name,
-         et.full_name AS escalated_to_name, count(*) OVER () AS total_count
+  SELECT i.*, rb.full_name AS raised_by_name, count(*) OVER () AS total_count
     FROM issues i
-    JOIN users rb      ON rb.user_id = i.raised_by
-    LEFT JOIN users at ON at.user_id = i.assigned_to
-    LEFT JOIN users et ON et.user_id = i.escalated_to`;
+    JOIN users rb ON rb.user_id = i.raised_by`;
 
 const person = (userId, name) => (userId ? { id: userId, name } : null);
 
@@ -40,26 +36,19 @@ const issueRow = (r) => ({
   description: r.description,
   status: r.status,
   raisedBy: person(r.raised_by, r.raised_by_name),
-  assignedTo: person(r.assigned_to, r.assigned_to_name),
-  escalatedTo: person(r.escalated_to, r.escalated_to_name),
   createdAt: r.created_at,
   updatedAt: r.updated_at,
-  escalatedAt: r.escalated_at,
   resolvedAt: r.resolved_at,
 });
 
 function permissions(issue, user) {
-  const manager = hasAnyRole(user, ISSUE_MANAGER_ROLES);
-  const handler = [issue.assigned_to, issue.escalated_to].includes(user.id);
+  const isPrincipal = hasAnyRole(user, ISSUE_MANAGER_ROLES);
   const raiser = issue.raised_by === user.id;
-  const next = NEXT[issue.status];
+  const next = NEXT[issue.status] ?? [];
   const allowed = new Set();
-  if (manager) next.forEach((s) => allowed.add(s));
-  if (handler && next.includes('RESOLVED')) allowed.add('RESOLVED');
+  if (isPrincipal) next.forEach((s) => allowed.add(s));
   if (raiser && issue.status === 'RESOLVED') allowed.add('CLOSED');
   return {
-    canAssign: manager && issue.status !== 'CLOSED',
-    canEscalate: manager && next.includes('ESCALATED'),
     canComment: issue.status !== 'CLOSED',
     statusesAllowed: [...allowed],
   };
@@ -120,7 +109,6 @@ const listQuery = z.object({
     .transform((value) => (value ? value.split(',').map((s) => s.trim().toUpperCase()) : null))
     .pipe(z.array(z.enum(STATUSES)).nullable()),
   mine: flag,
-  assignedToMe: flag,
   ...pagination,
 });
 
@@ -129,11 +117,10 @@ issuesRouter.get('/', async (req, res) => {
   const rows = await withUser(req.user.id, async (db) => (await db.query(
     `${SELECT_ISSUE}
       WHERE ($1::issue_status[] IS NULL OR i.status = ANY($1))
-        AND (NOT $2 OR i.raised_by = $4)
-        AND (NOT $3 OR $4 IN (i.assigned_to, i.escalated_to))
+        AND (NOT $2 OR i.raised_by = $3)
       ORDER BY i.updated_at DESC, i.issue_id
-      LIMIT $5 OFFSET $6`,
-    [f.status, f.mine ?? false, f.assignedToMe ?? false, req.user.id, f.limit, f.offset],
+      LIMIT $4 OFFSET $5`,
+    [f.status, f.mine ?? false, req.user.id, f.limit, f.offset],
   )).rows);
   res.json({ items: rows.map(issueRow), total: rows[0]?.total_count ?? 0, limit: f.limit, offset: f.offset });
 });
@@ -160,9 +147,6 @@ issuesRouter.post('/', async (req, res) => {
   // the issue itself.
   (async () => {
     try {
-      console.log('[issues] Preparing issue-created email for issue', result.id);
-
-      // Fetch the raiser's details for the email
       const { rows: raiserRows } = await pool.query(
         'SELECT full_name, email FROM users WHERE user_id = $1',
         [req.user.id],
@@ -172,7 +156,6 @@ issuesRouter.post('/', async (req, res) => {
         console.warn('[issues] Could not find raiser user', req.user.id, '— skipping email');
         return;
       }
-      console.log('[issues] Raiser:', raiser.full_name, raiser.email);
 
       // Resolve the principal: check config first, then look up from user_roles
       let principalEmail = config.principalEmail;
@@ -197,8 +180,6 @@ issuesRouter.post('/', async (req, res) => {
         console.warn('[issues] Principal lookup failed, using config fallback:', dbErr.message);
       }
 
-      console.log('[issues] Sending issue-created email to', principalEmail, '(', principalName, ')');
-
       const emailData = buildIssueCreatedEmail({
         issue: result,
         raiser: { fullName: raiser.full_name, email: raiser.email },
@@ -206,11 +187,9 @@ issuesRouter.post('/', async (req, res) => {
         principalName,
       });
 
-      const info = await sendMail(emailData);
-      console.log('[issues] Issue-created email sent successfully:', JSON.stringify(info));
+      await sendMail(emailData);
     } catch (err) {
       console.error('[issues] Failed to send issue-created email:', err.message);
-      console.error('[issues] Full error:', err.stack || err);
     }
   })();
 
@@ -222,19 +201,10 @@ issuesRouter.get('/:id', async (req, res) => {
   res.json(await withUser(req.user.id, (db) => detail(db, issueId, req.user)));
 });
 
-const updateSchema = z
-  .object({
-    status: z.enum(STATUSES).optional(),
-    assignedTo: id.nullable().optional(),
-    escalatedTo: id.optional(),
-    note: z.string().trim().max(2000).optional(),
-  })
-  .refine((v) => v.status || v.assignedTo !== undefined || v.escalatedTo, 'Nothing to update');
-
-async function requireActiveUser(db, userId, label) {
-  const { rowCount } = await db.query('SELECT 1 FROM users WHERE user_id = $1 AND is_active', [userId]);
-  if (!rowCount) throw unprocessable(`${label} is not an active user`);
-}
+const updateSchema = z.object({
+  status: z.enum(STATUSES),
+  note: z.string().trim().max(2000).optional(),
+});
 
 issuesRouter.patch('/:id', async (req, res) => {
   const issueId = param(req, 'id');
@@ -245,18 +215,13 @@ issuesRouter.patch('/:id', async (req, res) => {
     if (!issue) throw notFound('Issue not found');
     await db.query('SELECT 1 FROM issues WHERE issue_id = $1 FOR UPDATE', [issueId]);
 
-    const perms = permissions(issue, req.user);
-    const manager = hasAnyRole(req.user, ISSUE_MANAGER_ROLES);
-
-    if ((body.assignedTo !== undefined || body.escalatedTo) && !manager) {
-      throw forbidden('Only the Principal can assign or escalate issues');
-    }
     if (issue.status === 'CLOSED') throw conflict('This issue is closed');
 
-    let status = body.status ?? issue.status;
-    if (body.escalatedTo && !body.status) status = 'ESCALATED';
+    const perms = permissions(issue, req.user);
+    const { status } = body;
+
     if (status !== issue.status) {
-      if (!NEXT[issue.status].includes(status)) {
+      if (!(NEXT[issue.status] ?? []).includes(status)) {
         throw conflict(`An issue cannot move from ${issue.status} to ${status}`);
       }
       if (!perms.statusesAllowed.includes(status)) {
@@ -264,34 +229,17 @@ issuesRouter.patch('/:id', async (req, res) => {
       }
     }
 
-    const escalatedTo = body.escalatedTo ?? issue.escalated_to;
-    if (status === 'ESCALATED' && !escalatedTo) {
-      throw unprocessable('Escalating needs someone to escalate to');
-    }
-    if (body.assignedTo) await requireActiveUser(db, body.assignedTo, 'The assignee');
-    if (body.escalatedTo) await requireActiveUser(db, body.escalatedTo, 'The escalation target');
-
     await db.query(
       `UPDATE issues
-          SET status       = $2::issue_status,
-              assigned_to  = CASE WHEN $3 THEN $4::uuid ELSE assigned_to END,
-              escalated_to = $5::uuid,
-              escalated_at = CASE WHEN $2::issue_status = 'ESCALATED' AND status <> 'ESCALATED'
-                                  THEN NOW() ELSE escalated_at END,
-              resolved_at  = CASE WHEN $2::issue_status = 'RESOLVED'  THEN NOW()
-                                  WHEN $2::issue_status = 'IN_REVIEW' THEN NULL
-                                  ELSE resolved_at END
+          SET status      = $2::issue_status,
+              resolved_at = CASE WHEN $2::issue_status = 'RESOLVED'  THEN NOW()
+                                 WHEN $2::issue_status = 'IN_REVIEW' THEN NULL
+                                 ELSE resolved_at END
         WHERE issue_id = $1`,
-      [issueId, status, body.assignedTo !== undefined, body.assignedTo ?? null, escalatedTo ?? null],
+      [issueId, status],
     );
 
-    if (body.assignedTo !== undefined && body.assignedTo !== issue.assigned_to) {
-      await addEvent(db, issueId, req.user.id, body.assignedTo ? 'ASSIGNED' : 'UNASSIGNED', body.note);
-    }
-    if (body.escalatedTo && body.escalatedTo !== issue.escalated_to) {
-      await addEvent(db, issueId, req.user.id, 'ESCALATED', body.note);
-    }
-    if (status !== issue.status && status !== 'ESCALATED') {
+    if (status !== issue.status) {
       await addEvent(db, issueId, req.user.id, status, body.note);
     }
     return detail(db, issueId, req.user);

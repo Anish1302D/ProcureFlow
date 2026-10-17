@@ -64,7 +64,6 @@ CREATE TYPE notification_status AS ENUM ('PENDING', 'SENT', 'READ', 'FAILED');
 CREATE TYPE issue_status AS ENUM (
     'SUBMITTED',
     'IN_REVIEW',
-    'ESCALATED',
     'RESOLVED',
     'CLOSED'
 );

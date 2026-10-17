@@ -82,7 +82,7 @@ export const Sidebar = ({ isOpen, closeSidebar }) => {
   const { user, portal, activePage, setActivePage, signOut } = useApp();
   const dashboard = useApi('/api/dashboard');
   const manager = portal === 'principal' || portal === 'admin';
-  const issues = useApi(manager ? '/api/issues?status=SUBMITTED,IN_REVIEW,ESCALATED&limit=1' : null);
+  const issues = useApi(manager ? '/api/issues?status=SUBMITTED,IN_REVIEW&limit=1' : null);
   const notes = useApi('/api/notifications?unread=true&limit=1');
 
   const badges = {

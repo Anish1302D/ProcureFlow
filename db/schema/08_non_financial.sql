@@ -5,12 +5,9 @@ CREATE TABLE issues (
     issue_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     issue_number        TEXT NOT NULL UNIQUE,      -- 'ISS-0007'
     raised_by           UUID NOT NULL REFERENCES users(user_id) ON DELETE RESTRICT,
-    assigned_to         UUID REFERENCES users(user_id) ON DELETE SET NULL,
     title               TEXT NOT NULL,
     description         TEXT NOT NULL,
     status              issue_status NOT NULL DEFAULT 'SUBMITTED',
-    escalated_at        TIMESTAMPTZ,
-    escalated_to        UUID REFERENCES users(user_id) ON DELETE SET NULL,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     resolved_at         TIMESTAMPTZ
@@ -18,7 +15,6 @@ CREATE TABLE issues (
 
 CREATE INDEX issues_status_idx     ON issues(status);
 CREATE INDEX issues_raised_by_idx  ON issues(raised_by);
-CREATE INDEX issues_assigned_idx   ON issues(assigned_to);
 
 CREATE TABLE issue_events (
     event_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),

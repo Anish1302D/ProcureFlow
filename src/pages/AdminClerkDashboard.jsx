@@ -11,7 +11,7 @@ export const AdminClerkDashboard = () => {
   const dashboard = useApi('/api/dashboard');
   const inventory = useApi('/api/inventory?limit=1');
   const bills = useApi('/api/purchase-bills?limit=6');
-  const issues = useApi('/api/issues?status=SUBMITTED,IN_REVIEW,ESCALATED&limit=1');
+  const issues = useApi('/api/issues?status=SUBMITTED,IN_REVIEW&limit=1');
 
   return (
     <div className="space-y-6">

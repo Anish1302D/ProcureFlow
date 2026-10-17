@@ -8,7 +8,7 @@ import { StatusBadge } from '../components/ui/StatusBadge';
 import { DataState } from '../components/ui/States';
 
 const FILTERS = {
-  open: { label: 'Open', status: 'SUBMITTED,IN_REVIEW,ESCALATED' },
+  open: { label: 'Open', status: 'SUBMITTED,IN_REVIEW' },
   RESOLVED: { label: 'Resolved', status: 'RESOLVED' },
   CLOSED: { label: 'Closed', status: 'CLOSED' },
   all: { label: 'All', status: undefined },
@@ -53,7 +53,7 @@ export const NonFinancialRequestsManagement = () => {
               </div>
               <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-[11px] text-gray-400">
                 <span className="text-gray-600">{i.raisedBy.name}</span>
-                <span>{i.assignedTo ? `→ ${i.assignedTo.name}` : 'Unassigned'} · {timeAgo(i.updatedAt)}</span>
+                <span>{timeAgo(i.updatedAt)}</span>
               </div>
             </button>
           ))}
