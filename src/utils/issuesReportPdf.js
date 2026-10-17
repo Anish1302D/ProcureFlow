@@ -46,7 +46,6 @@ function formatDate(d) {
 const ISSUE_STATUS_LABELS = {
   SUBMITTED: 'Submitted',
   IN_REVIEW: 'In Review',
-  ESCALATED: 'Escalated to Principal',
   RESOLVED: 'Resolved',
   CLOSED: 'Closed',
 };
@@ -69,7 +68,6 @@ export function generateIssuesReportPdf(data, saveAsFilename = null) {
 
   const totalIssues = issuesList.length;
   const inReviewCount = issuesList.filter((i) => i.status === 'IN_REVIEW' || i.status === 'SUBMITTED').length;
-  const escalatedCount = issuesList.filter((i) => i.status === 'ESCALATED').length;
   const resolvedCount = issuesList.filter((i) => i.status === 'RESOLVED').length;
   const closedCount = issuesList.filter((i) => i.status === 'CLOSED').length;
   const completedCount = resolvedCount + closedCount;
@@ -208,7 +206,6 @@ export function generateIssuesReportPdf(data, saveAsFilename = null) {
   const cards = [
     ['TOTAL ISSUES LOGGED', String(totalIssues), 'Maintenance & facility requests', INDIGO_500],
     ['ACTIVE / IN REVIEW', String(inReviewCount), 'Currently undergoing investigation', AMBER],
-    ['ESCALATED TO PRINCIPAL', String(escalatedCount), 'High priority administrative review', [239, 68, 68]],
     ['RESOLVED ISSUES', String(resolvedCount), `${pct(resolvedCount, totalIssues)}% turnaround rate`, EMERALD],
     ['CLOSED & ARCHIVED', String(closedCount), 'Action taken and confirmed', SLATE_700],
     ['OVERALL RESOLUTION RATE', totalIssues ? `${pct(completedCount, totalIssues)}%` : '—', `${completedCount} of ${totalIssues} completed`, [16, 185, 129]],
@@ -250,16 +247,14 @@ export function generateIssuesReportPdf(data, saveAsFilename = null) {
       formatDate(iss.createdAt),
       iss.department || '—',
       iss.raisedBy || '—',
-      doc.splitTextToSize(clean(iss.title), 120),
-      doc.splitTextToSize(clean(iss.description), 130),
+      doc.splitTextToSize(clean(iss.title), 160),
+      doc.splitTextToSize(clean(iss.description), 157),
       ISSUE_STATUS_LABELS[iss.status] || iss.status,
-      iss.assignedTo || 'Unassigned',
-      iss.escalatedTo || '—',
       formatDate(iss.resolvedAt),
     ]);
 
     table({
-      head: [['#', 'Issue No.', 'Logged Date', 'Dept', 'Raised By', 'Title', 'Description Summary', 'Status', 'Assigned To', 'Escalated', 'Resolved']],
+      head: [['#', 'Issue No.', 'Logged Date', 'Dept', 'Raised By', 'Title', 'Description Summary', 'Status', 'Resolved']],
       body,
       columnStyles: {
         0: { halign: 'center', cellWidth: 14 },
@@ -267,12 +262,10 @@ export function generateIssuesReportPdf(data, saveAsFilename = null) {
         2: { cellWidth: 40 },
         3: { cellWidth: 42 },
         4: { cellWidth: 50 },
-        5: { cellWidth: 85 },
-        6: { cellWidth: 95 },
+        5: { cellWidth: 125 },
+        6: { cellWidth: 122 },
         7: { cellWidth: 46 },
-        8: { cellWidth: 42 },
-        9: { cellWidth: 38 },
-        10: { cellWidth: 38 },
+        8: { cellWidth: 38 },
       },
     });
   }
