@@ -293,14 +293,11 @@ reportsRouter.get('/reports/summary', async (req, res) => {
              AND ($2::int IS NULL OR r.department_id = $2)
            ORDER BY r.request_number, bi.name`, [fy, targetDeptId ?? null]],
         [`SELECT i.issue_id, i.issue_number, i.title, i.description, i.status::text AS status,
-                 i.created_at, i.updated_at, i.escalated_at, i.resolved_at,
-                 u.full_name AS raised_by_name, d.name AS department_name, d.code AS department_code,
-                 at.full_name AS assigned_to_name, et.full_name AS escalated_to_name
+                 i.created_at, i.updated_at, i.resolved_at,
+                 u.full_name AS raised_by_name, d.name AS department_name, d.code AS department_code
             FROM issues i
             JOIN users u            ON u.user_id = i.raised_by
             LEFT JOIN departments d ON d.department_id = u.department_id
-            LEFT JOIN users at      ON at.user_id = i.assigned_to
-            LEFT JOIN users et      ON et.user_id = i.escalated_to
            WHERE ($1::date IS NULL OR (i.created_at >= $1::date AND i.created_at < $2::date + 1))
              AND ($3::int IS NULL OR u.department_id = $3)
            ORDER BY i.created_at DESC, i.issue_number`, [year.start_date, year.end_date, targetDeptId ?? null]],
@@ -371,11 +368,8 @@ reportsRouter.get('/reports/summary', async (req, res) => {
         raisedBy: r.raised_by_name,
         department: r.department_name,
         departmentCode: r.department_code,
-        assignedTo: r.assigned_to_name,
-        escalatedTo: r.escalated_to_name,
         createdAt: r.created_at,
         updatedAt: r.updated_at,
-        escalatedAt: r.escalated_at,
         resolvedAt: r.resolved_at,
       })),
     };
