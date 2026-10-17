@@ -6,8 +6,8 @@
 /** May raise procurement requests (design doc §4: "Raises requisition"). */
 export const REQUESTER_ROLES = ['HEAD', 'ACTIVITY_INCHARGE', 'ADMIN'];
 
-/** May move non-financial issues along: review, assign, escalate, resolve. */
-export const ISSUE_MANAGER_ROLES = ['PRINCIPAL', 'ADMIN'];
+/** May move non-financial issues along: review, resolve, close. */
+export const ISSUE_MANAGER_ROLES = ['PRINCIPAL'];
 
 /** May view inventory and purchase bills. */
 export const INVENTORY_READER_ROLES = ['ADMIN', 'PRINCIPAL', 'PURCHASE_COMMITTEE'];

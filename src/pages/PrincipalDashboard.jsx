@@ -17,7 +17,7 @@ export const PrincipalDashboard = () => {
   const [tab, setTab] = useState('all');
   const dashboard = useApi('/api/dashboard');
   const spend = useApi('/api/reports/by-budget-head');
-  const issues = useApi('/api/issues?status=SUBMITTED,IN_REVIEW,ESCALATED&limit=1');
+  const issues = useApi('/api/issues?status=SUBMITTED,IN_REVIEW&limit=1');
 
   const d = dashboard.data;
   const sanctioned = (spend.data?.rows ?? []).reduce((sum, r) => sum + r.sanctioned, 0);

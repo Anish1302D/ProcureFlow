@@ -118,10 +118,8 @@ CREATE TRIGGER requests_notify_status
 -- ---------------------------------------------------------------------------
 -- Non-financial issues
 -- ---------------------------------------------------------------------------
---   raised              -> every Principal
---   status changes      -> the raiser
---   assigned            -> the new assignee
---   escalated to someone -> that person
+--   raised           -> every Principal
+--   status changes   -> the raiser
 
 CREATE OR REPLACE FUNCTION fn_notify_issue()
 RETURNS TRIGGER
@@ -149,20 +147,6 @@ BEGIN
                 NEW.title);
     END IF;
 
-    IF NEW.assigned_to IS NOT NULL
-       AND NEW.assigned_to IS DISTINCT FROM OLD.assigned_to THEN
-        INSERT INTO notifications (user_id, issue_id, subject, body)
-        VALUES (NEW.assigned_to, NEW.issue_id,
-                'Issue ' || NEW.issue_number || ' assigned to you', NEW.title);
-    END IF;
-
-    IF NEW.escalated_to IS NOT NULL
-       AND NEW.escalated_to IS DISTINCT FROM OLD.escalated_to THEN
-        INSERT INTO notifications (user_id, issue_id, subject, body)
-        VALUES (NEW.escalated_to, NEW.issue_id,
-                'Issue ' || NEW.issue_number || ' escalated to you', NEW.title);
-    END IF;
-
     RETURN NULL;
 END;
 $$;
@@ -173,6 +157,6 @@ CREATE TRIGGER issues_notify_insert
     EXECUTE FUNCTION fn_notify_issue();
 
 CREATE TRIGGER issues_notify_update
-    AFTER UPDATE OF status, assigned_to, escalated_to ON issues
+    AFTER UPDATE OF status ON issues
     FOR EACH ROW
     EXECUTE FUNCTION fn_notify_issue();
