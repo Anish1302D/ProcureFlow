@@ -41,7 +41,7 @@ export const Login = () => {
     try {
       await signIn(creds.email.trim(), creds.password);
     } catch (err) {
-      setError(err.status === 401 ? "That email and password don't match an active account." : err.message);
+      setError(err.message);
       if (err.status !== 401) showToast(err.message, 'error');
     } finally {
       setBusy(false);
@@ -86,9 +86,10 @@ export const Login = () => {
             className="w-full py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-60">
             {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />} Sign in
           </button>
-          <p className="text-[11px] text-gray-400 text-center">
-            New here? Accounts are created by invitation from the college administrator.
-          </p>
+          <div className="flex items-center justify-between text-[11px]">
+            <a href="#/forgot-password" className="font-semibold text-indigo-600 hover:text-indigo-800">Forgot password?</a>
+            <span className="text-gray-400">New here? You'll receive an invitation by email.</span>
+          </div>
         </form>
 
         {import.meta.env.DEV && DEV_DEMO && (

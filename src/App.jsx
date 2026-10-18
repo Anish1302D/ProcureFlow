@@ -29,11 +29,15 @@ import { SettingsPreferences } from './pages/SettingsPreferences';
 import { UserManagement } from './pages/UserManagement';
 
 import { SetupAccount } from './pages/SetupAccount';
-import { readPublicRoute } from './publicRoutes';
+import { ForgotPassword } from './pages/ForgotPassword';
+import { ResetPassword } from './pages/ResetPassword';
+import { forgetLinkInAddressBar, readPublicRoute } from './publicRoutes';
 
 // Pages opened from email links; shown whether or not someone is signed in.
 const PUBLIC_PAGES = {
   'accept-invite': SetupAccount,
+  'forgot-password': ForgotPassword,
+  'reset-password': ResetPassword,
 };
 
 const PAGES = {
@@ -72,7 +76,7 @@ const PageRenderer = () => {
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
-  const leavePublicPage = useCallback(() => setPublicRoute(null), []);
+  const leavePublicPage = useCallback(() => { forgetLinkInAddressBar(); setPublicRoute(null); }, []);
 
   const PublicPage = publicRoute && PUBLIC_PAGES[publicRoute.page];
   if (PublicPage) return <PublicPage token={publicRoute.token} onDone={leavePublicPage} />;
