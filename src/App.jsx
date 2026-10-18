@@ -31,6 +31,7 @@ import { UserManagement } from './pages/UserManagement';
 import { SetupAccount } from './pages/SetupAccount';
 import { ForgotPassword } from './pages/ForgotPassword';
 import { ResetPassword } from './pages/ResetPassword';
+import { ConfirmEmail } from './pages/ConfirmEmail';
 import { forgetLinkInAddressBar, readPublicRoute } from './publicRoutes';
 
 // Pages opened from email links; shown whether or not someone is signed in.
@@ -38,6 +39,7 @@ const PUBLIC_PAGES = {
   'accept-invite': SetupAccount,
   'forgot-password': ForgotPassword,
   'reset-password': ResetPassword,
+  'confirm-email': ConfirmEmail,
 };
 
 const PAGES = {

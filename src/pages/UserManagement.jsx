@@ -92,8 +92,9 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
 
       if (isEdit) {
         body.isActive = form.isActive;
-        await api(`/api/admin/users/${user.id}`, { method: 'PATCH', body });
-        showToast(`${form.fullName} updated`, 'success');
+        const res = await api(`/api/admin/users/${user.id}`, { method: 'PATCH', body });
+        // An email change is confirmed by the new address; say so.
+        showToast(res.message ?? `${form.fullName} updated`, 'success');
         onSaved();
       } else {
         const res = await api('/api/admin/users', { method: 'POST', body });
