@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { AppProvider, HOME, useApp } from './context/AppContext';
 import { AppShell } from './components/layout/AppShell';
@@ -29,6 +29,18 @@ import { SettingsPreferences } from './pages/SettingsPreferences';
 import { UserManagement } from './pages/UserManagement';
 
 import { SetupAccount } from './pages/SetupAccount';
+import { ForgotPassword } from './pages/ForgotPassword';
+import { ResetPassword } from './pages/ResetPassword';
+import { ConfirmEmail } from './pages/ConfirmEmail';
+import { forgetLinkInAddressBar, readPublicRoute } from './publicRoutes';
+
+// Pages opened from email links; shown whether or not someone is signed in.
+const PUBLIC_PAGES = {
+  'accept-invite': SetupAccount,
+  'forgot-password': ForgotPassword,
+  'reset-password': ResetPassword,
+  'confirm-email': ConfirmEmail,
+};
 
 const PAGES = {
   dashboard: PrincipalDashboard,
@@ -58,6 +70,19 @@ const PAGES = {
 const PageRenderer = () => {
   const { user, portal, booting, activePage } = useApp();
 
+  // Read once: the page removes the token from the address bar straight away,
+  // so re-reading on every render would lose the link mid-way.
+  const [publicRoute, setPublicRoute] = useState(readPublicRoute);
+  useEffect(() => {
+    const onHash = () => { const route = readPublicRoute(); if (route) setPublicRoute(route); };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+  const leavePublicPage = useCallback(() => { forgetLinkInAddressBar(); setPublicRoute(null); }, []);
+
+  const PublicPage = publicRoute && PUBLIC_PAGES[publicRoute.page];
+  if (PublicPage) return <PublicPage token={publicRoute.token} onDone={leavePublicPage} />;
+
   if (booting) {
     return (
       <div className="min-h-screen flex items-center justify-center text-sm text-gray-400 gap-2">
@@ -66,17 +91,7 @@ const PageRenderer = () => {
     );
   }
 
-  if (!user) {
-    const isSetup =
-      typeof window !== 'undefined' &&
-      (window.location.pathname.startsWith('/setup-account') ||
-        new URLSearchParams(window.location.search).has('token'));
-
-    if (isSetup) {
-      return <SetupAccount />;
-    }
-    return <Login />;
-  }
+  if (!user) return <Login />;
 
   // A page outside this portal (an old link, an edited URL) falls back to the
   // portal's home. The API would refuse its data anyway.

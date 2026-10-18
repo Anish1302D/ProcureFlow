@@ -205,10 +205,6 @@ function getMockResponse(path, { method = 'GET', body } = {}) {
     ];
   }
 
-  if (cleanPath === '/api/auth/registration-status') {
-    return { enabled: false };
-  }
-
   if (cleanPath === '/api/admin/config') {
     if (method === 'PATCH') {
       return body?.updates || {};
@@ -216,7 +212,6 @@ function getMockResponse(path, { method = 'GET', body } = {}) {
     return [
       { key: 'workflow.threshold.principal_max', value: 50000, description: 'Maximum request amount decided finally by Principal (₹50,000). Requests above this escalate.', category: 'approval_workflow' },
       { key: 'workflow.threshold.cdc_max', value: 500000, description: 'Maximum request amount decided by CDC (₹5,00,000). Requests above this escalate to Chairman.', category: 'approval_workflow' },
-      { key: 'self_registration.enabled', value: false, description: 'Whether public user self-registration is enabled. Default false.', category: 'feature_flags' },
       { key: 'roles.vice_chairman.title', value: 'Vice Chairman', description: 'Institutional title for Vice Chairman role', category: 'institutional' },
       { key: 'cdc.teaching_members_limit', value: 3, description: 'Maximum number of teaching faculty members on CDC', category: 'institutional' },
       { key: 'cdc.non_teaching_members_limit', value: 1, description: 'Maximum number of non-teaching staff members on CDC', category: 'institutional' },

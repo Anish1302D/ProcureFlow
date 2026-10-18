@@ -3,24 +3,44 @@
 The production database is hosted on **Neon**. Code merged to `main` can need a
 database migration before it works; this page is the checklist for running one.
 
-> **Pending now — `20261015T180000_cdc_route_single_rule.sql` (CDC fix, 15 Oct 2026).**
-> The API on `main` calls the new database function `app_cdc_on_route`. If the
-> backend has already been deployed from `main` and this migration has **not** been
-> run on Neon, opening any request and the "Awaiting my decision" list fail with a
-> server error. Run the steps below as soon as possible, and always run migrations
-> **before** deploying backend code that depends on them.
+> **Pending now — invitations, password recovery and 2-step verification
+> (branch `30-invite-link-for-new-users`).** Two migrations, in this order:
+>
+> 1. `20261018T120000_invitations_and_password_recovery.sql`
+> 2. `20261018T130000_two_step_verification.sql`
+>
+> **Before deploying the backend**, set these on the server (Render now, the
+> college cPanel server later) — see `server/.env.example` for details:
+>
+> | Variable | Value |
+> |---|---|
+> | `NODE_ENV` | `production` |
+> | `APP_URL` | the https address people open the app at (no trailing slash) |
+> | `MFA_ENCRYPTION_KEY` | 64 hex characters, generated once, kept with the database backups |
+> | `MAIL_FROM_NAME` | sender name people see (optional) |
+> | email provider | `BREVO_API_KEY` + `BREVO_SENDER_EMAIL`, or `RESEND_API_KEY` + `RESEND_FROM`, or `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS`/`SMTP_FROM` (cPanel mail) |
+>
+> Without `APP_URL` invitations and reset emails are refused rather than sent with
+> a broken link; without `MFA_ENCRYPTION_KEY` the administrator cannot complete
+> 2-step verification. After deploying, the administrator's next sign-in asks them
+> to set up an authenticator app. If no administrator can sign in, use
+> `docs/ADMIN_RECOVERY.md`.
+>
+> The earlier CDC migration (`20261015T180000_cdc_route_single_rule.sql`) has
+> already been run on Neon.
 
-What the CDC migration fixes: CDC members were notified of requests they could not
-open (teaching members told about Non-Grant requests). It puts the "which CDC
-member is on this request's route" rule into one function that visibility,
-decisions, notifications and the API all share.
+What this release changes: accounts exist only by emailed invitation (the
+administrator never sees links or sets passwords), forgotten passwords are reset
+by email, repeated wrong passwords pause sign-in, an account's email changes only
+when the new address confirms, and the administrator signs in with 2-step
+verification.
 
 ---
 
 ## 1. Back up: create a Neon branch
 
 Neon Console → your project → **Branches** → **Create branch**, from the
-production branch. Name it e.g. `backup-before-cdc-fix-2026-10-15`.
+production branch. Name it after the date and release, e.g. `backup-before-invitations-2026-10-18`.
 
 A branch is an instant copy of the database at that moment. If anything goes
 wrong, restore the production branch from it (Branches → production → **Restore**).
@@ -91,23 +111,28 @@ Check the output:
 - It must say `Connecting to database (Neon Cloud)...`. If it says `Local`, the
   variable was not picked up — you are not talking to Neon.
 - The pending list should be what you expect — for this release,
-  `20261015T180000_cdc_route_single_rule.sql`. It applies each file in its own
+  `20261018T120000_invitations_and_password_recovery.sql` then
+  `20261018T130000_two_step_verification.sql`. It applies each file in its own
   transaction and stops at the first error, rolling that file back.
 - Running it a second time must print `No pending migrations!`.
 
 ## 5. Verify (Neon SQL Editor)
 
 ```sql
-SELECT to_regprocedure('app_cdc_on_route(uuid,text,text)') IS NOT NULL AS cdc_rule_installed;
+SELECT to_regprocedure('fn_issue_password_reset(text,text,integer,text,integer)') IS NOT NULL AS reset_links_installed,
+       to_regclass('mfa_recovery_codes') IS NOT NULL AS two_step_installed;
 
 SELECT filename, applied_at FROM schema_migrations
- WHERE filename = '20261015T180000_cdc_route_single_rule.sql';
+ WHERE filename LIKE '20261018T%' ORDER BY filename;
 ```
 
-Then in the app: raise a ₹1,00,000 request from a **Non-Grant** department, pass it
-through the Purchase Committee and the Principal, and check that only the CDC
-Non-Grant (non-teaching) member is notified, can open it, and can decide it — and
-that teaching CDC members are not notified.
+Then in the app, after deploying (step 6):
+
+1. The administrator signs in and is asked to set up an authenticator app; they
+   save their recovery codes.
+2. Invite a test person with your own second email address: the invitation arrives,
+   names the role, and setting a password from it works.
+3. Use **Forgot password?** for that test account: the reset email arrives and works.
 
 ## 6. Deploy the backend
 

@@ -115,8 +115,12 @@ export const AppProvider = ({ children }) => {
     };
   }, [user, refresh]);
 
+  // Returns { mfa } when the account needs a second step; the sign-in page
+  // then asks for it. Otherwise the session starts here.
   const signIn = useCallback(async (email, password) => {
-    const { token, user: me } = await api('/api/auth/login', { method: 'POST', body: { email, password } });
+    const res = await api('/api/auth/login', { method: 'POST', body: { email, password } });
+    if (res.mfa) return { mfa: res.mfa };
+    const { token, user: me } = res;
     setToken(token);
     setUser(me);
     // Keep a deep link the person arrived with (e.g. from an email).

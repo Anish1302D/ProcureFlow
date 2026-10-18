@@ -6,6 +6,10 @@ dist/
 
 # API attachments written at runtime
 server/uploads/
+
+# Development/test email outbox: holds live invitation and reset links
+server/mail-outbox/
+mail-outbox/
 .neon
 
 # Local private credentials files

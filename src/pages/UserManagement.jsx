@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  Calendar, Check, ChevronDown, Clock, Copy, Edit2, History, KeyRound, Loader2,
+  Calendar, Check, ChevronDown, Clock, Edit2, History, Loader2, MailX, Send,
   Plus, Search, ShieldCheck, Trash2, UserCheck, Users, UserX, X,
 } from 'lucide-react';
 import { api } from '../api/client';
@@ -43,7 +43,6 @@ const BLANK_USER = {
   email: '',
   fullName: '',
   employeeId: '',
-  password: '',
   departmentId: null,
   roleIds: [],
   isActive: true,
@@ -58,7 +57,6 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
           email: user.email,
           fullName: user.name,
           employeeId: user.employeeId ?? '',
-          password: '',
           departmentId: user.departmentId ?? null,
           roleIds: user.roles.map((r) => r.id),
           isActive: user.isActive,
@@ -80,8 +78,6 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
   const save = async () => {
     if (!form.email.trim()) return showToast('Email is required', 'error');
     if (!form.fullName.trim()) return showToast('Full name is required', 'error');
-    if (isEdit && form.password && form.password.length < 8)
-      return showToast('New password must be at least 8 characters', 'error');
     if (!form.roleIds.length) return showToast('Assign at least one role', 'error');
 
     setSaving(true);
@@ -96,9 +92,9 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
 
       if (isEdit) {
         body.isActive = form.isActive;
-        if (form.password) body.password = form.password;
-        await api(`/api/admin/users/${user.id}`, { method: 'PATCH', body });
-        showToast(`${form.fullName} updated`, 'success');
+        const res = await api(`/api/admin/users/${user.id}`, { method: 'PATCH', body });
+        // An email change is confirmed by the new address; say so.
+        showToast(res.message ?? `${form.fullName} updated`, 'success');
         onSaved();
       } else {
         const res = await api('/api/admin/users', { method: 'POST', body });
@@ -132,8 +128,8 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
             </h2>
             <p className="text-xs text-gray-400 mt-0.5">
               {isEdit
-                ? 'Leave password blank to keep current password.'
-                : 'Invited members activate their account via single-use setup link.'}
+                ? 'Passwords are set only by the person themselves.'
+                : 'We email them a one-time link to set their own password.'}
             </p>
           </div>
           <button
@@ -179,25 +175,22 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
             />
           </div>
 
-          {/* Password (edit only) or Setup link notice (create) */}
+          {/* Who sets the password: never the administrator. */}
           {isEdit ? (
-            <div>
-              <label className={labelCls}>Password (leave blank to keep current)</label>
-              <input
-                type="password"
-                className={inputCls}
-                placeholder="Enter new password to change…"
-                value={form.password}
-                onChange={(e) => set({ password: e.target.value })}
-              />
+            <div className="rounded-xl bg-gray-50 border border-gray-100 p-3.5">
+              <p className="text-[11px] text-gray-600 leading-relaxed">
+                Administrators cannot see or set passwords. If this person has forgotten theirs,
+                they can use <span className="font-semibold">Forgot password?</span> on the sign-in page.
+              </p>
             </div>
           ) : (
             <div className="rounded-xl bg-indigo-50/70 border border-indigo-100 p-3.5 space-y-1">
               <p className="text-xs font-semibold text-indigo-950 flex items-center gap-1.5">
-                <KeyRound className="w-4 h-4 text-indigo-600" /> Secure Setup Link Activation
+                <Send className="w-4 h-4 text-indigo-600" /> Invitation by email
               </p>
               <p className="text-[11px] text-indigo-800 leading-relaxed">
-                A single-use, 24-hour setup link will be generated. The invited institutional member will set their own password on activation.
+                An invitation goes to the email address above, naming the role you choose. Opening it proves the
+                address is theirs, and they set their own password. You will never see the link or the password.
               </p>
             </div>
           )}
@@ -657,77 +650,31 @@ function EditAppointmentModal({ appointment, onClose, onSaved }) {
 }
 
 // ---------------------------------------------------------------------------
-// Modal — Account activation & setup link
+// Account status
 // ---------------------------------------------------------------------------
 
-function ActivationLinkModal({ data, onClose }) {
-  const [copied, setCopied] = useState(false);
-  const fullUrl = `${window.location.origin}${data.setupUrl}`;
+// States in which the person has not set up their account yet.
+const PENDING = ['INVITED', 'INVITE_EXPIRED', 'INVITE_CANCELLED', 'NOT_INVITED'];
 
-  const copy = () => {
-    navigator.clipboard.writeText(fullUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
-  };
+const STATUS_STYLE = {
+  ACTIVE: ['Active', 'bg-emerald-50 text-emerald-700 border-emerald-200', UserCheck],
+  INVITED: ['Invited', 'bg-indigo-50 text-indigo-700 border-indigo-200', Send],
+  INVITE_EXPIRED: ['Invitation expired', 'bg-amber-50 text-amber-800 border-amber-200', Clock],
+  INVITE_CANCELLED: ['Invitation cancelled', 'bg-gray-100 text-gray-600 border-gray-200', MailX],
+  NOT_INVITED: ['Not invited', 'bg-gray-100 text-gray-600 border-gray-200', MailX],
+  DEACTIVATED: ['Deactivated', 'bg-red-50 text-red-600 border-red-200', UserX],
+};
 
+function AccountStatus({ account }) {
+  const [label, cls, Icon] = STATUS_STYLE[account?.status] ?? STATUS_STYLE.NOT_INVITED;
+  const until = account?.status === 'INVITED' && account.inviteExpiresAt
+    ? new Date(account.inviteExpiresAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
+    : null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/40 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-4">
-        <div className="flex items-center justify-between pb-3 border-b border-gray-100">
-          <div className="flex items-center gap-2 text-indigo-600">
-            <KeyRound className="w-5 h-5" />
-            <h2 className="text-base font-bold text-gray-900">Account Activation Link</h2>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        <div className="space-y-2">
-          <p className="text-xs text-gray-600">
-            One-time activation link for <span className="font-bold text-gray-900">{data.fullName || data.name}</span> (<span className="text-gray-500">{data.email}</span>):
-          </p>
-          <div className="flex items-center gap-2 p-2.5 rounded-xl bg-gray-50 border border-gray-200">
-            <input
-              readOnly
-              value={fullUrl}
-              className="bg-transparent text-xs text-gray-800 font-mono flex-1 outline-none select-all"
-            />
-            <button
-              onClick={copy}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
-                copied ? 'bg-emerald-600 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white'
-              }`}
-            >
-              {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-              {copied ? 'Copied!' : 'Copy'}
-            </button>
-          </div>
-        </div>
-
-        <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-900 space-y-1">
-          <p className="font-semibold flex items-center gap-1.5">
-            <ShieldCheck className="w-4 h-4 text-amber-700" />
-            Institutional Notice
-          </p>
-          <p className="text-[11px] text-amber-800 leading-relaxed">
-            Outbound email delivery is unconfigured in this environment. Provide this single-use setup link directly to the invited institutional member. The token expires in 24 hours.
-          </p>
-        </div>
-
-        <div className="flex justify-end pt-2">
-          <button
-            onClick={onClose}
-            className="px-5 py-2 rounded-lg text-xs font-semibold bg-gray-900 hover:bg-gray-800 text-white"
-          >
-            Done
-          </button>
-        </div>
-      </div>
-    </div>
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${cls}`}
+      title={until ? `The link works until ${new Date(account.inviteExpiresAt).toLocaleString('en-IN')}` : undefined}>
+      <Icon className="w-3 h-3" /> {label}{until ? ` · until ${until}` : ''}
+    </span>
   );
 }
 
@@ -750,14 +697,12 @@ export const UserManagement = () => {
   const [modal, setModal] = useState(null); // null | 'create' | <user object>
   const [appointmentModal, setAppointmentModal] = useState(false);
   const [editAppointment, setEditAppointment] = useState(null);
-  const [activationModal, setActivationModal] = useState(null); // null | { ... }
-
   const closeModal = (createdRes) => {
     setModal(null);
     users.reload();
     refresh();
-    if (createdRes?.setupUrl) {
-      setActivationModal(createdRes);
+    if (createdRes?.invitation) {
+      showToast(createdRes.message, createdRes.invitation.delivery === 'SENT' ? 'success' : 'error');
     }
   };
 
@@ -768,14 +713,23 @@ export const UserManagement = () => {
     users.reload();
   };
 
-  const handleGenerateSetupToken = async (user) => {
+  const handleResendInvite = async (user) => {
     try {
-      const res = await api(`/api/admin/users/${user.id}/setup-token`, { method: 'POST' });
-      setActivationModal({ ...user, ...res });
-      showToast(`New setup link created for ${user.name}`, 'success');
+      const res = await api(`/api/admin/users/${user.id}/invite`, { method: 'POST' });
+      showToast(res.message, res.invitation.delivery === 'SENT' ? 'success' : 'error');
+      users.reload();
     } catch (err) {
       showToast(err.message, 'error');
     }
+  };
+
+  const handleCancelInvite = async (user) => {
+    if (!window.confirm(`Cancel the invitation to ${user.email}? The link in their email will stop working.`)) return;
+    await run(
+      () => api(`/api/admin/users/${user.id}/invite`, { method: 'DELETE' }),
+      `Invitation to ${user.name} cancelled`,
+    );
+    users.reload();
   };
 
   const handleDeactivate = async (user) => {
@@ -996,15 +950,7 @@ export const UserManagement = () => {
                           </div>
                         </td>
                         <td className="py-3.5 px-4 text-center">
-                          {user.isActive ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-bold border border-emerald-200">
-                              <UserCheck className="w-3 h-3" /> Active
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-50 text-red-600 text-[10px] font-bold border border-red-200">
-                              <UserX className="w-3 h-3" /> Inactive
-                            </span>
-                          )}
+                          <AccountStatus account={user.account} />
                         </td>
                         <td className="py-3.5 px-4 text-center text-gray-400 text-[11px]">
                           {new Date(user.createdAt).toLocaleDateString('en-IN', {
@@ -1013,13 +959,24 @@ export const UserManagement = () => {
                         </td>
                         <td className="py-3.5 px-4 text-right">
                           <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              onClick={() => handleGenerateSetupToken(user)}
-                              className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
-                              title="Generate / view activation link"
-                            >
-                              <KeyRound className="w-3.5 h-3.5" />
-                            </button>
+                            {PENDING.includes(user.account?.status) && (
+                              <button
+                                onClick={() => handleResendInvite(user)}
+                                className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                                title="Resend invitation (a new link; the old one stops working)"
+                              >
+                                <Send className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            {user.account?.status === 'INVITED' && (
+                              <button
+                                onClick={() => handleCancelInvite(user)}
+                                className="p-1.5 rounded-lg text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
+                                title="Cancel invitation"
+                              >
+                                <MailX className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                             <button
                               onClick={() => setModal(user)}
                               className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
@@ -1027,7 +984,7 @@ export const UserManagement = () => {
                             >
                               <Edit2 className="w-3.5 h-3.5" />
                             </button>
-                            {user.isActive ? (
+                            {PENDING.includes(user.account?.status) ? null : user.isActive ? (
                               <button
                                 onClick={() => handleDeactivate(user)}
                                 className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
@@ -1206,13 +1163,6 @@ export const UserManagement = () => {
         />
       )}
 
-      {/* Activation Link Modal */}
-      {activationModal && (
-        <ActivationLinkModal
-          data={activationModal}
-          onClose={() => setActivationModal(null)}
-        />
-      )}
     </>
   );
 };

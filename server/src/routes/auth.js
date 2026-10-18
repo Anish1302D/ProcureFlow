@@ -1,12 +1,21 @@
-import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 import { issueToken, requireAuth } from '../auth.js';
 import { anonQuery, withUser } from '../db.js';
+import { HttpError } from '../errors.js';
+import {
+  sendAccountLocked, sendEmailChanged, sendPasswordChanged, sendPasswordReset, sendRecoveryCodeUsed, sendTwoStepEnabled,
+} from '../accountEmails.js';
+import {
+  decryptSecret, encryptSecret, hashRecoveryCode, issueChallenge, newRecoveryCodes, readChallenge,
+} from '../mfa.js';
+import { matchingStep, newSecret, otpauthUri } from '../totp.js';
+import { config } from '../config.js';
 import { configService } from '../configService.js';
-import { HttpError, conflict } from '../errors.js';
+import { NO_STORE, assertTokenShape, hashToken, linkError, newToken } from '../oneTimeLinks.js';
+import { assertPasswordAcceptable, hashPassword, passwordRules } from '../passwordPolicy.js';
 import { REQUESTER_ROLES, ISSUE_MANAGER_ROLES, INVENTORY_READER_ROLES, hasAnyRole } from '../roles.js';
 
 export const authRouter = Router();
@@ -16,16 +25,12 @@ const loginSchema = z.object({
   password: z.string().min(1).max(200),
 });
 
-const registerSchema = z.object({
-  email: z.string().trim().toLowerCase().email().max(254),
-  fullName: z.string().trim().min(2).max(200),
-  password: z.string().min(8, 'Password must be at least 8 characters').max(200),
+const setupAccountSchema = z.object({
+  token: z.string().trim().min(1).max(256),
+  password: z.string().min(1, 'Choose a password').max(200),
 });
 
-const setupAccountSchema = z.object({
-  token: z.string().trim().min(16).max(256),
-  password: z.string().min(8, 'Password must be at least 8 characters').max(200),
-});
+const tokenOnlySchema = z.object({ token: z.string().trim().min(1).max(256) });
 
 // Global IP rate limiter to protect against credential stuffing across accounts.
 // 60 attempts per 15 minutes per IP allows shared campus networks while blocking automated attacks.
@@ -81,10 +86,81 @@ export const setupAccountLimiter = rateLimit({
 });
 
 
+// Forgotten-password requests, per network: enough for a shared campus
+// connection, too few to be useful for flooding. Each account is also capped
+// in the database (auth.reset_requests_per_hour).
+export const forgotPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator(req.ip),
+  skip: () => process.env.NODE_ENV === 'test',
+  handler: (_req, _res, next) => {
+    next(new HttpError(429, 'Too many requests from this network. Try again in a few minutes.'));
+  },
+});
+
+export const resetPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator(req.ip),
+  skip: () => process.env.NODE_ENV === 'test',
+  handler: (_req, _res, next) => {
+    next(new HttpError(429, 'Too many attempts. Try again in a few minutes.'));
+  },
+});
+
+// Every failed sign-in gets the same answer, whether the address is unknown,
+// the password wrong, or the account paused: telling them apart would reveal
+// which addresses have accounts.
+const SIGN_IN_REFUSED = 'Incorrect email or password. After several wrong attempts sign-in pauses for a few minutes; "Forgot password?" gets you back in straight away.';
+
 // An unknown address is checked against this hash anyway, so a missing
 // account and a wrong password take the same time to answer. Otherwise the
 // response time alone would reveal which addresses have accounts.
 const DUMMY_HASH = bcrypt.hashSync('not-a-real-password', 12);
+
+// Counts a wrong password against an account. At the configured threshold the
+// account pauses for the configured minutes (kept in the database, so a
+// restart does not clear it) and its owner is told by email.
+async function recordFailedSignIn(account) {
+  const threshold = await configService.get('auth.lockout_threshold');
+  const minutes = await configService.get('auth.lockout_minutes');
+  const { rows } = await anonQuery(
+    `UPDATE users
+        SET failed_login_count = CASE WHEN failed_login_count + 1 >= $2 THEN 0 ELSE failed_login_count + 1 END,
+            locked_until = CASE WHEN failed_login_count + 1 >= $2 THEN NOW() + make_interval(mins => $3) ELSE locked_until END
+      WHERE user_id = $1
+  RETURNING locked_until, locked_until > NOW() AS now_locked`,
+    [account.user_id, threshold, minutes],
+  );
+  if (rows[0]?.now_locked) {
+    await anonQuery(
+      `INSERT INTO audit_logs (entity_type, entity_id, action, after_json)
+       VALUES ('user', $1::text, 'ACCOUNT_LOCKED', jsonb_build_object('until', $2::text))`,
+      [account.user_id, rows[0].locked_until.toISOString()],
+    );
+    sendAccountLocked({ to: account.email, fullName: account.full_name, until: rows[0].locked_until })
+      .catch((err) => console.error(`[auth] lock notice to ${account.email} failed: ${err.message}`));
+  }
+}
+
+// 'verify' when the account has 2-step verification, 'enrol' when one of its
+// roles requires it but it is not set up yet, otherwise null.
+async function secondStepFor(userId) {
+  const { rows: [u] } = await anonQuery(
+    `SELECT u.mfa_enabled_at IS NOT NULL AS enabled,
+            ARRAY(SELECT r.code FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id WHERE ur.user_id = u.user_id) AS roles
+       FROM users u WHERE u.user_id = $1`,
+    [userId],
+  );
+  if (u?.enabled) return 'verify';
+  const required = await configService.get('auth.mfa_required_roles');
+  return u?.roles?.some((r) => required.includes(r)) ? 'enrol' : null;
+}
 
 authRouter.post('/login', loginIpLimiter, loginLimiter, async (req, res) => {
   const { email, password } = loginSchema.parse(req.body);
@@ -95,7 +171,8 @@ authRouter.post('/login', loginIpLimiter, loginLimiter, async (req, res) => {
   let rows;
   try {
     const res = await anonQuery(
-      `SELECT user_id, password_hash, COALESCE(token_version, 1) AS token_version
+      `SELECT user_id, email, full_name, password_hash, COALESCE(token_version, 1) AS token_version,
+              locked_until IS NOT NULL AND locked_until > NOW() AS locked
          FROM users WHERE email = $1 AND is_active`,
       [email],
     );
@@ -111,15 +188,32 @@ authRouter.post('/login', loginIpLimiter, loginLimiter, async (req, res) => {
     throw err;
   }
   const account = rows[0];
+  // Always compare, so a paused or unknown account takes as long to refuse.
   const valid = await bcrypt.compare(password, account?.password_hash ?? DUMMY_HASH);
 
-  if (!account || !valid) {
+  if (!account || !valid || account.locked) {
     await anonQuery(
       `INSERT INTO audit_logs (entity_type, entity_id, action, after_json)
        VALUES ('user', $1, 'LOGIN_FAILED', jsonb_build_object('ip', $2::text))`,
       [email, req.ip],
     );
-    throw new HttpError(401, 'Incorrect email or password');
+    if (account && !account.locked) await recordFailedSignIn(account);
+    throw new HttpError(401, SIGN_IN_REFUSED, { code: 'SIGN_IN_REFUSED' });
+  }
+
+  if (account.locked === false) {
+    await anonQuery(
+      `UPDATE users SET failed_login_count = 0
+        WHERE user_id = $1 AND failed_login_count <> 0`,
+      [account.user_id],
+    );
+  }
+
+  // The password was right. Accounts with 2-step verification — and roles
+  // that must have it — get a short-lived challenge instead of a session.
+  const step = await secondStepFor(account.user_id);
+  if (step) {
+    return res.json({ mfa: { step, challenge: issueChallenge(account.user_id, account.token_version, step) } });
   }
 
   await withUser(account.user_id, (db) =>
@@ -142,255 +236,63 @@ authRouter.post('/logout', requireAuth, (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Public self-registration (controlled by dynamic configuration flag)
+// Accepting an invitation
 // ---------------------------------------------------------------------------
-authRouter.get('/registration-status', async (_req, res) => {
-  const enabled = await configService.isSelfRegistrationEnabled();
-  res.json({ enabled });
-});
+// The link's token travels in the request body, never in a URL, so it cannot
+// be written to an access log. Responses are never cached.
 
-authRouter.post('/register', loginIpLimiter, async (req, res) => {
-  const enabled = await configService.isSelfRegistrationEnabled();
-  if (!enabled) {
-    throw new HttpError(403, 'Self-registration is currently disabled by administrator');
-  }
-
-  // Prevent privilege escalation, role spoofing, or untrusted department assignment.
-  // Anonymous registrants can never select a role, department, or approval stage.
-  if (
-    req.body?.role ||
-    req.body?.roles ||
-    req.body?.roleIds ||
-    req.body?.departmentId ||
-    req.body?.department_id ||
-    req.body?.stageId ||
-    req.body?.stages ||
-    req.body?.permissions
-  ) {
-    throw new HttpError(400, 'Self-registration cannot specify roles, departments, or permissions');
-  }
-
-  const { email, fullName, password } = registerSchema.parse(req.body);
-
-  const dup = await anonQuery('SELECT 1 FROM users WHERE email = $1', [email]);
-  if (dup.rowCount) {
-    throw conflict('An account with this email already exists');
-  }
-
-  // Public registrants are strictly assigned the least-privileged valid requester role.
-  // Privileged roles (HEAD, CDC, PC, PRINCIPAL, FINAL_AUTHORITY, ADMIN) are strictly prohibited.
-  const assignedRoleCode = 'ACTIVITY_INCHARGE';
-  const roleRow = await anonQuery('SELECT role_id FROM roles WHERE code = $1', [assignedRoleCode]);
-  if (!roleRow.rowCount) {
-    throw new HttpError(500, 'Assigned role not found');
-  }
-  const roleId = roleRow.rows[0].role_id;
-
-  const passwordHash = await bcrypt.hash(password, 12);
-
-  // Department assignment requires institutional administrator verification and approval.
-  // Self-registered accounts start with department_id = NULL.
-  const { rows: userRows } = await anonQuery(
-    `INSERT INTO users (email, full_name, password_hash, department_id, is_active, token_version)
-     VALUES ($1, $2, $3, NULL, TRUE, 1)
-     RETURNING user_id`,
-    [email, fullName, passwordHash],
+/** The invitation behind a token, or the reason it cannot be used. */
+async function liveInvitation(token) {
+  assertTokenShape(token);
+  const { rows } = await anonQuery(
+    'SELECT status, user_id, email, full_name FROM fn_verify_account_setup_token($1)',
+    [hashToken(token)],
   );
-  const newUserId = userRows[0].user_id;
+  const row = rows[0];
+  if (!row || row.status !== 'VALID') throw linkError(row?.status ?? 'INVALID', 'invitation');
+  return row;
+}
 
-  await anonQuery(
-    `INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-    [newUserId, roleId],
+authRouter.post('/verify-setup-token', verifySetupLimiter, async (req, res) => {
+  res.set(NO_STORE);
+  const { token } = tokenOnlySchema.parse(req.body ?? {});
+  const invite = await liveInvitation(token);
+  const { rows: roles } = await anonQuery(
+    'SELECT r.name FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id WHERE ur.user_id = $1 ORDER BY r.name',
+    [invite.user_id],
   );
-
-  await anonQuery(
-    `INSERT INTO audit_logs (entity_type, entity_id, action, after_json)
-     VALUES ('user', $1::text, 'SELF_REGISTER', jsonb_build_object('ip', $2::text, 'role', $3::text))`,
-    [newUserId, req.ip, assignedRoleCode],
-  );
-
-  res.status(201).json({
-    token: issueToken(newUserId, 1),
-    user: await describe(newUserId),
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Account setup & activation for admin-invited users
-// ---------------------------------------------------------------------------
-authRouter.get('/verify-setup-token', verifySetupLimiter, async (req, res) => {
-  res.set({
-    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
-    Pragma: 'no-cache',
-    Expires: '0',
-  });
-
-  const token = String(req.query.token ?? '').trim();
-  if (!token || token.length < 16) {
-    throw new HttpError(400, 'Invalid or missing setup token');
-  }
-
-  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-
-  let rows;
-  try {
-    const result = await anonQuery(
-      `SELECT status, user_id, email, full_name
-         FROM fn_verify_account_setup_token($1)`,
-      [tokenHash],
-    );
-    rows = result.rows;
-  } catch (err) {
-    // Fallback if stored function is not yet installed in a test environment
-    if (err.message && (err.message.includes('does not exist') || err.message.includes('undefined_function'))) {
-      const result = await anonQuery(
-        `SELECT t.token_id, t.user_id, t.expires_at, t.used_at,
-                u.email, u.full_name, u.is_active
-           FROM account_setup_tokens t
-           JOIN users u ON u.user_id = t.user_id
-          WHERE t.token_hash = $1`,
-        [tokenHash],
-      );
-      const entry = result.rows[0];
-      if (!entry) {
-        throw new HttpError(404, 'Invalid or unknown setup token');
-      }
-      if (entry.used_at) {
-        throw new HttpError(400, 'This setup link has already been used');
-      }
-      if (new Date(entry.expires_at) < new Date()) {
-        throw new HttpError(400, 'This setup link has expired. Please contact your administrator.');
-      }
-      return res.json({
-        valid: true,
-        email: entry.email,
-        fullName: entry.full_name,
-      });
-    }
-    throw err;
-  }
-
-  const statusRow = rows?.[0];
-  if (!statusRow || statusRow.status === 'INVALID') {
-    throw new HttpError(404, 'Invalid or unknown setup token');
-  }
-  if (statusRow.status === 'ALREADY_USED') {
-    throw new HttpError(400, 'This setup link has already been used');
-  }
-  if (statusRow.status === 'EXPIRED') {
-    throw new HttpError(400, 'This setup link has expired. Please contact your administrator.');
-  }
-
   res.json({
     valid: true,
-    email: statusRow.email,
-    fullName: statusRow.full_name,
+    email: invite.email,
+    fullName: invite.full_name,
+    roles: roles.map((r) => r.name),
+    passwordRules: await passwordRules(),
   });
 });
 
 authRouter.post('/setup-account', setupAccountLimiter, loginIpLimiter, async (req, res) => {
-  res.set({
-    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
-    Pragma: 'no-cache',
-    Expires: '0',
-  });
-
+  res.set(NO_STORE);
   const { token, password } = setupAccountSchema.parse(req.body);
-  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-  const newHash = await bcrypt.hash(password, 12);
-  const clientIp = req.ip || 'unknown';
 
-  let userId;
-  let newVersion;
+  // The policy is checked against the invitee before the link is used, so a
+  // refused password leaves the invitation intact to try again.
+  const invite = await liveInvitation(token);
+  await assertPasswordAcceptable(password, { email: invite.email, fullName: invite.full_name });
 
+  let consumed;
   try {
-    const { rows } = await anonQuery(
-      `SELECT user_id, token_version
-         FROM fn_consume_account_setup_token($1, $2, $3)`,
-      [tokenHash, newHash, clientIp],
-    );
-    if (!rows || rows.length === 0) {
-      throw new HttpError(404, 'Invalid or unknown setup token');
-    }
-    userId = rows[0].user_id;
-    newVersion = rows[0].token_version ?? 1;
+    ({ rows: [consumed] } = await anonQuery(
+      'SELECT user_id, token_version FROM fn_consume_account_setup_token($1, $2, $3)',
+      [hashToken(token), await hashPassword(password), req.ip || 'unknown'],
+    ));
   } catch (err) {
-    if (err instanceof HttpError) throw err;
-    if (err.code === 'ST001' || (err.message && err.message.includes('invalid or unknown'))) {
-      throw new HttpError(404, 'Invalid or unknown setup token');
-    }
-    if (err.code === 'ST002' || (err.message && err.message.includes('already been used'))) {
-      throw new HttpError(400, 'This setup link has already been used');
-    }
-    if (err.code === 'ST003' || (err.message && err.message.includes('expired'))) {
-      throw new HttpError(400, 'This setup link has expired. Please contact your administrator.');
-    }
-
-    // Transactional fallback with FOR UPDATE row locking if function is missing in mock environment
-    if (err.message && (err.message.includes('does not exist') || err.message.includes('undefined_function'))) {
-      const { pool } = await import('../db.js');
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-        const { rows: tRows } = await client.query(
-          `SELECT token_id, user_id, expires_at, used_at
-             FROM account_setup_tokens
-            WHERE token_hash = $1
-              FOR UPDATE`,
-          [tokenHash],
-        );
-        const entry = tRows[0];
-        if (!entry) {
-          throw new HttpError(404, 'Invalid or unknown setup token');
-        }
-        if (entry.used_at) {
-          throw new HttpError(400, 'This setup link has already been used');
-        }
-        if (new Date(entry.expires_at) < new Date()) {
-          throw new HttpError(400, 'This setup link has expired. Please contact your administrator.');
-        }
-
-        await client.query(
-          `UPDATE account_setup_tokens
-              SET used_at = NOW()
-            WHERE token_id = $1`,
-          [entry.token_id],
-        );
-
-        const { rows: uRows } = await client.query(
-          `UPDATE users
-              SET password_hash = $1,
-                  is_active = TRUE,
-                  token_version = COALESCE(token_version, 1) + 1,
-                  updated_at = NOW()
-            WHERE user_id = $2
-        RETURNING COALESCE(token_version, 1) AS token_version`,
-          [newHash, entry.user_id],
-        );
-
-        await client.query(
-          `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
-           VALUES ('user', $1::text, $1::uuid, 'ACCOUNT_ACTIVATED', jsonb_build_object('ip', $2::text))`,
-          [entry.user_id, clientIp],
-        );
-
-        await client.query('COMMIT');
-        userId = entry.user_id;
-        newVersion = uRows[0]?.token_version ?? 1;
-      } catch (txErr) {
-        await client.query('ROLLBACK');
-        throw txErr;
-      } finally {
-        client.release();
-      }
-    } else {
-      throw err;
-    }
+    throw linkError(err.code, 'invitation') ?? err;
   }
+  if (!consumed) throw linkError('INVALID', 'invitation');
 
   res.json({
-    token: issueToken(userId, newVersion),
-    user: await describe(userId),
+    token: issueToken(consumed.user_id, consumed.token_version ?? 1),
+    user: await describe(consumed.user_id),
   });
 });
 
@@ -411,7 +313,7 @@ const changePasswordLimiter = rateLimit({
 const changePasswordSchema = z
   .object({
     currentPassword: z.string().min(1, 'Current password is required').max(200),
-    newPassword: z.string().min(8, 'New password must be at least 8 characters').max(200),
+    newPassword: z.string().min(1, 'Choose a new password').max(200),
   })
   .refine((v) => v.currentPassword !== v.newPassword, {
     message: 'New password must be different from current password',
@@ -431,11 +333,15 @@ authRouter.post('/change-password', requireAuth, changePasswordLimiter, async (r
   const valid = await bcrypt.compare(currentPassword, account.password_hash);
   if (!valid) throw new HttpError(401, 'Current password is incorrect');
 
-  const newHash = await bcrypt.hash(newPassword, 12);
+  await assertPasswordAcceptable(newPassword, { email: req.user.email, fullName: req.user.name });
+  const newHash = await hashPassword(newPassword);
+  const notify = () => sendPasswordChanged({ to: req.user.email, fullName: req.user.name })
+    .catch((err) => console.error(`[auth] password-changed notice failed: ${err.message}`));
   await withUser(req.user.id, async (db) => {
     try {
       await db.query(
-        'UPDATE users SET password_hash = $1, token_version = COALESCE(token_version, 1) + 1, updated_at = NOW() WHERE user_id = $2',
+        `UPDATE users SET password_hash = $1, token_version = COALESCE(token_version, 1) + 1,
+                password_changed_at = NOW(), updated_at = NOW() WHERE user_id = $2`,
         [newHash, req.user.id],
       );
     } catch (err) {
@@ -450,7 +356,294 @@ authRouter.post('/change-password', requireAuth, changePasswordLimiter, async (r
     }
   });
 
+  notify();
   res.status(204).end();
+});
+
+// ---------------------------------------------------------------------------
+// Forgotten password
+// ---------------------------------------------------------------------------
+// The answer never depends on whether the address has an account, and the
+// email is sent after replying, so neither the words nor the timing tell.
+
+const FORGOT_REPLY = {
+  message: 'If an account uses that email address, a link to choose a new password is on its way. Check your inbox (and spam folder) in a few minutes.',
+};
+
+authRouter.post('/forgot-password', forgotPasswordLimiter, async (req, res) => {
+  res.set(NO_STORE);
+  const { email } = z.object({ email: z.string().trim().toLowerCase().email().max(254) }).parse(req.body ?? {});
+
+  if (!config.appUrl) {
+    console.error('[auth] password reset requested but APP_URL is not configured; no email sent');
+    return res.status(202).json(FORGOT_REPLY);
+  }
+
+  const token = newToken();
+  const issuedAt = new Date();
+  const ttl = await configService.get('auth.reset_ttl_minutes');
+  const { rows } = await anonQuery(
+    'SELECT user_id, email, full_name FROM fn_issue_password_reset($1, $2, $3, $4, $5)',
+    [email, hashToken(token), ttl, req.ip || 'unknown', await configService.get('auth.reset_requests_per_hour')],
+  );
+  res.status(202).json(FORGOT_REPLY);
+
+  const person = rows[0];
+  if (person) {
+    sendPasswordReset({
+      to: person.email, fullName: person.full_name, token,
+      issuedAt, expiresAt: new Date(issuedAt.getTime() + ttl * 60_000),
+    }).catch((err) => console.error(`[auth] reset email to ${person.email} failed: ${err.message}`));
+  }
+});
+
+async function liveReset(token) {
+  assertTokenShape(token);
+  const { rows } = await anonQuery(
+    'SELECT status, user_id, email, full_name FROM fn_verify_password_reset($1)', [hashToken(token)],
+  );
+  const row = rows[0];
+  if (!row || row.status !== 'VALID') throw linkError(row?.status ?? 'INVALID', 'password reset');
+  return row;
+}
+
+authRouter.post('/reset-password/verify', resetPasswordLimiter, async (req, res) => {
+  res.set(NO_STORE);
+  const { token } = tokenOnlySchema.parse(req.body ?? {});
+  const reset = await liveReset(token);
+  res.json({ valid: true, email: reset.email, fullName: reset.full_name, passwordRules: await passwordRules() });
+});
+
+// Does not sign the person in: they sign in with the new password, so an
+// administrator's 2-step verification still applies.
+authRouter.post('/reset-password', resetPasswordLimiter, async (req, res) => {
+  res.set(NO_STORE);
+  const { token, password } = setupAccountSchema.parse(req.body ?? {});
+  const reset = await liveReset(token);
+  await assertPasswordAcceptable(password, { email: reset.email, fullName: reset.full_name });
+
+  try {
+    await anonQuery(
+      'SELECT user_id FROM fn_consume_password_reset($1, $2, $3)',
+      [hashToken(token), await hashPassword(password), req.ip || 'unknown'],
+    );
+  } catch (err) {
+    throw linkError(err.code, 'password reset') ?? err;
+  }
+
+  sendPasswordChanged({ to: reset.email, fullName: reset.full_name })
+    .catch((err) => console.error(`[auth] password-changed notice failed: ${err.message}`));
+  res.json({ done: true, message: 'Your password has been changed. Sign in with your new password.' });
+});
+
+// ---------------------------------------------------------------------------
+// Confirming a new email address
+// ---------------------------------------------------------------------------
+
+async function liveEmailChange(token) {
+  assertTokenShape(token);
+  const { rows } = await anonQuery(
+    'SELECT status, user_id, email, full_name, new_email FROM fn_verify_email_change($1)', [hashToken(token)],
+  );
+  const row = rows[0];
+  if (!row || row.status !== 'VALID') throw linkError(row?.status ?? 'INVALID', 'email confirmation');
+  return row;
+}
+
+authRouter.post('/confirm-email/verify', resetPasswordLimiter, async (req, res) => {
+  res.set(NO_STORE);
+  const { token } = tokenOnlySchema.parse(req.body ?? {});
+  const change = await liveEmailChange(token);
+  res.json({ valid: true, fullName: change.full_name, email: change.email, newEmail: change.new_email });
+});
+
+authRouter.post('/confirm-email', resetPasswordLimiter, async (req, res) => {
+  res.set(NO_STORE);
+  const { token } = tokenOnlySchema.parse(req.body ?? {});
+  const change = await liveEmailChange(token);
+  let done;
+  try {
+    ({ rows: [done] } = await anonQuery(
+      'SELECT user_id, old_email, new_email FROM fn_consume_email_change($1, $2)', [hashToken(token), req.ip || 'unknown'],
+    ));
+  } catch (err) {
+    if (err.code === 'ST005') {
+      throw new HttpError(409, 'Another account already uses this email address. Ask the college administrator for help.', { code: 'EMAIL_TAKEN' });
+    }
+    throw linkError(err.code, 'email confirmation') ?? err;
+  }
+  sendEmailChanged({ to: done.old_email, fullName: change.full_name, newEmail: done.new_email })
+    .catch((err) => console.error(`[auth] email-changed notice failed: ${err.message}`));
+  res.json({ done: true, email: done.new_email, message: `Your account now uses ${done.new_email}. Sign in with it.` });
+});
+
+// ---------------------------------------------------------------------------
+// 2-step verification
+// ---------------------------------------------------------------------------
+
+export const mfaLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator(req.ip),
+  skip: () => process.env.NODE_ENV === 'test',
+  handler: (_req, _res, next) => {
+    next(new HttpError(429, 'Too many attempts. Try again in a few minutes.'));
+  },
+});
+
+const CODE_REFUSED = 'That code is not right. Check the time on your phone is set automatically, and use the newest code.';
+
+/** The person behind a challenge, still active and not signed out since. */
+async function challengedAccount(challenge, step) {
+  const { userId, tokenVersion } = readChallenge(challenge, step);
+  const { rows: [u] } = await anonQuery(
+    `SELECT user_id, email, full_name, COALESCE(token_version, 1) AS token_version,
+            mfa_secret_enc, mfa_pending_secret_enc, mfa_enabled_at, mfa_last_step,
+            locked_until IS NOT NULL AND locked_until > NOW() AS locked
+       FROM users WHERE user_id = $1 AND is_active`,
+    [userId],
+  );
+  if (!u || u.token_version !== tokenVersion) {
+    throw new HttpError(401, 'This sign-in attempt has expired. Please sign in again.', { code: 'CHALLENGE_EXPIRED' });
+  }
+  if (u.locked) throw new HttpError(401, SIGN_IN_REFUSED, { code: 'SIGN_IN_REFUSED' });
+  return u;
+}
+
+async function completeSignIn(res, account, method, extra = {}) {
+  await anonQuery('UPDATE users SET failed_login_count = 0 WHERE user_id = $1 AND failed_login_count <> 0', [account.user_id]);
+  await withUser(account.user_id, (db) => db.query(
+    `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
+     VALUES ('user', $1::text, $1::uuid, 'LOGIN', jsonb_build_object('second_step', $2::text))`,
+    [account.user_id, method],
+  ));
+  res.json({ token: issueToken(account.user_id, account.token_version), user: await describe(account.user_id), ...extra });
+}
+
+const verifySchema = z.object({
+  challenge: z.string().min(1).max(4000),
+  code: z.string().trim().max(20).optional(),
+  recoveryCode: z.string().trim().max(40).optional(),
+}).refine((v) => v.code || v.recoveryCode, 'Enter the code');
+
+authRouter.post('/mfa/verify', loginIpLimiter, mfaLimiter, async (req, res) => {
+  res.set(NO_STORE);
+  const body = verifySchema.parse(req.body ?? {});
+  const account = await challengedAccount(body.challenge, 'verify');
+  if (!account.mfa_enabled_at) {
+    throw new HttpError(401, 'This sign-in attempt has expired. Please sign in again.', { code: 'CHALLENGE_EXPIRED' });
+  }
+
+  if (body.recoveryCode) {
+    const { rows } = await anonQuery(
+      `UPDATE mfa_recovery_codes SET used_at = NOW()
+        WHERE user_id = $1 AND code_hash = $2 AND used_at IS NULL RETURNING code_id`,
+      [account.user_id, hashRecoveryCode(body.recoveryCode)],
+    );
+    if (!rows.length) {
+      await recordFailedSignIn(account);
+      throw new HttpError(401, 'That recovery code is not right, or it has already been used.', { code: 'MFA_CODE_INVALID' });
+    }
+    const { rows: [left] } = await anonQuery(
+      'SELECT count(*)::int AS n FROM mfa_recovery_codes WHERE user_id = $1 AND used_at IS NULL', [account.user_id],
+    );
+    sendRecoveryCodeUsed({ to: account.email, fullName: account.full_name, left: left.n })
+      .catch((err) => console.error(`[auth] recovery-code notice failed: ${err.message}`));
+    return completeSignIn(res, account, 'recovery_code', { recoveryCodesLeft: left.n });
+  }
+
+  const matched = matchingStep(decryptSecret(account.mfa_secret_enc), body.code);
+  // A code may be used once: anything at or before the last accepted step is a replay.
+  if (matched === null || (account.mfa_last_step !== null && matched <= Number(account.mfa_last_step))) {
+    await recordFailedSignIn(account);
+    throw new HttpError(401, CODE_REFUSED, { code: 'MFA_CODE_INVALID' });
+  }
+  await anonQuery('UPDATE users SET mfa_last_step = $2 WHERE user_id = $1', [account.user_id, matched]);
+  return completeSignIn(res, account, 'authenticator');
+});
+
+authRouter.post('/mfa/setup/start', loginIpLimiter, mfaLimiter, async (req, res) => {
+  res.set(NO_STORE);
+  const { challenge } = z.object({ challenge: z.string().min(1).max(4000) }).parse(req.body ?? {});
+  const account = await challengedAccount(challenge, 'enrol');
+  if (account.mfa_enabled_at) throw conflictTwoStep();
+
+  const secret = newSecret();
+  await anonQuery('UPDATE users SET mfa_pending_secret_enc = $2 WHERE user_id = $1', [account.user_id, encryptSecret(secret)]);
+  let issuer = 'Approval hub';
+  try { issuer = (await configService.get('institution.name')) || issuer; } catch { /* default */ }
+  res.json({ secret, issuer, account: account.email, otpauthUri: otpauthUri({ secret, account: account.email, issuer }) });
+});
+
+function conflictTwoStep() {
+  return new HttpError(409, '2-step verification is already set up for this account. Sign in again.', { code: 'MFA_ALREADY_ON' });
+}
+
+async function replaceRecoveryCodes(userId) {
+  const codes = newRecoveryCodes();
+  await anonQuery('DELETE FROM mfa_recovery_codes WHERE user_id = $1', [userId]);
+  for (const code of codes) {
+    await anonQuery('INSERT INTO mfa_recovery_codes (user_id, code_hash) VALUES ($1, $2)', [userId, hashRecoveryCode(code)]);
+  }
+  return codes;
+}
+
+authRouter.post('/mfa/setup/confirm', loginIpLimiter, mfaLimiter, async (req, res) => {
+  res.set(NO_STORE);
+  const { challenge, code } = z.object({ challenge: z.string().min(1).max(4000), code: z.string().trim().max(20) }).parse(req.body ?? {});
+  const account = await challengedAccount(challenge, 'enrol');
+  if (account.mfa_enabled_at) throw conflictTwoStep();
+  if (!account.mfa_pending_secret_enc) {
+    throw new HttpError(409, 'Start the setup again.', { code: 'MFA_SETUP_RESTART' });
+  }
+
+  const matched = matchingStep(decryptSecret(account.mfa_pending_secret_enc), code);
+  if (matched === null) {
+    await recordFailedSignIn(account);
+    throw new HttpError(401, CODE_REFUSED, { code: 'MFA_CODE_INVALID' });
+  }
+  await anonQuery(
+    `UPDATE users SET mfa_secret_enc = mfa_pending_secret_enc, mfa_pending_secret_enc = NULL,
+            mfa_enabled_at = NOW(), mfa_last_step = $2 WHERE user_id = $1`,
+    [account.user_id, matched],
+  );
+  const recoveryCodes = await replaceRecoveryCodes(account.user_id);
+  await anonQuery(
+    `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action) VALUES ('user', $1::text, $1::uuid, 'MFA_ENABLED')`,
+    [account.user_id],
+  );
+  sendTwoStepEnabled({ to: account.email, fullName: account.full_name })
+    .catch((err) => console.error(`[auth] 2-step notice failed: ${err.message}`));
+  return completeSignIn(res, account, 'enrolled', { recoveryCodes });
+});
+
+// New recovery codes (the old ones stop working). Needs a current code, so a
+// borrowed session alone cannot do it.
+authRouter.post('/mfa/recovery-codes', requireAuth, mfaLimiter, async (req, res) => {
+  res.set(NO_STORE);
+  const { code } = z.object({ code: z.string().trim().max(20) }).parse(req.body ?? {});
+  const { rows: [u] } = await anonQuery(
+    'SELECT user_id, mfa_secret_enc, mfa_last_step FROM users WHERE user_id = $1 AND mfa_enabled_at IS NOT NULL', [req.user.id],
+  );
+  if (!u) throw new HttpError(409, '2-step verification is not set up for this account.', { code: 'MFA_NOT_ON' });
+  const matched = matchingStep(decryptSecret(u.mfa_secret_enc), code);
+  if (matched === null || (u.mfa_last_step !== null && matched <= Number(u.mfa_last_step))) {
+    throw new HttpError(401, CODE_REFUSED, { code: 'MFA_CODE_INVALID' });
+  }
+  await anonQuery('UPDATE users SET mfa_last_step = $2 WHERE user_id = $1', [u.user_id, matched]);
+  const recoveryCodes = await replaceRecoveryCodes(u.user_id);
+  await anonQuery(
+    `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action) VALUES ('user', $1::text, $1::uuid, 'MFA_RECOVERY_CODES_REPLACED')`,
+    [u.user_id],
+  );
+  res.json({ recoveryCodes });
+});
+
+// The password rules, so every page shows the real policy rather than a copy.
+authRouter.get('/password-policy', async (_req, res) => {
+  res.json(await passwordRules());
 });
 
 authRouter.get('/me', requireAuth, async (req, res) => {
@@ -465,7 +658,7 @@ export const APPROVAL_BUDGET_ROLES = [
 
 async function describe(userId) {
   const { rows } = await anonQuery(
-    `SELECT u.user_id, u.email, u.full_name, u.employee_id, u.department_id,
+    `SELECT u.user_id, u.email, u.full_name, u.employee_id, u.department_id, u.mfa_enabled_at,
             d.name AS department_name, d.code AS department_code,
             ARRAY(SELECT r.code FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id
                    WHERE ur.user_id = u.user_id ORDER BY r.code) AS roles,
@@ -490,6 +683,8 @@ async function describe(userId) {
     departmentCode: u.department_code,
     roles: u.roles,
     stages: u.stages,
+    // Whether 2-step verification is on; never the secret itself.
+    mfa: { enabled: u.mfa_enabled_at !== null, enabledAt: u.mfa_enabled_at },
     // Hints for showing and hiding UI. The server enforces every one of these
     // independently — they grant nothing on their own.
     can: {

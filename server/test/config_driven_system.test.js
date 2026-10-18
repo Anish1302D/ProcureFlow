@@ -69,7 +69,6 @@ test('CONFIG: Authoritative schema definition contains all required institutiona
   const expectedKeys = [
     'workflow.threshold.principal_max',
     'workflow.threshold.cdc_max',
-    'self_registration.enabled',
     'roles.vice_chairman.title',
     'cdc.teaching_members_limit',
     'cdc.non_teaching_members_limit',
@@ -77,6 +76,12 @@ test('CONFIG: Authoritative schema definition contains all required institutiona
     'institution.name',
     'institution.system_name',
     'institution.support_email',
+    'auth.password_min_length',
+    'auth.invite_ttl_hours',
+    'auth.reset_ttl_minutes',
+    'auth.lockout_threshold',
+    'auth.lockout_minutes',
+    'auth.allowed_email_domains',
   ];
 
   for (const key of expectedKeys) {
@@ -90,7 +95,10 @@ test('CONFIG: Authoritative schema definition contains all required institutiona
 test('CONFIG: Default values enforce safe institutional baselines', () => {
   assert.strictEqual(DEFAULT_CONFIGS['workflow.threshold.principal_max'], 50000);
   assert.strictEqual(DEFAULT_CONFIGS['workflow.threshold.cdc_max'], 500000);
-  assert.strictEqual(DEFAULT_CONFIGS['self_registration.enabled'], false);
+  assert.strictEqual(DEFAULT_CONFIGS['auth.password_min_length'], 12);
+  assert.strictEqual(DEFAULT_CONFIGS['auth.invite_ttl_hours'], 168);
+  assert.strictEqual(DEFAULT_CONFIGS['auth.reset_ttl_minutes'], 60);
+  assert.deepStrictEqual(DEFAULT_CONFIGS['auth.allowed_email_domains'], [], 'every email domain may be invited by default');
   assert.strictEqual(DEFAULT_CONFIGS['roles.vice_chairman.title'], 'Vice Chairman');
   assert.strictEqual(DEFAULT_CONFIGS['cdc.teaching_members_limit'], 3);
   assert.strictEqual(DEFAULT_CONFIGS['cdc.non_teaching_members_limit'], 1);
@@ -107,9 +115,9 @@ test('CONFIG VALIDATION: Validates correct data types and ranges', () => {
   const pVal = configService.validate('workflow.threshold.principal_max', 75000);
   assert.strictEqual(pVal, 75000);
 
-  // Boolean flag
-  const bVal = configService.validate('self_registration.enabled', true);
-  assert.strictEqual(bVal, true);
+  // Domain list (normalised to lower case)
+  const dVal = configService.validate('auth.allowed_email_domains', ['Gmail.com', 'spcollege.edu.in']);
+  assert.deepStrictEqual(dVal, ['gmail.com', 'spcollege.edu.in']);
 
   // String title
   const sVal = configService.validate('roles.vice_chairman.title', 'Hon. Vice Chairman');
@@ -142,9 +150,15 @@ test('CONFIG VALIDATION: Rejects invalid data types and out-of-range values', ()
     (err) => err instanceof HttpError && err.status === 422,
   );
 
-  // Non-boolean self-registration flag
+  // Not a domain
   assert.throws(
-    () => configService.validate('self_registration.enabled', 'yes'),
+    () => configService.validate('auth.allowed_email_domains', ['not a domain']),
+    (err) => err instanceof HttpError && err.status === 422,
+  );
+
+  // Password minimum below the floor
+  assert.throws(
+    () => configService.validate('auth.password_min_length', 6),
     (err) => err instanceof HttpError && err.status === 422,
   );
 });
@@ -196,65 +210,6 @@ test('CONFIG VALIDATION: Enforces cross-key validation (Principal max must be st
     },
     (err) => err instanceof HttpError && err.status === 422 && err.message.includes('strictly less than CDC threshold'),
   );
-});
-
-// ============================================================================
-// 3. FAIL-CLOSED SELF-REGISTRATION BEHAVIOR
-// ============================================================================
-
-test('SELF-REGISTRATION: Fails closed by default when database record absent or unconfigured', async () => {
-  configService.invalidate();
-  const enabled = await configService.isSelfRegistrationEnabled();
-  assert.strictEqual(enabled, false, 'Self-registration must be disabled by default');
-});
-
-test('SELF-REGISTRATION: Strictly restricts allowed roles to non-privileged requesters', () => {
-  const allowedRoles = ['HEAD', 'ACTIVITY_INCHARGE'];
-  const privilegedRoles = [
-    'ADMIN',
-    'PRINCIPAL',
-    'CHAIRMAN',
-    'VICE_PRESIDENT',
-    'PURCHASE_COMMITTEE',
-    'CDC_MEMBER',
-    'CDC_GRANT_MEMBER',
-    'CDC_NON_GRANT_MEMBER',
-  ];
-
-  const registerSchema = z.object({
-    email: z.string().trim().toLowerCase().email().max(254),
-    fullName: z.string().trim().min(2).max(200),
-    password: z.string().min(8).max(200),
-    departmentId: z.number().int().positive().optional().nullable(),
-    role: z.enum(['HEAD', 'ACTIVITY_INCHARGE']).optional().default('HEAD'),
-  });
-
-  // Valid requester roles succeed
-  for (const allowedRole of allowedRoles) {
-    const valid = registerSchema.parse({
-      email: 'test@spcollege.edu',
-      fullName: 'Test Faculty',
-      password: 'securePassword123',
-      role: allowedRole,
-    });
-    assert.strictEqual(valid.role, allowedRole);
-  }
-
-  // Privileged roles are rejected by schema
-  for (const privRole of privilegedRoles) {
-    assert.throws(
-      () => {
-        registerSchema.parse({
-          email: 'test@spcollege.edu',
-          fullName: 'Test Faculty',
-          password: 'securePassword123',
-          role: privRole,
-        });
-      },
-      (err) => err instanceof z.ZodError,
-      `Privileged role ${privRole} must never be accepted by self-registration`,
-    );
-  }
 });
 
 // ============================================================================
@@ -586,87 +541,6 @@ test('ADMIN USER MGMT: User detail and audit logs never expose password hashes o
 });
 
 // ============================================================================
-// 8. CONFIGURABLE SELF-REGISTRATION POLICY
-// ============================================================================
-
-// ============================================================================
-// 8. CONFIGURABLE SELF-REGISTRATION POLICY & LEAST-PRIVILEGED ROLES
-// ============================================================================
-
-test('SELF-REGISTRATION: Client-supplied roles, departments, or permissions are strictly rejected', () => {
-  function handleRegisterAttempt(body) {
-    if (
-      body?.role ||
-      body?.roles ||
-      body?.roleIds ||
-      body?.departmentId ||
-      body?.department_id ||
-      body?.stageId ||
-      body?.stages ||
-      body?.permissions
-    ) {
-      throw new HttpError(400, 'Self-registration cannot specify roles, departments, or permissions');
-    }
-  }
-
-  // Attempt to register with privileged roles (HEAD, ADMIN, PRINCIPAL, etc.)
-  for (const privilegedRole of ['HEAD', 'ADMIN', 'PRINCIPAL', 'CDC_MEMBER', 'PURCHASE_COMMITTEE', 'CHAIRMAN', 'VICE_PRESIDENT']) {
-    assert.throws(
-      () => handleRegisterAttempt({ email: 'test@spcollege.edu', role: privilegedRole }),
-      (err) => err.status === 400 && err.message.includes('Self-registration cannot specify roles, departments, or permissions'),
-    );
-  }
-
-  // Attempt to supply client roles array or role IDs
-  assert.throws(
-    () => handleRegisterAttempt({ email: 'test@spcollege.edu', roles: ['ADMIN'] }),
-    (err) => err.status === 400,
-  );
-  assert.throws(
-    () => handleRegisterAttempt({ email: 'test@spcollege.edu', roleIds: [10] }),
-    (err) => err.status === 400,
-  );
-
-  // Attempt to supply client department assignment
-  assert.throws(
-    () => handleRegisterAttempt({ email: 'test@spcollege.edu', departmentId: 2 }),
-    (err) => err.status === 400,
-  );
-});
-
-test('SELF-REGISTRATION: Legitimate registration assigns only least-privileged requester role and null department', () => {
-  const assignedRoleCode = 'ACTIVITY_INCHARGE';
-  const assignedDepartmentId = null;
-
-  assert.strictEqual(assignedRoleCode, 'ACTIVITY_INCHARGE');
-  assert.strictEqual(assignedDepartmentId, null);
-
-  const mockUser = {
-    roles: [assignedRoleCode],
-    stages: [],
-  };
-  assert.strictEqual(mockUser.roles.includes('HEAD'), false);
-  assert.strictEqual(mockUser.roles.includes('ADMIN'), false);
-  assert.strictEqual(mockUser.stages.length, 0);
-});
-
-test('SELF-REGISTRATION: Registration fails closed when configuration is disabled or unconfigured', async () => {
-  const enabled = await configService.isSelfRegistrationEnabled();
-  assert.strictEqual(enabled, false);
-
-  function checkAllowed(isEnabled) {
-    if (!isEnabled) {
-      throw new HttpError(403, 'Self-registration is currently disabled by administrator');
-    }
-  }
-
-  assert.throws(
-    () => checkAllowed(false),
-    (err) => err.status === 403 && err.message.includes('Self-registration is currently disabled'),
-  );
-});
-
-// ============================================================================
 // 9. ADMIN-CREATED ACCOUNT ACTIVATION & SECURE SETUP TOKEN FLOW
 // ============================================================================
 
@@ -955,17 +829,22 @@ test('ACCOUNT ACTIVATION: Delivery protection, anti-caching, rate limiters, and 
   assert.ok(verifySetupLimiter, 'verifySetupLimiter must be exported');
   assert.ok(setupAccountLimiter, 'setupAccountLimiter must be exported');
 
-  // 2. Anti-caching headers defined on setup endpoints
+  // 2. Anti-caching headers are defined once and used by every link endpoint
+  const linksSrc = await fs.readFile(path.resolve('src', 'oneTimeLinks.js'), 'utf8');
+  assert.ok(linksSrc.includes("'Cache-Control': 'no-store, no-cache, must-revalidate, private'"));
+  assert.ok(linksSrc.includes("Pragma: 'no-cache'"));
+  assert.ok(linksSrc.includes("Expires: '0'"));
   const authRoutesSrc = await fs.readFile(path.resolve('src', 'routes', 'auth.js'), 'utf8');
-  assert.ok(authRoutesSrc.includes("'Cache-Control': 'no-store, no-cache, must-revalidate, private'"));
-  assert.ok(authRoutesSrc.includes("Pragma: 'no-cache'"));
-  assert.ok(authRoutesSrc.includes("Expires: '0'"));
+  assert.ok(authRoutesSrc.includes('res.set(NO_STORE)'));
 
-  // 3. Admin user creation & token generation sets anti-caching headers and does NOT claim email sent
+  // 3. The administrator never receives the link: it is emailed, and the
+  //    response carries no token. Tokens never travel in a URL query string.
   const adminRoutesSrc = await fs.readFile(path.resolve('src', 'routes', 'admin.js'), 'utf8');
-  assert.ok(adminRoutesSrc.includes("emailDelivery: 'UNCONFIGURED'"));
-  assert.ok(adminRoutesSrc.includes('Outbound email delivery is unconfigured in this environment'));
-  assert.strictEqual(adminRoutesSrc.includes('Email sent successfully'), false);
+  for (const leak of ['setupToken', 'setupUrl']) {
+    assert.strictEqual(adminRoutesSrc.includes(leak), false, `admin.js must not return ${leak}`);
+  }
+  assert.ok(adminRoutesSrc.includes('res.set(NO_STORE)'));
+  assert.strictEqual(authRoutesSrc.includes('req.query.token'), false);
 
   // 4. Server error logging redacts setup token from URLs
   const errorsSrc = await fs.readFile(path.resolve('src', 'errors.js'), 'utf8');
@@ -976,16 +855,18 @@ test('ACCOUNT ACTIVATION: Delivery protection, anti-caching, rate limiters, and 
   assert.strictEqual(redactedUrl, '/api/auth/verify-setup-token?token=[REDACTED]&format=json');
   assert.strictEqual(redactedUrl.includes('supersecrettoken1234567890'), false);
 
-  // 5. Frontend SetupAccount immediately cleanses URL token on mount
+  // 5. Pages opened from links remove the token from the address bar on mount
+  const publicRoutesSrc = await fs.readFile(path.resolve('..', 'src', 'publicRoutes.js'), 'utf8');
+  assert.ok(publicRoutesSrc.includes('window.history.replaceState({}, document.title, window.location.pathname)'));
   const setupAccountPageSrc = await fs.readFile(path.resolve('..', 'src', 'pages', 'SetupAccount.jsx'), 'utf8');
-  assert.ok(setupAccountPageSrc.includes('window.history.replaceState({}, document.title, window.location.pathname)'));
+  assert.ok(setupAccountPageSrc.includes('forgetLinkInAddressBar()'));
 
   // 6. index.html has strict referrer policy
   const indexHtml = await fs.readFile(path.resolve('..', 'index.html'), 'utf8');
   assert.ok(indexHtml.includes('name="referrer" content="strict-origin-when-cross-origin"'));
 });
 
-test('SELF-REGISTRATION: ACTIVITY_INCHARGE is strictly least-privileged requester and lacks approval/management authority', () => {
+test('ROLES: ACTIVITY_INCHARGE is strictly least-privileged requester and lacks approval/management authority', () => {
   // ACTIVITY_INCHARGE is in REQUESTER_ROLES (can raise requisitions)
   assert.ok(REQUESTER_ROLES.includes('ACTIVITY_INCHARGE'));
 
@@ -1000,9 +881,9 @@ test('SELF-REGISTRATION: ACTIVITY_INCHARGE is strictly least-privileged requeste
   const APPROVAL_ROLES = ['PRINCIPAL', 'CHAIRMAN', 'VICE_PRESIDENT', 'CDC_MEMBER', 'ADMIN'];
   assert.strictEqual(APPROVAL_ROLES.includes('ACTIVITY_INCHARGE'), false);
 
-  // A self-registered user has no workflow stage assignments and null department
+  // A newly invited requester has no workflow stage assignments and no department yet
   const selfRegUser = {
-    id: 'self-reg-1',
+    id: 'requester-1',
     roles: ['ACTIVITY_INCHARGE'],
     departmentId: null,
     stages: [],
@@ -1163,11 +1044,12 @@ test('LIVE DB: system_configurations table and SQL functions behave correctly', 
   );
   assert.strictEqual(Number(numResult.rows[0].val), 50000);
 
-  // 3. Test app_get_config_bool SQL function
+  // 3. Test app_get_config_bool SQL function: an absent key yields the default
   const boolResult = await anonQuery(
-    "SELECT app_get_config_bool('self_registration.enabled', true) AS val",
+    "SELECT app_get_config_bool('test.absent_flag', true) AS on_default, app_get_config_bool('test.absent_flag', false) AS off_default",
   );
-  assert.strictEqual(Boolean(boolResult.rows[0].val), false);
+  assert.strictEqual(boolResult.rows[0].on_default, true);
+  assert.strictEqual(boolResult.rows[0].off_default, false);
 
   // 4. Verify Vice Chairman role rename
   const roleResult = await anonQuery("SELECT name FROM roles WHERE code = 'VICE_PRESIDENT'");
@@ -1420,10 +1302,6 @@ test('CONFIG FAIL-CLOSED: Critical workflow thresholds fail closed when missing,
     (err) => err instanceof HttpError && err.status === 500 && err.message.includes('cannot be trusted'),
     'Critical threshold must fail closed when database error occurs'
   );
-
-  // Self-registration fails closed to false on DB error
-  const regStatus = await configService.isSelfRegistrationEnabled();
-  assert.strictEqual(regStatus, false, 'Self-registration must fail closed (false) on database error');
 
   // Safe non-critical setting falls back to safe institutional default
   const instName = await configService.get('institution.name');

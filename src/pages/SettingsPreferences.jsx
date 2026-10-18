@@ -19,7 +19,7 @@ const STAGE_COLORS = [
 ];
 
 export const SettingsPreferences = () => {
-  const { user, showToast, setActivePage } = useApp();
+  const { user, showToast } = useApp();
   const isAdmin = user?.roles?.includes('ADMIN');
 
   const stagesApi = useApi('/api/workflow/stages');
@@ -35,7 +35,6 @@ export const SettingsPreferences = () => {
   // Form values
   const [principalMax, setPrincipalMax] = useState(50000);
   const [cdcMax, setCdcMax] = useState(500000);
-  const [selfRegEnabled, setSelfRegEnabled] = useState(false);
   const [vcTitle, setVcTitle] = useState('Vice Chairman');
   const [budgetWarn, setBudgetWarn] = useState(85);
   const [instName, setInstName] = useState('S.P. College');
@@ -61,7 +60,6 @@ export const SettingsPreferences = () => {
       const map = Object.fromEntries(items.map((i) => [i.key, i.value]));
       if (map['workflow.threshold.principal_max'] !== undefined) setPrincipalMax(Number(map['workflow.threshold.principal_max']));
       if (map['workflow.threshold.cdc_max'] !== undefined) setCdcMax(Number(map['workflow.threshold.cdc_max']));
-      if (map['self_registration.enabled'] !== undefined) setSelfRegEnabled(Boolean(map['self_registration.enabled']));
       if (map['roles.vice_chairman.title'] !== undefined) setVcTitle(String(map['roles.vice_chairman.title']));
       if (map['budget.warn_utilization_percent'] !== undefined) setBudgetWarn(Number(map['budget.warn_utilization_percent']));
       if (map['institution.name'] !== undefined) setInstName(String(map['institution.name']));
@@ -141,7 +139,6 @@ export const SettingsPreferences = () => {
         method: 'PATCH',
         body: {
           updates: {
-            'self_registration.enabled': Boolean(selfRegEnabled),
             'roles.vice_chairman.title': vcTitle.trim(),
             'budget.warn_utilization_percent': Number(budgetWarn),
             'institution.name': instName.trim(),
@@ -354,7 +351,7 @@ export const SettingsPreferences = () => {
               : 'border-transparent text-gray-500 hover:text-gray-900'
           }`}
         >
-          <Settings className="w-4 h-4" /> Registration Settings &amp; System Flags
+          <Settings className="w-4 h-4" /> Institution &amp; System Settings
         </button>
         <button
           type="button"
@@ -661,58 +658,13 @@ export const SettingsPreferences = () => {
         <div className="space-y-6">
           <div className="bg-white rounded-2xl border border-gray-200 p-6 space-y-6 shadow-sm">
             <div>
-              <h3 className="text-base font-extrabold text-gray-900">Feature Flags &amp; Institutional Parameters</h3>
+              <h3 className="text-base font-extrabold text-gray-900">Institutional Parameters</h3>
               <p className="text-xs text-gray-500 mt-1">
-                Configure self-service features, institutional labels, and budget alerting rules.
+                Configure institutional labels and budget alerting rules. Accounts are created only by invitation from User Management.
               </p>
             </div>
 
             <form onSubmit={saveFlagsAndMetadata} className="space-y-6">
-              {/* Feature Flag: Public Self-Registration */}
-              <div className="p-4 rounded-xl border border-gray-200 bg-gray-50/50 flex items-start justify-between gap-4">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold text-gray-900 uppercase tracking-wider">
-                      Public Faculty Self-Registration
-                    </span>
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                      selfRegEnabled ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-600'
-                    }`}>
-                      {selfRegEnabled ? 'ENABLED' : 'DISABLED (FAILS CLOSED)'}
-                    </span>
-                  </div>
-                  <p className="text-xs text-gray-500 max-w-xl leading-relaxed">
-                    When enabled, faculty members and activity in-charges can register from the sign-in screen.
-                    Only non-privileged requisition roles (HEAD, ACTIVITY_INCHARGE) are granted. Administrative and approver roles cannot be self-registered under any circumstances.
-                  </p>
-                  <p className="text-[11px] text-gray-500 max-w-xl leading-relaxed mt-1">
-                    <strong>Note:</strong> Disabling public self-registration does not prevent administrators from creating or managing institutional accounts at any time.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setActivePage('user-management')}
-                    className="mt-2 text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
-                  >
-                    Go to User Management &rarr;
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setSelfRegEnabled(!selfRegEnabled)}
-                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                    selfRegEnabled ? 'bg-indigo-600' : 'bg-gray-300'
-                  }`}
-                  role="switch"
-                  aria-checked={selfRegEnabled}
-                >
-                  <span
-                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                      selfRegEnabled ? 'translate-x-5' : 'translate-x-0'
-                    }`}
-                  />
-                </button>
-              </div>
-
               {/* Institutional Role Label: Vice Chairman */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5">

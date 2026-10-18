@@ -37,7 +37,6 @@ INSERT INTO system_configurations (key, value, description, category, is_secret)
     ('workflow.stage.intermediate', '"CDC"'::jsonb, 'Stage code for College Development Committee intermediate authority', 'approval_workflow', FALSE),
     ('workflow.stage.final_authority', '"FINAL_AUTHORITY"'::jsonb, 'Stage code for the final governing authority', 'approval_workflow', FALSE),
     ('workflow.authority.final_role', '"CHAIRMAN"'::jsonb, 'Role code authorized for final sanction', 'approval_workflow', FALSE),
-    ('self_registration.enabled', 'false'::jsonb, 'Whether public user self-registration is enabled. Default false.', 'feature_flags', FALSE),
     ('roles.vice_chairman.title', '"Vice Chairman"'::jsonb, 'Institutional title for Vice Chairman role', 'institutional', FALSE),
     ('cdc.teaching_members_limit', '3'::jsonb, 'Maximum number of teaching faculty members on the College Development Committee', 'institutional', FALSE),
     ('cdc.non_teaching_members_limit', '1'::jsonb, 'Maximum number of non-teaching staff members on the College Development Committee', 'institutional', FALSE),
