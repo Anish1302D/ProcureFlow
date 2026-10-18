@@ -25,7 +25,15 @@ CREATE TABLE users (
     is_active      BOOLEAN NOT NULL DEFAULT TRUE,
     token_version  INTEGER NOT NULL DEFAULT 1,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- Invitation and account history.
+    invited_by          UUID REFERENCES users(user_id) ON DELETE SET NULL,
+    invited_at          TIMESTAMPTZ,
+    activated_at        TIMESTAMPTZ,
+    password_changed_at TIMESTAMPTZ,
+    -- Sign-in lockout, kept in the database so it survives restarts.
+    failed_login_count  INTEGER NOT NULL DEFAULT 0,
+    locked_until        TIMESTAMPTZ
 );
 
 CREATE TABLE user_roles (
@@ -35,17 +43,30 @@ CREATE TABLE user_roles (
     PRIMARY KEY (user_id, role_id)
 );
 
+-- One-time links emailed to a person: invitations, password resets and email
+-- changes. Only the SHA-256 hash of the link's token is stored; the token
+-- itself exists only in the email. A link is bound to the address it was sent
+-- to, and a newer link of the same purpose revokes the older one.
 CREATE TABLE account_setup_tokens (
     token_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id        UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
     token_hash     TEXT NOT NULL,
     expires_at     TIMESTAMPTZ NOT NULL,
     used_at        TIMESTAMPTZ,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    purpose        TEXT NOT NULL DEFAULT 'INVITE'
+                   CHECK (purpose IN ('INVITE', 'PASSWORD_RESET', 'EMAIL_CHANGE')),
+    sent_to_email  CITEXT,
+    new_email      CITEXT,
+    requested_ip   TEXT,
+    revoked_at     TIMESTAMPTZ
 );
 
 CREATE INDEX account_setup_tokens_user_idx ON account_setup_tokens(user_id);
 CREATE INDEX account_setup_tokens_hash_idx ON account_setup_tokens(token_hash);
+CREATE UNIQUE INDEX account_setup_tokens_one_live
+    ON account_setup_tokens(user_id, purpose)
+    WHERE used_at IS NULL AND revoked_at IS NULL;
 
 CREATE TABLE courses (
     course_id      SERIAL PRIMARY KEY,
