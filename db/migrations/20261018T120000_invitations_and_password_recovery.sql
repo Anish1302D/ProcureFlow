@@ -222,7 +222,8 @@ CREATE OR REPLACE FUNCTION fn_issue_password_reset(
     p_email TEXT,
     p_token_hash TEXT,
     p_ttl_minutes INTEGER,
-    p_ip TEXT
+    p_ip TEXT,
+    p_max_per_hour INTEGER
 )
 RETURNS TABLE (user_id UUID, email TEXT, full_name TEXT)
 LANGUAGE plpgsql
@@ -245,6 +246,15 @@ BEGIN
         RETURN;
     END IF;
 
+    -- Repeated requests must not flood someone's inbox: past the hourly cap,
+    -- quietly issue nothing (the caller cannot tell the difference).
+    IF (SELECT count(*) FROM account_setup_tokens t
+         WHERE t.user_id = v_user.user_id
+           AND t.purpose = 'PASSWORD_RESET'
+           AND t.created_at > NOW() - interval '1 hour') >= COALESCE(p_max_per_hour, 3) THEN
+        RETURN;
+    END IF;
+
     UPDATE account_setup_tokens
        SET revoked_at = NOW()
      WHERE account_setup_tokens.user_id = v_user.user_id
@@ -263,8 +273,8 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION fn_issue_password_reset(TEXT, TEXT, INTEGER, TEXT) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION fn_issue_password_reset(TEXT, TEXT, INTEGER, TEXT) TO app_user;
+REVOKE ALL ON FUNCTION fn_issue_password_reset(TEXT, TEXT, INTEGER, TEXT, INTEGER) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION fn_issue_password_reset(TEXT, TEXT, INTEGER, TEXT, INTEGER) TO app_user;
 
 -- Whether a reset link can still be used, without using it.
 CREATE OR REPLACE FUNCTION fn_verify_password_reset(p_token_hash TEXT)
