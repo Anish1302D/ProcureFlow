@@ -234,3 +234,106 @@ test('an optional allow-list can restrict which email domains are invited', asyn
     token: tok.admin, body: { settings: { 'auth.allowed_email_domains': [] } } }), 200);
   expectStatus(await invite('someone@gmail.com', 'Some One'), 201);
 });
+
+// ---------------------------------------------------------------------------
+// Forgotten passwords are reset by email, with no administrator involved
+// ---------------------------------------------------------------------------
+
+async function forgot(email) {
+  return t.api('POST', '/api/auth/forgot-password', { body: { email } });
+}
+
+test('asking for a reset reveals nothing about which addresses have accounts', async () => {
+  const known = await forgot('pc1@spcollege.edu');
+  const unknown = await forgot('nobody.here@example.com');
+  const notYetAccepted = await forgot('someone@gmail.com'); // invited above, never accepted
+  for (const res of [known, unknown, notYetAccepted]) {
+    assert.equal(res.status, 202);
+    assert.deepEqual(res.body, known.body, 'the same words for every address');
+  }
+  assert.equal((await t.waitForMail('pc1@spcollege.edu', /Reset/)).length, 1, 'the real, active account gets a link');
+  assert.equal((await t.inbox('nobody.here@example.com')).length, 0);
+  assert.equal((await t.inbox('someone@gmail.com')).filter((m) => /Reset/.test(m.subject)).length, 0,
+    'an invitee who never accepted gets no reset link (their invitation is the way in)');
+});
+
+test('the reset link sets a new password, signs out every device and tells the owner', async () => {
+  const before = await t.login('pc1@spcollege.edu');
+  const mail = (await t.waitForMail('pc1@spcollege.edu', /Reset your password/)).at(-1);
+  assert.match(mail.html, /60 minutes/);
+  const token = t.linkIn(mail, 'reset-password');
+
+  const seen = expectStatus(await t.api('POST', '/api/auth/reset-password/verify', { body: { token } }), 200);
+  assert.equal(seen.email, 'pc1@spcollege.edu');
+
+  const weak = await t.api('POST', '/api/auth/reset-password', { body: { token, password: 'short' } });
+  assert.equal(weak.status, 422, 'a weak password is refused and the link stays usable');
+
+  const fresh = 'amber-lighthouse-orchard-19';
+  const done = expectStatus(await t.api('POST', '/api/auth/reset-password', { body: { token, password: fresh } }), 200);
+  assert.equal(done.token, undefined, 'no automatic sign-in: the new password must be used to sign in');
+
+  expectStatus(await t.api('GET', '/api/auth/me', { token: before }), 401);
+  assert.equal(await canSignIn('pc1@spcollege.edu', PASSWORD), false);
+  assert.equal(await canSignIn('pc1@spcollege.edu', fresh), true);
+  assert.equal((await t.waitForMail('pc1@spcollege.edu', /password was changed/)).length, 1);
+
+  const again = await t.api('POST', '/api/auth/reset-password', { body: { token, password: 'second-try-phrase-55' } });
+  assert.equal(again.status, 410);
+  assert.equal(again.body.error.code, 'LINK_USED');
+});
+
+test('a newer reset link replaces the older one, and links expire', async () => {
+  await forgot('principal@spcollege.edu');
+  const first = t.linkIn((await t.waitForMail('principal@spcollege.edu', /Reset/, 1)).at(-1), 'reset-password');
+  await forgot('principal@spcollege.edu');
+  const second = t.linkIn((await t.waitForMail('principal@spcollege.edu', /Reset/, 2)).at(-1), 'reset-password');
+
+  const old = await t.api('POST', '/api/auth/reset-password/verify', { body: { token: first } });
+  assert.equal(old.body.error.code, 'LINK_REVOKED');
+
+  await t.superuser.query(
+    `UPDATE account_setup_tokens SET expires_at = NOW() - interval '1 minute'
+      WHERE purpose = 'PASSWORD_RESET' AND used_at IS NULL AND revoked_at IS NULL
+        AND user_id = (SELECT user_id FROM users WHERE email = 'principal@spcollege.edu')`);
+  const expired = await t.api('POST', '/api/auth/reset-password/verify', { body: { token: second } });
+  assert.equal(expired.body.error.code, 'LINK_EXPIRED');
+});
+
+test('repeated requests cannot flood someone\'s inbox', async () => {
+  for (let i = 0; i < 6; i += 1) expectStatus(await forgot('pc2@spcollege.edu'), 202);
+  await t.waitForMail('pc2@spcollege.edu', /Reset/, 3);
+  await new Promise((resolve) => { setTimeout(resolve, 300); }); // give any extra (wrong) email time to appear
+  const resets = (await t.inbox('pc2@spcollege.edu')).filter((m) => /Reset/.test(m.subject));
+  assert.equal(resets.length, 3, 'capped at the configured three an hour, while every reply looks the same');
+});
+
+// ---------------------------------------------------------------------------
+// Repeated wrong passwords pause the account, without revealing anything
+// ---------------------------------------------------------------------------
+
+test('five wrong passwords pause sign-in, the owner is told, and a reset clears it', async () => {
+  const who = 'clerk@spcollege.edu';
+  let refusal;
+  for (let i = 0; i < 5; i += 1) {
+    refusal = await t.api('POST', '/api/auth/login', { body: { email: who, password: `wrong-guess-${i}` } });
+    assert.equal(refusal.status, 401);
+  }
+  const { rows } = await t.superuser.query('SELECT locked_until > NOW() AS locked FROM users WHERE email = $1', [who]);
+  assert.equal(rows[0].locked, true, 'the pause is kept in the database, so a restart does not lift it');
+  assert.equal((await t.waitForMail(who, /Sign-in paused/)).length, 1);
+
+  // Even the right password is refused while paused — with the same words as
+  // a wrong one, and the same as for an address with no account at all.
+  const paused = await t.api('POST', '/api/auth/login', { body: { email: who, password: PASSWORD } });
+  const unknown = await t.api('POST', '/api/auth/login', { body: { email: 'ghost@example.com', password: PASSWORD } });
+  assert.equal(paused.status, 401);
+  assert.equal(paused.body.error.message, refusal.body.error.message);
+  assert.equal(unknown.body.error.message, refusal.body.error.message);
+  assert.equal(paused.body.error.code, 'SIGN_IN_REFUSED');
+
+  await forgot(who);
+  const token = t.linkIn((await t.waitForMail(who, /Reset/)).at(-1), 'reset-password');
+  expectStatus(await t.api('POST', '/api/auth/reset-password', { body: { token, password: 'copper-valley-thistle-64' } }), 200);
+  assert.equal(await canSignIn(who, 'copper-valley-thistle-64'), true, 'the reset lifted the pause');
+});

@@ -162,3 +162,17 @@ export async function sendEmailChanged({ to, fullName, newEmail }) {
   });
   return sendMail({ to, subject: 'Your account email was changed', html });
 }
+
+/** Several wrong passwords in a row: tell the owner, and how to get back in now. */
+export async function sendAccountLocked({ to, fullName, until }) {
+  const brand = await branding();
+  const html = layout(brand, {
+    heading: 'Sign-in paused after several wrong passwords',
+    paragraphs: [
+      `Dear ${escapeHtml(fullName)},`,
+      `Someone entered the wrong password for your account several times, so sign-in is paused until ${escapeHtml(when(until))}.`,
+      'If it was you, wait until then or use <strong>Forgot password?</strong> on the sign-in page to choose a new password straight away. If it was not you, resetting your password is the safest step.',
+    ],
+  });
+  return sendMail({ to, subject: 'Sign-in paused on your account', html });
+}

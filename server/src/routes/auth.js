@@ -5,7 +5,10 @@ import { z } from 'zod';
 import { issueToken, requireAuth } from '../auth.js';
 import { anonQuery, withUser } from '../db.js';
 import { HttpError } from '../errors.js';
-import { NO_STORE, assertTokenShape, hashToken, linkError } from '../oneTimeLinks.js';
+import { sendAccountLocked, sendPasswordChanged, sendPasswordReset } from '../accountEmails.js';
+import { config } from '../config.js';
+import { configService } from '../configService.js';
+import { NO_STORE, assertTokenShape, hashToken, linkError, newToken } from '../oneTimeLinks.js';
 import { assertPasswordAcceptable, hashPassword, passwordRules } from '../passwordPolicy.js';
 import { REQUESTER_ROLES, ISSUE_MANAGER_ROLES, INVENTORY_READER_ROLES, hasAnyRole } from '../roles.js';
 
@@ -77,10 +80,67 @@ export const setupAccountLimiter = rateLimit({
 });
 
 
+// Forgotten-password requests, per network: enough for a shared campus
+// connection, too few to be useful for flooding. Each account is also capped
+// in the database (auth.reset_requests_per_hour).
+export const forgotPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator(req.ip),
+  skip: () => process.env.NODE_ENV === 'test',
+  handler: (_req, _res, next) => {
+    next(new HttpError(429, 'Too many requests from this network. Try again in a few minutes.'));
+  },
+});
+
+export const resetPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator(req.ip),
+  skip: () => process.env.NODE_ENV === 'test',
+  handler: (_req, _res, next) => {
+    next(new HttpError(429, 'Too many attempts. Try again in a few minutes.'));
+  },
+});
+
+// Every failed sign-in gets the same answer, whether the address is unknown,
+// the password wrong, or the account paused: telling them apart would reveal
+// which addresses have accounts.
+const SIGN_IN_REFUSED = 'Incorrect email or password. After several wrong attempts sign-in pauses for a few minutes; "Forgot password?" gets you back in straight away.';
+
 // An unknown address is checked against this hash anyway, so a missing
 // account and a wrong password take the same time to answer. Otherwise the
 // response time alone would reveal which addresses have accounts.
 const DUMMY_HASH = bcrypt.hashSync('not-a-real-password', 12);
+
+// Counts a wrong password against an account. At the configured threshold the
+// account pauses for the configured minutes (kept in the database, so a
+// restart does not clear it) and its owner is told by email.
+async function recordFailedSignIn(account) {
+  const threshold = await configService.get('auth.lockout_threshold');
+  const minutes = await configService.get('auth.lockout_minutes');
+  const { rows } = await anonQuery(
+    `UPDATE users
+        SET failed_login_count = CASE WHEN failed_login_count + 1 >= $2 THEN 0 ELSE failed_login_count + 1 END,
+            locked_until = CASE WHEN failed_login_count + 1 >= $2 THEN NOW() + make_interval(mins => $3) ELSE locked_until END
+      WHERE user_id = $1
+  RETURNING locked_until, locked_until > NOW() AS now_locked`,
+    [account.user_id, threshold, minutes],
+  );
+  if (rows[0]?.now_locked) {
+    await anonQuery(
+      `INSERT INTO audit_logs (entity_type, entity_id, action, after_json)
+       VALUES ('user', $1::text, 'ACCOUNT_LOCKED', jsonb_build_object('until', $2::text))`,
+      [account.user_id, rows[0].locked_until.toISOString()],
+    );
+    sendAccountLocked({ to: account.email, fullName: account.full_name, until: rows[0].locked_until })
+      .catch((err) => console.error(`[auth] lock notice to ${account.email} failed: ${err.message}`));
+  }
+}
 
 authRouter.post('/login', loginIpLimiter, loginLimiter, async (req, res) => {
   const { email, password } = loginSchema.parse(req.body);
@@ -91,7 +151,8 @@ authRouter.post('/login', loginIpLimiter, loginLimiter, async (req, res) => {
   let rows;
   try {
     const res = await anonQuery(
-      `SELECT user_id, password_hash, COALESCE(token_version, 1) AS token_version
+      `SELECT user_id, email, full_name, password_hash, COALESCE(token_version, 1) AS token_version,
+              locked_until IS NOT NULL AND locked_until > NOW() AS locked
          FROM users WHERE email = $1 AND is_active`,
       [email],
     );
@@ -107,15 +168,25 @@ authRouter.post('/login', loginIpLimiter, loginLimiter, async (req, res) => {
     throw err;
   }
   const account = rows[0];
+  // Always compare, so a paused or unknown account takes as long to refuse.
   const valid = await bcrypt.compare(password, account?.password_hash ?? DUMMY_HASH);
 
-  if (!account || !valid) {
+  if (!account || !valid || account.locked) {
     await anonQuery(
       `INSERT INTO audit_logs (entity_type, entity_id, action, after_json)
        VALUES ('user', $1, 'LOGIN_FAILED', jsonb_build_object('ip', $2::text))`,
       [email, req.ip],
     );
-    throw new HttpError(401, 'Incorrect email or password');
+    if (account && !account.locked) await recordFailedSignIn(account);
+    throw new HttpError(401, SIGN_IN_REFUSED, { code: 'SIGN_IN_REFUSED' });
+  }
+
+  if (account.locked === false) {
+    await anonQuery(
+      `UPDATE users SET failed_login_count = 0
+        WHERE user_id = $1 AND failed_login_count <> 0`,
+      [account.user_id],
+    );
   }
 
   await withUser(account.user_id, (db) =>
@@ -237,10 +308,13 @@ authRouter.post('/change-password', requireAuth, changePasswordLimiter, async (r
 
   await assertPasswordAcceptable(newPassword, { email: req.user.email, fullName: req.user.name });
   const newHash = await hashPassword(newPassword);
+  const notify = () => sendPasswordChanged({ to: req.user.email, fullName: req.user.name })
+    .catch((err) => console.error(`[auth] password-changed notice failed: ${err.message}`));
   await withUser(req.user.id, async (db) => {
     try {
       await db.query(
-        'UPDATE users SET password_hash = $1, token_version = COALESCE(token_version, 1) + 1, updated_at = NOW() WHERE user_id = $2',
+        `UPDATE users SET password_hash = $1, token_version = COALESCE(token_version, 1) + 1,
+                password_changed_at = NOW(), updated_at = NOW() WHERE user_id = $2`,
         [newHash, req.user.id],
       );
     } catch (err) {
@@ -255,7 +329,84 @@ authRouter.post('/change-password', requireAuth, changePasswordLimiter, async (r
     }
   });
 
+  notify();
   res.status(204).end();
+});
+
+// ---------------------------------------------------------------------------
+// Forgotten password
+// ---------------------------------------------------------------------------
+// The answer never depends on whether the address has an account, and the
+// email is sent after replying, so neither the words nor the timing tell.
+
+const FORGOT_REPLY = {
+  message: 'If an account uses that email address, a link to choose a new password is on its way. Check your inbox (and spam folder) in a few minutes.',
+};
+
+authRouter.post('/forgot-password', forgotPasswordLimiter, async (req, res) => {
+  res.set(NO_STORE);
+  const { email } = z.object({ email: z.string().trim().toLowerCase().email().max(254) }).parse(req.body ?? {});
+
+  if (!config.appUrl) {
+    console.error('[auth] password reset requested but APP_URL is not configured; no email sent');
+    return res.status(202).json(FORGOT_REPLY);
+  }
+
+  const token = newToken();
+  const issuedAt = new Date();
+  const ttl = await configService.get('auth.reset_ttl_minutes');
+  const { rows } = await anonQuery(
+    'SELECT user_id, email, full_name FROM fn_issue_password_reset($1, $2, $3, $4, $5)',
+    [email, hashToken(token), ttl, req.ip || 'unknown', await configService.get('auth.reset_requests_per_hour')],
+  );
+  res.status(202).json(FORGOT_REPLY);
+
+  const person = rows[0];
+  if (person) {
+    sendPasswordReset({
+      to: person.email, fullName: person.full_name, token,
+      issuedAt, expiresAt: new Date(issuedAt.getTime() + ttl * 60_000),
+    }).catch((err) => console.error(`[auth] reset email to ${person.email} failed: ${err.message}`));
+  }
+});
+
+async function liveReset(token) {
+  assertTokenShape(token);
+  const { rows } = await anonQuery(
+    'SELECT status, user_id, email, full_name FROM fn_verify_password_reset($1)', [hashToken(token)],
+  );
+  const row = rows[0];
+  if (!row || row.status !== 'VALID') throw linkError(row?.status ?? 'INVALID', 'password reset');
+  return row;
+}
+
+authRouter.post('/reset-password/verify', resetPasswordLimiter, async (req, res) => {
+  res.set(NO_STORE);
+  const { token } = tokenOnlySchema.parse(req.body ?? {});
+  const reset = await liveReset(token);
+  res.json({ valid: true, email: reset.email, fullName: reset.full_name, passwordRules: await passwordRules() });
+});
+
+// Does not sign the person in: they sign in with the new password, so an
+// administrator's 2-step verification still applies.
+authRouter.post('/reset-password', resetPasswordLimiter, async (req, res) => {
+  res.set(NO_STORE);
+  const { token, password } = setupAccountSchema.parse(req.body ?? {});
+  const reset = await liveReset(token);
+  await assertPasswordAcceptable(password, { email: reset.email, fullName: reset.full_name });
+
+  try {
+    await anonQuery(
+      'SELECT user_id FROM fn_consume_password_reset($1, $2, $3)',
+      [hashToken(token), await hashPassword(password), req.ip || 'unknown'],
+    );
+  } catch (err) {
+    throw linkError(err.code, 'password reset') ?? err;
+  }
+
+  sendPasswordChanged({ to: reset.email, fullName: reset.full_name })
+    .catch((err) => console.error(`[auth] password-changed notice failed: ${err.message}`));
+  res.json({ done: true, message: 'Your password has been changed. Sign in with your new password.' });
 });
 
 // The password rules, so every page shows the real policy rather than a copy.

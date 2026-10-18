@@ -129,7 +129,20 @@ export async function startApi() {
       return match[1];
     }
 
-    return { api, login, superuser, inbox, linkIn, close: unwind };
+    /**
+     * Emails to an address whose subject matches, waiting briefly for them:
+     * some are sent just after the reply, on purpose, so timing reveals nothing.
+     */
+    async function waitForMail(address, subject, minCount = 1, timeoutMs = 5000) {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const found = (await inbox(address)).filter((m) => subject.test(m.subject));
+        if (found.length >= minCount || Date.now() > deadline) return found;
+        await new Promise((resolve) => { setTimeout(resolve, 50); });
+      }
+    }
+
+    return { api, login, superuser, inbox, waitForMail, linkIn, close: unwind };
   } catch (err) {
     await unwind();
     throw err;
