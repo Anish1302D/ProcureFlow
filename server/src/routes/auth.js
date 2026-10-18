@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { issueToken, requireAuth } from '../auth.js';
 import { anonQuery, withUser } from '../db.js';
 import { HttpError } from '../errors.js';
-import { sendAccountLocked, sendPasswordChanged, sendPasswordReset } from '../accountEmails.js';
+import { sendAccountLocked, sendEmailChanged, sendPasswordChanged, sendPasswordReset } from '../accountEmails.js';
 import { config } from '../config.js';
 import { configService } from '../configService.js';
 import { NO_STORE, assertTokenShape, hashToken, linkError, newToken } from '../oneTimeLinks.js';
@@ -407,6 +407,47 @@ authRouter.post('/reset-password', resetPasswordLimiter, async (req, res) => {
   sendPasswordChanged({ to: reset.email, fullName: reset.full_name })
     .catch((err) => console.error(`[auth] password-changed notice failed: ${err.message}`));
   res.json({ done: true, message: 'Your password has been changed. Sign in with your new password.' });
+});
+
+// ---------------------------------------------------------------------------
+// Confirming a new email address
+// ---------------------------------------------------------------------------
+
+async function liveEmailChange(token) {
+  assertTokenShape(token);
+  const { rows } = await anonQuery(
+    'SELECT status, user_id, email, full_name, new_email FROM fn_verify_email_change($1)', [hashToken(token)],
+  );
+  const row = rows[0];
+  if (!row || row.status !== 'VALID') throw linkError(row?.status ?? 'INVALID', 'email confirmation');
+  return row;
+}
+
+authRouter.post('/confirm-email/verify', resetPasswordLimiter, async (req, res) => {
+  res.set(NO_STORE);
+  const { token } = tokenOnlySchema.parse(req.body ?? {});
+  const change = await liveEmailChange(token);
+  res.json({ valid: true, fullName: change.full_name, email: change.email, newEmail: change.new_email });
+});
+
+authRouter.post('/confirm-email', resetPasswordLimiter, async (req, res) => {
+  res.set(NO_STORE);
+  const { token } = tokenOnlySchema.parse(req.body ?? {});
+  const change = await liveEmailChange(token);
+  let done;
+  try {
+    ({ rows: [done] } = await anonQuery(
+      'SELECT user_id, old_email, new_email FROM fn_consume_email_change($1, $2)', [hashToken(token), req.ip || 'unknown'],
+    ));
+  } catch (err) {
+    if (err.code === 'ST005') {
+      throw new HttpError(409, 'Another account already uses this email address. Ask the college administrator for help.', { code: 'EMAIL_TAKEN' });
+    }
+    throw linkError(err.code, 'email confirmation') ?? err;
+  }
+  sendEmailChanged({ to: done.old_email, fullName: change.full_name, newEmail: done.new_email })
+    .catch((err) => console.error(`[auth] email-changed notice failed: ${err.message}`));
+  res.json({ done: true, email: done.new_email, message: `Your account now uses ${done.new_email}. Sign in with it.` });
 });
 
 // The password rules, so every page shows the real policy rather than a copy.

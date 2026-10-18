@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
-import { sendInvitation } from '../accountEmails.js';
+import { sendEmailChangeConfirmation, sendEmailChangeNotice, sendInvitation } from '../accountEmails.js';
 import { requireRole } from '../auth.js';
 import { config } from '../config.js';
 import { configService } from '../configService.js';
@@ -433,7 +433,7 @@ adminRouter.patch('/users/:id', async (req, res) => {
     throw new HttpError(400, 'You cannot deactivate your own account');
   }
 
-  await withUser(req.user.id, async (db) => {
+  let emailChange = await withUser(req.user.id, async (db) => {
     const existing = await db.query(
       `SELECT u.user_id, u.email, u.full_name, u.department_id, u.is_active,
               COALESCE(array_agg(ur.role_id) FILTER (WHERE ur.role_id IS NOT NULL), '{}') AS role_ids
@@ -509,7 +509,55 @@ adminRouter.patch('/users/:id', async (req, res) => {
     const vals = [];
     const push = (col, val) => { vals.push(val); sets.push(`${col} = $${vals.length}`); };
 
-    if (body.email !== undefined) push('email', body.email);
+    // Email is how a person proves who they are, so for an account that has
+    // been set up a new address must confirm before it takes over; until then
+    // sign-in and password resets stay with the current one. An invitation
+    // nobody has accepted yet is simply re-addressed (its old link is
+    // cancelled; resend it to the new address).
+    let emailChange = null;
+    const newEmail = body.email !== undefined && body.email !== String(beforeUser.email).toLowerCase()
+      ? body.email : null;
+    if (newEmail) {
+      await assertEmailDomainAllowed(newEmail);
+      const { rows: [state] } = await db.query(
+        `SELECT activated_at IS NULL AND password_hash LIKE $2 || '%' AS pending FROM users WHERE user_id = $1`,
+        [userId, UNSET_PASSWORD_PREFIX],
+      );
+      if (state.pending) {
+        push('email', newEmail);
+        await db.query(
+          `UPDATE account_setup_tokens SET revoked_at = NOW()
+            WHERE user_id = $1 AND used_at IS NULL AND revoked_at IS NULL`,
+          [userId],
+        );
+        emailChange = { status: 'CHANGED_INVITATION_CANCELLED', to: newEmail };
+      } else {
+        assertInvitesDeliverable();
+        const hours = await configService.get('auth.invite_ttl_hours');
+        const token = newToken();
+        const issuedAt = new Date();
+        const expiresAt = new Date(issuedAt.getTime() + hours * 3_600_000);
+        await db.query(
+          `UPDATE account_setup_tokens SET revoked_at = NOW()
+            WHERE user_id = $1 AND purpose = 'EMAIL_CHANGE' AND used_at IS NULL AND revoked_at IS NULL`,
+          [userId],
+        );
+        await db.query(
+          `INSERT INTO account_setup_tokens (user_id, token_hash, expires_at, purpose, sent_to_email, new_email, requested_ip)
+           VALUES ($1, $2, $3, 'EMAIL_CHANGE', $4, $4, $5)`,
+          [userId, hashToken(token), expiresAt, newEmail, req.ip ?? null],
+        );
+        await db.query(
+          `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, before_json, after_json)
+           VALUES ('user', $1::text, $2::uuid, 'EMAIL_CHANGE_REQUESTED', $3::jsonb, $4::jsonb)`,
+          [userId, req.user.id, JSON.stringify({ email: beforeUser.email }), JSON.stringify({ email: newEmail })],
+        );
+        emailChange = {
+          status: 'PENDING_CONFIRMATION', to: newEmail, expiresAt: expiresAt.toISOString(),
+          send: { token, issuedAt, expiresAt, oldEmail: String(beforeUser.email), fullName: body.fullName ?? beforeUser.full_name },
+        };
+      }
+    }
     if (body.fullName !== undefined) push('full_name', body.fullName);
     if (body.employeeId !== undefined) push('employee_id', body.employeeId || null);
     if (body.departmentId !== undefined) push('department_id', body.departmentId);
@@ -599,9 +647,34 @@ adminRouter.patch('/users/:id', async (req, res) => {
         }),
       ],
     );
+    return emailChange;
   });
 
-  res.json(await userDetail(req.user.id, userId));
+  // After the transaction: the confirmation goes to the new address and a
+  // heads-up to the current one. The link never appears in the response.
+  let message;
+  if (emailChange?.send) {
+    const { send, ...shown } = emailChange;
+    try {
+      await sendEmailChangeConfirmation({
+        to: shown.to, fullName: send.fullName, oldEmail: send.oldEmail,
+        token: send.token, issuedAt: send.issuedAt, expiresAt: send.expiresAt,
+      });
+      await sendEmailChangeNotice({ to: send.oldEmail, fullName: send.fullName, newEmail: shown.to });
+      message = `A confirmation link was emailed to ${shown.to}. The email changes when they confirm it; until then sign-in stays with ${send.oldEmail}.`;
+    } catch (err) {
+      console.error(`[admin] email-change confirmation to ${shown.to} failed: ${err.message}`);
+      message = `The confirmation email to ${shown.to} could not be sent. Check the email settings and save the change again.`;
+    }
+    emailChange = shown;
+  } else if (emailChange) {
+    message = `Email changed to ${emailChange.to}. The earlier invitation link was cancelled — use "Resend invitation".`;
+  }
+
+  res.set(NO_STORE).json({
+    ...(await userDetail(req.user.id, userId)),
+    ...(emailChange ? { emailChange, message } : {}),
+  });
 });
 
 // ---------------------------------------------------------------------------

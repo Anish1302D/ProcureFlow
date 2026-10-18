@@ -337,3 +337,109 @@ test('five wrong passwords pause sign-in, the owner is told, and a reset clears 
   expectStatus(await t.api('POST', '/api/auth/reset-password', { body: { token, password: 'copper-valley-thistle-64' } }), 200);
   assert.equal(await canSignIn(who, 'copper-valley-thistle-64'), true, 'the reset lifted the pause');
 });
+
+// ---------------------------------------------------------------------------
+// An account's email changes only when the new address confirms
+// ---------------------------------------------------------------------------
+
+test('an administrator\'s email change waits for the new address to confirm', async () => {
+  const principalId = (await t.superuser.query("SELECT user_id FROM users WHERE email = 'principal@spcollege.edu'")).rows[0].user_id;
+  const res = await t.api('PATCH', `/api/admin/users/${principalId}`, {
+    token: tok.admin, body: { email: 'v.rane.principal@outlook.com' } });
+  const body = expectStatus(res, 200);
+  assert.equal(body.emailChange.status, 'PENDING_CONFIRMATION');
+  assert.equal(body.email, 'principal@spcollege.edu', 'nothing changes yet');
+  assert.doesNotMatch(JSON.stringify(body), TOKEN_LIKE);
+
+  assert.equal((await t.inbox('v.rane.principal@outlook.com')).filter((m) => /Confirm your new email/.test(m.subject)).length, 1);
+  assert.equal((await t.inbox('principal@spcollege.edu')).filter((m) => /change to your account email/.test(m.subject)).length, 1,
+    'the current address hears about it');
+
+  // Until confirmed, password resets still go to the current address.
+  expectStatus(await t.api('POST', '/api/auth/forgot-password', { body: { email: 'v.rane.principal@outlook.com' } }), 202);
+  expectStatus(await t.api('POST', '/api/auth/forgot-password', { body: { email: 'principal@spcollege.edu' } }), 202);
+  await t.waitForMail('principal@spcollege.edu', /Reset/, 3);
+  assert.equal((await t.inbox('v.rane.principal@outlook.com')).filter((m) => /Reset/.test(m.subject)).length, 0);
+});
+
+test('confirming moves the account, signs out every device and cancels links sent to the old address', async () => {
+  const session = await t.login('principal@spcollege.edu').catch(() => null);
+  const oldReset = t.linkIn((await t.inbox('principal@spcollege.edu')).filter((m) => /Reset/.test(m.subject)).at(-1), 'reset-password');
+  const token = t.linkIn((await t.inbox('v.rane.principal@outlook.com')).at(-1), 'confirm-email');
+
+  const seen = expectStatus(await t.api('POST', '/api/auth/confirm-email/verify', { body: { token } }), 200);
+  assert.equal(seen.newEmail, 'v.rane.principal@outlook.com');
+  const done = expectStatus(await t.api('POST', '/api/auth/confirm-email', { body: { token } }), 200);
+  assert.equal(done.email, 'v.rane.principal@outlook.com');
+
+  if (session) expectStatus(await t.api('GET', '/api/auth/me', { token: session }), 401);
+  assert.equal((await t.waitForMail('principal@spcollege.edu', /account email was changed/)).length, 1);
+  const stale = await t.api('POST', '/api/auth/reset-password/verify', { body: { token: oldReset } });
+  assert.ok([404, 410].includes(stale.status), 'a reset link sent to the old address no longer works');
+
+  const again = await t.api('POST', '/api/auth/confirm-email', { body: { token } });
+  assert.equal(again.body.error.code, 'LINK_USED');
+});
+
+test('re-addressing an invitation nobody accepted cancels the old link', async () => {
+  const users = expectStatus(await t.api('GET', '/api/admin/users', { token: tok.admin }), 200);
+  const pending = users.find((u) => u.email === 'someone@gmail.com');
+  const oldLink = t.linkIn((await t.inbox('someone@gmail.com')).filter((m) => /Invitation/.test(m.subject)).at(-1), 'accept-invite');
+
+  const body = expectStatus(await t.api('PATCH', `/api/admin/users/${pending.id}`, {
+    token: tok.admin, body: { email: 'someone.else@gmail.com' } }), 200);
+  assert.equal(body.email, 'someone.else@gmail.com');
+  assert.equal(body.emailChange.status, 'CHANGED_INVITATION_CANCELLED');
+  assert.equal(body.account.status, 'INVITE_CANCELLED');
+  const old = await t.api('POST', '/api/auth/verify-setup-token', { body: { token: oldLink } });
+  assert.ok([404, 410].includes(old.status));
+});
+
+// ---------------------------------------------------------------------------
+// Break-glass recovery, run on the server by its operator
+// ---------------------------------------------------------------------------
+
+async function recoveryScript(...cliArgs) {
+  const { spawn } = await import('node:child_process');
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, ['scripts/admin-recovery.js', ...cliArgs], { env: process.env });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { out += d; });
+    child.on('close', (code) => resolve({ code, out }));
+  });
+}
+
+test('the recovery script refuses anyone but the administrator', async () => {
+  const res = await recoveryScript('--email', 'head.cs@spcollege.edu');
+  assert.equal(res.code, 1);
+  assert.match(res.out, /not an administrator/);
+});
+
+test('the recovery script emails the administrator a reset link and lifts a pause', async () => {
+  await t.superuser.query(
+    `UPDATE users SET locked_until = NOW() + interval '1 hour' WHERE email = 'admin@spcollege.edu'`);
+  const res = await recoveryScript('--email', 'admin@spcollege.edu');
+  assert.equal(res.code, 0, res.out);
+  assert.doesNotMatch(res.out, TOKEN_LIKE, 'without --print-link the link is never printed');
+
+  const token = t.linkIn((await t.waitForMail('admin@spcollege.edu', /Reset/)).at(-1), 'reset-password');
+  expectStatus(await t.api('POST', '/api/auth/reset-password', { body: { token, password: 'granite-harbor-willow-37' } }), 200);
+  assert.equal(await canSignIn('admin@spcollege.edu', 'granite-harbor-willow-37'), true);
+  const { rows } = await t.superuser.query(
+    `SELECT after_json->>'operator' AS operator FROM audit_logs WHERE action = 'BREAK_GLASS_RECOVERY'`);
+  assert.equal(rows.length, 1, 'every use is recorded');
+  assert.ok(rows[0].operator);
+  tok.admin = await (async () => {
+    const r = await t.api('POST', '/api/auth/login', { body: { email: 'admin@spcollege.edu', password: 'granite-harbor-willow-37' } });
+    return r.body.token;
+  })();
+});
+
+test('bootstrap only creates the first administrator', async () => {
+  const res = await recoveryScript('--bootstrap', '--email', 'second.admin@example.com', '--name', 'Second Admin');
+  assert.equal(res.code, 1);
+  assert.match(res.out, /already exists/);
+  const { rowCount } = await t.superuser.query("SELECT 1 FROM users WHERE email = 'second.admin@example.com'");
+  assert.equal(rowCount, 0);
+});

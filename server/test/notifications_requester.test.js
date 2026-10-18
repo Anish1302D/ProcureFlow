@@ -83,6 +83,12 @@ test('HOD gets in-app notification and email when Principal and higher authority
     token: tok.admin,
     body: { email: newHodEmail },
   }), 200);
+  // The new address confirms before it takes over: an administrator alone
+  // cannot redirect someone's account (and its password resets) elsewhere.
+  const confirmMail = (await t.waitForMail(newHodEmail, /Confirm your new email/)).at(-1);
+  expectStatus(await t.api('POST', '/api/auth/confirm-email', {
+    body: { token: t.linkIn(confirmMail, 'confirm-email') },
+  }), 200);
 
   // 6. CDC grant member approves (CS department is GRANT, so CDC Grant member decides)
   const decBody = {
