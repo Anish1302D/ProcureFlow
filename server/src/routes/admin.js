@@ -1,5 +1,4 @@
 import crypto from 'node:crypto';
-import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireRole } from '../auth.js';
@@ -13,7 +12,6 @@ export const adminRouter = Router();
 
 adminRouter.use(requireRole('ADMIN'));
 
-const BCRYPT_ROUNDS = 12;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -321,7 +319,6 @@ const updateUserSchema = z
     email: z.string().trim().toLowerCase().email().max(254).optional(),
     fullName: z.string().trim().min(2).max(200).optional(),
     employeeId: z.string().trim().max(100).nullable().optional(),
-    password: z.string().min(8).max(200).optional(),
     departmentId: z.number().int().positive().nullable().optional(),
     roleIds: z.array(z.number().int().positive()).min(1).optional(),
     isActive: z.boolean().optional(),
@@ -330,14 +327,18 @@ const updateUserSchema = z
 
 adminRouter.patch('/users/:id', async (req, res) => {
   const userId = req.params.id;
+  // Only the person themselves may set their password — through their
+  // invitation, a reset link, or by changing it. An administrator who could
+  // set it could sign in as anyone, so the request is refused outright
+  // rather than having the field quietly ignored.
+  if (req.body && Object.hasOwn(req.body, 'password')) {
+    throw new HttpError(422, 'Administrators cannot set passwords. The person can reset their own password from the sign-in page.', { code: 'ADMIN_PASSWORD_FORBIDDEN' });
+  }
   const body = updateUserSchema.parse(req.body);
 
   if (body.isActive === false && userId === req.user.id) {
     throw new HttpError(400, 'You cannot deactivate your own account');
   }
-
-  // Hash outside the transaction for the same reason as above.
-  const hash = body.password ? await bcrypt.hash(body.password, BCRYPT_ROUNDS) : undefined;
 
   await withUser(req.user.id, async (db) => {
     const existing = await db.query(
@@ -417,7 +418,6 @@ adminRouter.patch('/users/:id', async (req, res) => {
     if (body.email !== undefined) push('email', body.email);
     if (body.fullName !== undefined) push('full_name', body.fullName);
     if (body.employeeId !== undefined) push('employee_id', body.employeeId || null);
-    if (hash !== undefined) push('password_hash', hash);
     if (body.departmentId !== undefined) push('department_id', body.departmentId);
     if (body.isActive !== undefined) push('is_active', body.isActive);
 

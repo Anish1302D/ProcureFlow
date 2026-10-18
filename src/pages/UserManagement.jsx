@@ -43,7 +43,6 @@ const BLANK_USER = {
   email: '',
   fullName: '',
   employeeId: '',
-  password: '',
   departmentId: null,
   roleIds: [],
   isActive: true,
@@ -58,7 +57,6 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
           email: user.email,
           fullName: user.name,
           employeeId: user.employeeId ?? '',
-          password: '',
           departmentId: user.departmentId ?? null,
           roleIds: user.roles.map((r) => r.id),
           isActive: user.isActive,
@@ -80,8 +78,6 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
   const save = async () => {
     if (!form.email.trim()) return showToast('Email is required', 'error');
     if (!form.fullName.trim()) return showToast('Full name is required', 'error');
-    if (isEdit && form.password && form.password.length < 8)
-      return showToast('New password must be at least 8 characters', 'error');
     if (!form.roleIds.length) return showToast('Assign at least one role', 'error');
 
     setSaving(true);
@@ -96,7 +92,6 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
 
       if (isEdit) {
         body.isActive = form.isActive;
-        if (form.password) body.password = form.password;
         await api(`/api/admin/users/${user.id}`, { method: 'PATCH', body });
         showToast(`${form.fullName} updated`, 'success');
         onSaved();
@@ -132,7 +127,7 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
             </h2>
             <p className="text-xs text-gray-400 mt-0.5">
               {isEdit
-                ? 'Leave password blank to keep current password.'
+                ? 'Passwords are set only by the person themselves.'
                 : 'Invited members activate their account via single-use setup link.'}
             </p>
           </div>
@@ -179,17 +174,13 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
             />
           </div>
 
-          {/* Password (edit only) or Setup link notice (create) */}
+          {/* Who sets the password: never the administrator. */}
           {isEdit ? (
-            <div>
-              <label className={labelCls}>Password (leave blank to keep current)</label>
-              <input
-                type="password"
-                className={inputCls}
-                placeholder="Enter new password to change…"
-                value={form.password}
-                onChange={(e) => set({ password: e.target.value })}
-              />
+            <div className="rounded-xl bg-gray-50 border border-gray-100 p-3.5">
+              <p className="text-[11px] text-gray-600 leading-relaxed">
+                Administrators cannot see or set passwords. If this person has forgotten theirs,
+                they can use <span className="font-semibold">Forgot password?</span> on the sign-in page.
+              </p>
             </div>
           ) : (
             <div className="rounded-xl bg-indigo-50/70 border border-indigo-100 p-3.5 space-y-1">
