@@ -430,10 +430,10 @@ test('the recovery script emails the administrator a reset link and lifts a paus
     `SELECT after_json->>'operator' AS operator FROM audit_logs WHERE action = 'BREAK_GLASS_RECOVERY'`);
   assert.equal(rows.length, 1, 'every use is recorded');
   assert.ok(rows[0].operator);
-  tok.admin = await (async () => {
-    const r = await t.api('POST', '/api/auth/login', { body: { email: 'admin@spcollege.edu', password: 'granite-harbor-willow-37' } });
-    return r.body.token;
-  })();
+  // Recovery also cleared 2-step verification: the next sign-in enrols again.
+  const signIn = await t.api('POST', '/api/auth/login', { body: { email: 'admin@spcollege.edu', password: 'granite-harbor-willow-37' } });
+  assert.equal(signIn.body.mfa?.step, 'enrol');
+  tok.admin = await t.login('admin@spcollege.edu', 'granite-harbor-willow-37');
 });
 
 test('bootstrap only creates the first administrator', async () => {
@@ -442,4 +442,109 @@ test('bootstrap only creates the first administrator', async () => {
   assert.match(res.out, /already exists/);
   const { rowCount } = await t.superuser.query("SELECT 1 FROM users WHERE email = 'second.admin@example.com'");
   assert.equal(rowCount, 0);
+});
+
+// ---------------------------------------------------------------------------
+// 2-step verification for the administrator (and any role configured)
+// ---------------------------------------------------------------------------
+
+test('the administrator cannot sign in with a password alone', async () => {
+  const res = await t.api('POST', '/api/auth/login', { body: { email: 'admin@spcollege.edu', password: 'granite-harbor-willow-37' } });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.token, undefined, 'no session from the password step');
+  assert.equal(res.body.mfa.step, 'verify');
+  // The challenge is not a session: it opens nothing.
+  expectStatus(await t.api('GET', '/api/auth/me', { token: res.body.mfa.challenge }), 401);
+  expectStatus(await t.api('GET', '/api/admin/users', { token: res.body.mfa.challenge }), 401);
+});
+
+test('a code works once; a replayed code is refused', async () => {
+  const first = await t.api('POST', '/api/auth/login', { body: { email: 'admin@spcollege.edu', password: 'granite-harbor-willow-37' } });
+  await t.superuser.query("UPDATE users SET mfa_last_step = NULL WHERE email = 'admin@spcollege.edu'");
+  const code = t.totpFor('admin@spcollege.edu');
+  expectStatus(await t.api('POST', '/api/auth/mfa/verify', { body: { challenge: first.body.mfa.challenge, code } }), 200);
+
+  const second = await t.api('POST', '/api/auth/login', { body: { email: 'admin@spcollege.edu', password: 'granite-harbor-willow-37' } });
+  const replay = await t.api('POST', '/api/auth/mfa/verify', { body: { challenge: second.body.mfa.challenge, code } });
+  assert.equal(replay.status, 401);
+  assert.equal(replay.body.error.code, 'MFA_CODE_INVALID');
+  const wrong = await t.api('POST', '/api/auth/mfa/verify', { body: { challenge: second.body.mfa.challenge, code: '000000' === code ? '111111' : '000000' } });
+  assert.equal(wrong.status, 401);
+});
+
+test('a role added to the policy must enrol at its next sign-in, and secrets are stored encrypted', async () => {
+  expectStatus(await t.api('PATCH', '/api/admin/config', {
+    token: tok.admin, body: { settings: { 'auth.mfa_required_roles': ['ADMIN', 'HEAD'] } } }), 200);
+  const refused = await t.api('PATCH', '/api/admin/config', {
+    token: tok.admin, body: { settings: { 'auth.mfa_required_roles': ['HEAD'] } } });
+  assert.equal(refused.status, 422, 'the administrator can never be exempted');
+
+  const res = await t.api('POST', '/api/auth/login', { body: { email: 'head.cs@spcollege.edu', password: PASSWORD } });
+  assert.equal(res.body.mfa.step, 'enrol');
+  const { challenge } = res.body.mfa;
+  const setup = expectStatus(await t.api('POST', '/api/auth/mfa/setup/start', { body: { challenge } }), 200);
+  assert.match(setup.secret, /^[A-Z2-7]{32}$/);
+  assert.match(setup.otpauthUri, /^otpauth:\/\/totp\//);
+
+  const bad = await t.api('POST', '/api/auth/mfa/setup/confirm', { body: { challenge, code: '000000' } });
+  assert.equal(bad.status, 401, 'setup completes only with a working code');
+
+  const { codeAt, stepAt } = await import('../src/totp.js');
+  const done = expectStatus(await t.api('POST', '/api/auth/mfa/setup/confirm', {
+    body: { challenge, code: codeAt(setup.secret, stepAt()) } }), 200);
+  assert.equal(done.recoveryCodes.length, 10);
+  assert.ok(done.token);
+  assert.equal((await t.waitForMail('head.cs@spcollege.edu', /2-step verification is on/)).length, 1);
+
+  const { rows: [u] } = await t.superuser.query(
+    "SELECT mfa_secret_enc, mfa_enabled_at FROM users WHERE email = 'head.cs@spcollege.edu'");
+  assert.ok(u.mfa_enabled_at);
+  assert.match(u.mfa_secret_enc, /^v1:/);
+  assert.equal(u.mfa_secret_enc.includes(setup.secret), false, 'the secret is never stored readable');
+  const { rows: codes } = await t.superuser.query(
+    `SELECT code_hash FROM mfa_recovery_codes WHERE user_id = (SELECT user_id FROM users WHERE email = 'head.cs@spcollege.edu')`);
+  assert.equal(codes.length, 10);
+  for (const c of codes) for (const plain of done.recoveryCodes) assert.equal(c.code_hash.includes(plain.replace('-', '')), false);
+
+  // A recovery code signs in once, and the owner is told how many are left.
+  const login1 = await t.api('POST', '/api/auth/login', { body: { email: 'head.cs@spcollege.edu', password: PASSWORD } });
+  const used = expectStatus(await t.api('POST', '/api/auth/mfa/verify', {
+    body: { challenge: login1.body.mfa.challenge, recoveryCode: done.recoveryCodes[0].toLowerCase() } }), 200);
+  assert.equal(used.recoveryCodesLeft, 9);
+  assert.equal((await t.waitForMail('head.cs@spcollege.edu', /recovery code was used/)).length, 1);
+  const login2 = await t.api('POST', '/api/auth/login', { body: { email: 'head.cs@spcollege.edu', password: PASSWORD } });
+  const reused = await t.api('POST', '/api/auth/mfa/verify', {
+    body: { challenge: login2.body.mfa.challenge, recoveryCode: done.recoveryCodes[0] } });
+  assert.equal(reused.status, 401);
+
+  expectStatus(await t.api('PATCH', '/api/admin/config', {
+    token: tok.admin, body: { settings: { 'auth.mfa_required_roles': ['ADMIN'] } } }), 200);
+});
+
+test('people in roles that do not require it sign in with their password', async () => {
+  const res = await t.api('POST', '/api/auth/login', { body: { email: 'incharge@spcollege.edu', password: 'violet-harbour-lantern-42' } });
+  assert.ok(res.body.token);
+  assert.equal(res.body.mfa, undefined);
+});
+
+test('a challenge stops working once the account is signed out everywhere', async () => {
+  const res = await t.api('POST', '/api/auth/login', { body: { email: 'admin@spcollege.edu', password: 'granite-harbor-willow-37' } });
+  await t.superuser.query(
+    "UPDATE users SET token_version = token_version + 1, mfa_last_step = NULL WHERE email = 'admin@spcollege.edu'");
+  const late = await t.api('POST', '/api/auth/mfa/verify', {
+    body: { challenge: res.body.mfa.challenge, code: t.totpFor('admin@spcollege.edu') } });
+  assert.equal(late.status, 401);
+  assert.equal(late.body.error.code, 'CHALLENGE_EXPIRED');
+  const forged = await t.api('POST', '/api/auth/mfa/verify', { body: { challenge: 'not-a-challenge', code: '123456' } });
+  assert.equal(forged.body.error.code, 'CHALLENGE_EXPIRED');
+  tok.admin = await t.login('admin@spcollege.edu', 'granite-harbor-willow-37');
+});
+
+test('new recovery codes need a current authenticator code', async () => {
+  const without = await t.api('POST', '/api/auth/mfa/recovery-codes', { token: tok.admin, body: { code: '000000' } });
+  assert.equal(without.status, 401);
+  await t.superuser.query("UPDATE users SET mfa_last_step = NULL WHERE email = 'admin@spcollege.edu'");
+  const fresh = expectStatus(await t.api('POST', '/api/auth/mfa/recovery-codes', {
+    token: tok.admin, body: { code: t.totpFor('admin@spcollege.edu') } }), 200);
+  assert.equal(fresh.recoveryCodes.length, 10);
 });

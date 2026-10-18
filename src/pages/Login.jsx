@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ArrowRight, Loader2, Lock } from 'lucide-react';
+import { TwoStepEnrol, TwoStepVerify } from '../components/auth/TwoStep';
 import { useApp } from '../context/AppContext';
 
 // Development-only demo accounts for local debugging.
@@ -31,6 +32,7 @@ export const Login = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [mfa, setMfa] = useState(null); // { step: 'verify' | 'enrol', challenge }
 
   const submit = async (e, as) => {
     e?.preventDefault();
@@ -39,7 +41,8 @@ export const Login = () => {
 
     const creds = as ?? { email, password };
     try {
-      await signIn(creds.email.trim(), creds.password);
+      const result = await signIn(creds.email.trim(), creds.password);
+      if (result?.mfa) { setPassword(''); setMfa(result.mfa); }
     } catch (err) {
       setError(err.message);
       if (err.status !== 401) showToast(err.message, 'error');
@@ -64,12 +67,17 @@ export const Login = () => {
 
       <div className="w-full max-w-md mx-auto my-12 space-y-6">
         <div className="text-center space-y-1.5">
-          <h2 className="text-2xl font-extrabold text-gray-900">Sign in</h2>
+          <h2 className="text-2xl font-extrabold text-gray-900">{mfa ? '2-step verification' : 'Sign in'}</h2>
           <p className="text-sm text-gray-500">
             Use the email address your invitation was sent to. What you see depends on your role.
           </p>
         </div>
 
+        {mfa ? (
+          mfa.step === 'enrol'
+            ? <TwoStepEnrol challenge={mfa.challenge} onCancel={(message) => { setMfa(null); setError(message ?? ''); }} />
+            : <TwoStepVerify challenge={mfa.challenge} onCancel={(message) => { setMfa(null); setError(message ?? ''); }} />
+        ) : (
         <form onSubmit={submit} className="bg-white rounded-2xl border border-gray-200 p-6 space-y-4">
           <div>
             <label htmlFor="email" className="block text-xs font-semibold text-gray-600 uppercase tracking-wider mb-1.5">Email</label>
@@ -91,6 +99,7 @@ export const Login = () => {
             <span className="text-gray-400">New here? You'll receive an invitation by email.</span>
           </div>
         </form>
+        )}
 
         {import.meta.env.DEV && DEV_DEMO && (
           <div className="rounded-2xl border border-dashed border-amber-300 bg-amber-50/60 p-4 space-y-2">

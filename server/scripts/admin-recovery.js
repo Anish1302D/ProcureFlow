@@ -154,8 +154,8 @@ try {
       );
       if (mfaCols.length) {
         await db.query(
-          `UPDATE users SET mfa_secret_enc = NULL, mfa_enabled_at = NULL,
-                  token_version = COALESCE(token_version, 1) + 1 WHERE user_id = $1`,
+          `UPDATE users SET mfa_secret_enc = NULL, mfa_pending_secret_enc = NULL, mfa_enabled_at = NULL,
+                  mfa_last_step = NULL, token_version = COALESCE(token_version, 1) + 1 WHERE user_id = $1`,
           [admin.user_id],
         );
         await db.query('DELETE FROM mfa_recovery_codes WHERE user_id = $1', [admin.user_id]);

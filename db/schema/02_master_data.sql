@@ -33,7 +33,25 @@ CREATE TABLE users (
     password_changed_at TIMESTAMPTZ,
     -- Sign-in lockout, kept in the database so it survives restarts.
     failed_login_count  INTEGER NOT NULL DEFAULT 0,
-    locked_until        TIMESTAMPTZ
+    locked_until        TIMESTAMPTZ,
+    -- 2-step verification. Secrets are AES-256-GCM encrypted with
+    -- MFA_ENCRYPTION_KEY from the server environment; the last accepted time
+    -- step stops a code being used twice.
+    mfa_secret_enc         TEXT,
+    mfa_pending_secret_enc TEXT,
+    mfa_enabled_at         TIMESTAMPTZ,
+    mfa_last_step          BIGINT
+);
+
+-- One-time recovery codes for 2-step verification, stored only as
+-- HMAC-SHA256 keyed with MFA_ENCRYPTION_KEY.
+CREATE TABLE mfa_recovery_codes (
+    code_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id    UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    code_hash  TEXT NOT NULL,
+    used_at    TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, code_hash)
 );
 
 CREATE TABLE user_roles (

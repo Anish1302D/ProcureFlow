@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Eye, EyeOff, KeyRound, Loader2, Mail, ShieldCheck, Workflow } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Download, Eye, EyeOff, KeyRound, Loader2, Mail, ShieldCheck, Smartphone, Workflow } from 'lucide-react';
 import { api } from '../api/client';
 import { initials, roleLabel } from '../api/format';
 import { useApp } from '../context/AppContext';
@@ -19,7 +19,12 @@ const ROLE_COLORS = {
 
 /** Who the system thinks you are — with a self-service password change form. */
 export const Profile = () => {
-  const { user, showToast } = useApp();
+  const { user, showToast, signOut } = useApp();
+  const [minLength, setMinLength] = useState(12);
+  const [problems, setProblems] = useState([]);
+  useEffect(() => {
+    api('/api/auth/password-policy').then((r) => setMinLength(r.minLength)).catch(() => {});
+  }, []);
   const [showPw, setShowPw] = useState(false);
   const [pw, setPw] = useState({ current: '', next: '', confirm: '' });
   const [changing, setChanging] = useState(false);
@@ -27,19 +32,20 @@ export const Profile = () => {
 
   const changePassword = async () => {
     if (!pw.current) return showToast('Enter your current password', 'error');
-    if (pw.next.length < 8) return showToast('New password must be at least 8 characters', 'error');
+    if (pw.next.length < minLength) return showToast(`New password must be at least ${minLength} characters`, 'error');
     if (pw.next !== pw.confirm) return showToast('New passwords do not match', 'error');
     setChanging(true);
+    setProblems([]);
     try {
       await api('/api/auth/change-password', {
         method: 'POST',
         body: { currentPassword: pw.current, newPassword: pw.next },
       });
-      showToast('Password updated successfully', 'success');
-      setPw({ current: '', next: '', confirm: '' });
-      setShowPw(false);
+      // Every session, this one included, was signed out by the change.
+      signOut('Password changed. Sign in with your new password.');
     } catch (err) {
-      showToast(err.message, 'error');
+      if (err.code === 'WEAK_PASSWORD') setProblems(err.details ?? [err.message]);
+      else showToast(err.message, 'error');
     } finally {
       setChanging(false);
     }
@@ -127,10 +133,10 @@ export const Profile = () => {
             </div>
             {/* New password */}
             <div>
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">New password (min 8 characters)</label>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">New password (at least {minLength} characters)</label>
               <div className="relative">
                 <input type={show.next ? 'text' : 'password'} className={inputCls}
-                  placeholder="At least 8 characters"
+                  placeholder={`At least ${minLength} characters`}
                   value={pw.next} onChange={(e) => setPw((p) => ({ ...p, next: e.target.value }))} />
                 <button type="button" onClick={() => setShow((s) => ({ ...s, next: !s.next }))}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
@@ -145,8 +151,14 @@ export const Profile = () => {
                 placeholder="Repeat the new password"
                 value={pw.confirm} onChange={(e) => setPw((p) => ({ ...p, confirm: e.target.value }))} />
             </div>
+            {problems.length > 0 && (
+              <ul role="alert" className="rounded-lg bg-red-50 border border-red-100 p-3 space-y-1 text-xs text-red-700">
+                {problems.map((p) => <li key={p}>{p}</li>)}
+              </ul>
+            )}
+            <p className="text-[11px] text-gray-500">Changing your password signs you out everywhere, including here.</p>
             <div className="flex justify-end gap-3 pt-1">
-              <button onClick={() => { setShowPw(false); setPw({ current: '', next: '', confirm: '' }); }}
+              <button onClick={() => { setShowPw(false); setPw({ current: '', next: '', confirm: '' }); setProblems([]); }}
                 className="px-4 py-2 rounded-lg text-sm text-gray-500 hover:bg-gray-100">Cancel</button>
               <button onClick={changePassword} disabled={changing}
                 className="px-5 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 flex items-center gap-2">
@@ -157,7 +169,79 @@ export const Profile = () => {
         )}
       </div>
 
+      {user.mfa?.enabled && <TwoStepCard since={user.mfa.enabledAt} />}
+
       <p className="text-[11px] text-gray-400">Roles and stage assignments are managed by the administrator. Documents you attach live on the request or issue they belong to.</p>
     </div>
   );
 };
+
+// 2-step verification: when it was turned on, and a way to replace the
+// recovery codes (the old ones stop working). Needs a current code.
+function TwoStepCard({ since }) {
+  const { showToast } = useApp();
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [codes, setCodes] = useState(null);
+
+  const replace = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const res = await api('/api/auth/mfa/recovery-codes', { method: 'POST', body: { code } });
+      setCodes(res.recoveryCodes);
+      setCode('');
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const download = () => {
+    const text = ['Approval hub — 2-step verification recovery codes', `Created: ${new Date().toLocaleString('en-IN')}`, '',
+      'Each code works once. Earlier codes no longer work.', '', ...codes].join('\n');
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'approval-hub-recovery-codes.txt';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-200 p-5 space-y-3">
+      <p className="text-sm font-bold text-gray-800 flex items-center gap-2">
+        <Smartphone className="w-4 h-4 text-indigo-500" /> 2-step verification is on
+      </p>
+      <p className="text-xs text-gray-500">
+        Since {new Date(since).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}.
+        Signing in needs a code from your authenticator app.
+      </p>
+      {codes ? (
+        <div className="space-y-3">
+          <p className="text-xs text-gray-700">Your new recovery codes. Save them now; they will not be shown again.</p>
+          <ol className="grid grid-cols-2 gap-2 font-mono text-sm bg-gray-50 border border-gray-200 rounded-xl p-3">
+            {codes.map((c) => <li key={c} className="text-center">{c}</li>)}
+          </ol>
+          <button type="button" onClick={download}
+            className="px-4 py-2 rounded-lg bg-white border border-gray-300 hover:bg-gray-50 text-xs font-semibold flex items-center gap-2">
+            <Download className="w-3.5 h-3.5" /> Download as a text file
+          </button>
+        </div>
+      ) : (
+        <form onSubmit={replace} className="flex flex-wrap items-end gap-2">
+          <label className="text-xs text-gray-600">
+            Code from your app
+            <input inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)}
+              className="block mt-1 w-32 border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono tracking-widest" placeholder="123456" />
+          </label>
+          <button type="submit" disabled={busy || !code.trim()}
+            className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold flex items-center gap-2 disabled:opacity-50">
+            {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />} Create new recovery codes
+          </button>
+        </form>
+      )}
+    </div>
+  );
+}

@@ -5,7 +5,13 @@ import { z } from 'zod';
 import { issueToken, requireAuth } from '../auth.js';
 import { anonQuery, withUser } from '../db.js';
 import { HttpError } from '../errors.js';
-import { sendAccountLocked, sendEmailChanged, sendPasswordChanged, sendPasswordReset } from '../accountEmails.js';
+import {
+  sendAccountLocked, sendEmailChanged, sendPasswordChanged, sendPasswordReset, sendRecoveryCodeUsed, sendTwoStepEnabled,
+} from '../accountEmails.js';
+import {
+  decryptSecret, encryptSecret, hashRecoveryCode, issueChallenge, newRecoveryCodes, readChallenge,
+} from '../mfa.js';
+import { matchingStep, newSecret, otpauthUri } from '../totp.js';
 import { config } from '../config.js';
 import { configService } from '../configService.js';
 import { NO_STORE, assertTokenShape, hashToken, linkError, newToken } from '../oneTimeLinks.js';
@@ -142,6 +148,20 @@ async function recordFailedSignIn(account) {
   }
 }
 
+// 'verify' when the account has 2-step verification, 'enrol' when one of its
+// roles requires it but it is not set up yet, otherwise null.
+async function secondStepFor(userId) {
+  const { rows: [u] } = await anonQuery(
+    `SELECT u.mfa_enabled_at IS NOT NULL AS enabled,
+            ARRAY(SELECT r.code FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id WHERE ur.user_id = u.user_id) AS roles
+       FROM users u WHERE u.user_id = $1`,
+    [userId],
+  );
+  if (u?.enabled) return 'verify';
+  const required = await configService.get('auth.mfa_required_roles');
+  return u?.roles?.some((r) => required.includes(r)) ? 'enrol' : null;
+}
+
 authRouter.post('/login', loginIpLimiter, loginLimiter, async (req, res) => {
   const { email, password } = loginSchema.parse(req.body);
 
@@ -187,6 +207,13 @@ authRouter.post('/login', loginIpLimiter, loginLimiter, async (req, res) => {
         WHERE user_id = $1 AND failed_login_count <> 0`,
       [account.user_id],
     );
+  }
+
+  // The password was right. Accounts with 2-step verification — and roles
+  // that must have it — get a short-lived challenge instead of a session.
+  const step = await secondStepFor(account.user_id);
+  if (step) {
+    return res.json({ mfa: { step, challenge: issueChallenge(account.user_id, account.token_version, step) } });
   }
 
   await withUser(account.user_id, (db) =>
@@ -448,6 +475,170 @@ authRouter.post('/confirm-email', resetPasswordLimiter, async (req, res) => {
   sendEmailChanged({ to: done.old_email, fullName: change.full_name, newEmail: done.new_email })
     .catch((err) => console.error(`[auth] email-changed notice failed: ${err.message}`));
   res.json({ done: true, email: done.new_email, message: `Your account now uses ${done.new_email}. Sign in with it.` });
+});
+
+// ---------------------------------------------------------------------------
+// 2-step verification
+// ---------------------------------------------------------------------------
+
+export const mfaLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator(req.ip),
+  skip: () => process.env.NODE_ENV === 'test',
+  handler: (_req, _res, next) => {
+    next(new HttpError(429, 'Too many attempts. Try again in a few minutes.'));
+  },
+});
+
+const CODE_REFUSED = 'That code is not right. Check the time on your phone is set automatically, and use the newest code.';
+
+/** The person behind a challenge, still active and not signed out since. */
+async function challengedAccount(challenge, step) {
+  const { userId, tokenVersion } = readChallenge(challenge, step);
+  const { rows: [u] } = await anonQuery(
+    `SELECT user_id, email, full_name, COALESCE(token_version, 1) AS token_version,
+            mfa_secret_enc, mfa_pending_secret_enc, mfa_enabled_at, mfa_last_step,
+            locked_until IS NOT NULL AND locked_until > NOW() AS locked
+       FROM users WHERE user_id = $1 AND is_active`,
+    [userId],
+  );
+  if (!u || u.token_version !== tokenVersion) {
+    throw new HttpError(401, 'This sign-in attempt has expired. Please sign in again.', { code: 'CHALLENGE_EXPIRED' });
+  }
+  if (u.locked) throw new HttpError(401, SIGN_IN_REFUSED, { code: 'SIGN_IN_REFUSED' });
+  return u;
+}
+
+async function completeSignIn(res, account, method, extra = {}) {
+  await anonQuery('UPDATE users SET failed_login_count = 0 WHERE user_id = $1 AND failed_login_count <> 0', [account.user_id]);
+  await withUser(account.user_id, (db) => db.query(
+    `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
+     VALUES ('user', $1::text, $1::uuid, 'LOGIN', jsonb_build_object('second_step', $2::text))`,
+    [account.user_id, method],
+  ));
+  res.json({ token: issueToken(account.user_id, account.token_version), user: await describe(account.user_id), ...extra });
+}
+
+const verifySchema = z.object({
+  challenge: z.string().min(1).max(4000),
+  code: z.string().trim().max(20).optional(),
+  recoveryCode: z.string().trim().max(40).optional(),
+}).refine((v) => v.code || v.recoveryCode, 'Enter the code');
+
+authRouter.post('/mfa/verify', loginIpLimiter, mfaLimiter, async (req, res) => {
+  res.set(NO_STORE);
+  const body = verifySchema.parse(req.body ?? {});
+  const account = await challengedAccount(body.challenge, 'verify');
+  if (!account.mfa_enabled_at) {
+    throw new HttpError(401, 'This sign-in attempt has expired. Please sign in again.', { code: 'CHALLENGE_EXPIRED' });
+  }
+
+  if (body.recoveryCode) {
+    const { rows } = await anonQuery(
+      `UPDATE mfa_recovery_codes SET used_at = NOW()
+        WHERE user_id = $1 AND code_hash = $2 AND used_at IS NULL RETURNING code_id`,
+      [account.user_id, hashRecoveryCode(body.recoveryCode)],
+    );
+    if (!rows.length) {
+      await recordFailedSignIn(account);
+      throw new HttpError(401, 'That recovery code is not right, or it has already been used.', { code: 'MFA_CODE_INVALID' });
+    }
+    const { rows: [left] } = await anonQuery(
+      'SELECT count(*)::int AS n FROM mfa_recovery_codes WHERE user_id = $1 AND used_at IS NULL', [account.user_id],
+    );
+    sendRecoveryCodeUsed({ to: account.email, fullName: account.full_name, left: left.n })
+      .catch((err) => console.error(`[auth] recovery-code notice failed: ${err.message}`));
+    return completeSignIn(res, account, 'recovery_code', { recoveryCodesLeft: left.n });
+  }
+
+  const matched = matchingStep(decryptSecret(account.mfa_secret_enc), body.code);
+  // A code may be used once: anything at or before the last accepted step is a replay.
+  if (matched === null || (account.mfa_last_step !== null && matched <= Number(account.mfa_last_step))) {
+    await recordFailedSignIn(account);
+    throw new HttpError(401, CODE_REFUSED, { code: 'MFA_CODE_INVALID' });
+  }
+  await anonQuery('UPDATE users SET mfa_last_step = $2 WHERE user_id = $1', [account.user_id, matched]);
+  return completeSignIn(res, account, 'authenticator');
+});
+
+authRouter.post('/mfa/setup/start', loginIpLimiter, mfaLimiter, async (req, res) => {
+  res.set(NO_STORE);
+  const { challenge } = z.object({ challenge: z.string().min(1).max(4000) }).parse(req.body ?? {});
+  const account = await challengedAccount(challenge, 'enrol');
+  if (account.mfa_enabled_at) throw conflictTwoStep();
+
+  const secret = newSecret();
+  await anonQuery('UPDATE users SET mfa_pending_secret_enc = $2 WHERE user_id = $1', [account.user_id, encryptSecret(secret)]);
+  let issuer = 'Approval hub';
+  try { issuer = (await configService.get('institution.name')) || issuer; } catch { /* default */ }
+  res.json({ secret, issuer, account: account.email, otpauthUri: otpauthUri({ secret, account: account.email, issuer }) });
+});
+
+function conflictTwoStep() {
+  return new HttpError(409, '2-step verification is already set up for this account. Sign in again.', { code: 'MFA_ALREADY_ON' });
+}
+
+async function replaceRecoveryCodes(userId) {
+  const codes = newRecoveryCodes();
+  await anonQuery('DELETE FROM mfa_recovery_codes WHERE user_id = $1', [userId]);
+  for (const code of codes) {
+    await anonQuery('INSERT INTO mfa_recovery_codes (user_id, code_hash) VALUES ($1, $2)', [userId, hashRecoveryCode(code)]);
+  }
+  return codes;
+}
+
+authRouter.post('/mfa/setup/confirm', loginIpLimiter, mfaLimiter, async (req, res) => {
+  res.set(NO_STORE);
+  const { challenge, code } = z.object({ challenge: z.string().min(1).max(4000), code: z.string().trim().max(20) }).parse(req.body ?? {});
+  const account = await challengedAccount(challenge, 'enrol');
+  if (account.mfa_enabled_at) throw conflictTwoStep();
+  if (!account.mfa_pending_secret_enc) {
+    throw new HttpError(409, 'Start the setup again.', { code: 'MFA_SETUP_RESTART' });
+  }
+
+  const matched = matchingStep(decryptSecret(account.mfa_pending_secret_enc), code);
+  if (matched === null) {
+    await recordFailedSignIn(account);
+    throw new HttpError(401, CODE_REFUSED, { code: 'MFA_CODE_INVALID' });
+  }
+  await anonQuery(
+    `UPDATE users SET mfa_secret_enc = mfa_pending_secret_enc, mfa_pending_secret_enc = NULL,
+            mfa_enabled_at = NOW(), mfa_last_step = $2 WHERE user_id = $1`,
+    [account.user_id, matched],
+  );
+  const recoveryCodes = await replaceRecoveryCodes(account.user_id);
+  await anonQuery(
+    `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action) VALUES ('user', $1::text, $1::uuid, 'MFA_ENABLED')`,
+    [account.user_id],
+  );
+  sendTwoStepEnabled({ to: account.email, fullName: account.full_name })
+    .catch((err) => console.error(`[auth] 2-step notice failed: ${err.message}`));
+  return completeSignIn(res, account, 'enrolled', { recoveryCodes });
+});
+
+// New recovery codes (the old ones stop working). Needs a current code, so a
+// borrowed session alone cannot do it.
+authRouter.post('/mfa/recovery-codes', requireAuth, mfaLimiter, async (req, res) => {
+  res.set(NO_STORE);
+  const { code } = z.object({ code: z.string().trim().max(20) }).parse(req.body ?? {});
+  const { rows: [u] } = await anonQuery(
+    'SELECT user_id, mfa_secret_enc, mfa_last_step FROM users WHERE user_id = $1 AND mfa_enabled_at IS NOT NULL', [req.user.id],
+  );
+  if (!u) throw new HttpError(409, '2-step verification is not set up for this account.', { code: 'MFA_NOT_ON' });
+  const matched = matchingStep(decryptSecret(u.mfa_secret_enc), code);
+  if (matched === null || (u.mfa_last_step !== null && matched <= Number(u.mfa_last_step))) {
+    throw new HttpError(401, CODE_REFUSED, { code: 'MFA_CODE_INVALID' });
+  }
+  await anonQuery('UPDATE users SET mfa_last_step = $2 WHERE user_id = $1', [u.user_id, matched]);
+  const recoveryCodes = await replaceRecoveryCodes(u.user_id);
+  await anonQuery(
+    `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action) VALUES ('user', $1::text, $1::uuid, 'MFA_RECOVERY_CODES_REPLACED')`,
+    [u.user_id],
+  );
+  res.json({ recoveryCodes });
 });
 
 // The password rules, so every page shows the real policy rather than a copy.

@@ -176,3 +176,31 @@ export async function sendAccountLocked({ to, fullName, until }) {
   });
   return sendMail({ to, subject: 'Sign-in paused on your account', html });
 }
+
+/** 2-step verification was switched on for the account. */
+export async function sendTwoStepEnabled({ to, fullName }) {
+  const brand = await branding();
+  const html = layout(brand, {
+    heading: '2-step verification is on',
+    paragraphs: [
+      `Dear ${escapeHtml(fullName)},`,
+      'Signing in to your account now also needs a code from your authenticator app. Keep your recovery codes somewhere safe: each one lets you sign in once if you lose your phone.',
+      'If you did not do this, tell the college straight away.',
+    ],
+  });
+  return sendMail({ to, subject: '2-step verification is on', html });
+}
+
+/** A recovery code was used to sign in. */
+export async function sendRecoveryCodeUsed({ to, fullName, left }) {
+  const brand = await branding();
+  const html = layout(brand, {
+    heading: 'A recovery code was used to sign in',
+    paragraphs: [
+      `Dear ${escapeHtml(fullName)},`,
+      `Someone signed in to your account with one of your recovery codes. ${left} ${left === 1 ? 'code is' : 'codes are'} left.`,
+      'If this was you, create new recovery codes from your Profile page when you can. If it was not you, reset your password straight away and tell the college.',
+    ],
+  });
+  return sendMail({ to, subject: 'A recovery code was used on your account', html });
+}

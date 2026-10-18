@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import path from 'node:path';
 import dotenv from 'dotenv';
 
@@ -64,6 +65,27 @@ function mailTransport() {
   return value;
 }
 
+// Encrypts authenticator secrets and keys recovery-code hashes: 32 bytes,
+// given as 64 hex characters or base64. Generate one with
+//   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+// Required in production. Elsewhere a random key is made per start, with a
+// warning — fine for development, but 2-step enrolments then do not survive a
+// restart. Never hard-coded, never stored in the database.
+function mfaKey() {
+  const raw = (process.env.MFA_ENCRYPTION_KEY ?? '').trim();
+  if (!raw) {
+    if (isProduction) {
+      console.error('[config] MFA_ENCRYPTION_KEY is not set: 2-step verification is unavailable.');
+      return null;
+    }
+    console.warn('[config] MFA_ENCRYPTION_KEY not set; using a temporary key for this run (development only).');
+    return crypto.randomBytes(32);
+  }
+  const buf = /^[0-9a-f]{64}$/i.test(raw) ? Buffer.from(raw, 'hex') : Buffer.from(raw, 'base64');
+  if (buf.length !== 32) throw new Error('MFA_ENCRYPTION_KEY must be 32 bytes (64 hex characters or base64)');
+  return buf;
+}
+
 // The time zone dates in emails are written in.
 function timeZone() {
   const zone = (process.env.APP_TIMEZONE ?? 'Asia/Kolkata').trim();
@@ -77,6 +99,7 @@ export const config = Object.freeze({
   isProduction,
   appUrl: appUrl(),
   timeZone: timeZone(),
+  mfaKey: mfaKey(),
   bcryptRounds: bcryptRounds(),
   port: Number(process.env.PORT ?? 4000),
   databaseUrl: required('DATABASE_URL'),

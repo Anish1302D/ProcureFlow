@@ -29,6 +29,9 @@ export const CONFIG_SCHEMAS = {
   'auth.reset_requests_per_hour': z.number().int().min(1).max(20),
   'auth.lockout_threshold': z.number().int().min(3).max(20),
   'auth.lockout_minutes': z.number().int().min(5).max(1440),
+  // Roles that must use 2-step verification. ADMIN is always among them.
+  'auth.mfa_required_roles': z.array(z.string().trim().min(1).max(50)).max(20)
+    .refine((roles) => roles.includes('ADMIN'), 'ADMIN must always require 2-step verification'),
   // Empty list = every email domain may be invited.
   'auth.allowed_email_domains': z.array(
     z.string().trim().toLowerCase().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/, 'Must be a domain such as example.edu'),
@@ -60,6 +63,7 @@ export const DEFAULT_CONFIGS = {
   'auth.reset_requests_per_hour': 3,
   'auth.lockout_threshold': 5,
   'auth.lockout_minutes': 15,
+  'auth.mfa_required_roles': ['ADMIN'],
   'auth.allowed_email_domains': [],
 };
 
@@ -84,6 +88,7 @@ export const CONFIG_DESCRIPTIONS = {
   'auth.reset_requests_per_hour': 'Most reset emails one account can receive in an hour',
   'auth.lockout_threshold': 'Failed sign-ins before an account is temporarily locked',
   'auth.lockout_minutes': 'Minutes an account stays locked after too many failed sign-ins',
+  'auth.mfa_required_roles': 'Roles that must use 2-step verification (ADMIN always does)',
   'auth.allowed_email_domains': 'Email domains that may be invited; empty allows every domain',
 };
 
@@ -108,6 +113,7 @@ export const CONFIG_CATEGORIES = {
   'auth.reset_requests_per_hour': 'security',
   'auth.lockout_threshold': 'security',
   'auth.lockout_minutes': 'security',
+  'auth.mfa_required_roles': 'security',
   'auth.allowed_email_domains': 'security',
 };
 
@@ -144,6 +150,7 @@ export const SAFE_FALLBACK_KEYS = new Set([
   'auth.lockout_threshold',
   'auth.lockout_minutes',
   'auth.allowed_email_domains',
+  'auth.mfa_required_roles',
 ]);
 
 // Policy keys whose names happen to contain a word the secrets guard looks
