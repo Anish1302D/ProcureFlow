@@ -737,7 +737,7 @@ async function requireDetail(db, requestId, user) {
  */
 async function lockEditableRequest(db, requestId, user, statuses = EDITABLE_STATUSES) {
   const { rows } = await db.query(
-    'SELECT request_id, raised_by, current_status, budget_head_id FROM requests WHERE request_id = $1',
+    'SELECT request_id, raised_by, current_status, budget_head_id, department_id FROM requests WHERE request_id = $1',
     [requestId],
   );
   const r = rows[0];
@@ -967,7 +967,11 @@ requestsRouter.patch('/:id', async (req, res) => {
         'SELECT budget_item_id FROM request_items WHERE request_id = $1', [requestId]);
       await checkItems(db, body.budgetHeadId, rows.map((r) => r.budget_item_id));
     }
-    await checkPlacement(db, body);
+    // A course alone is checked against the department the request already has.
+    await checkPlacement(db, {
+      departmentId: body.departmentId !== undefined ? body.departmentId : current.department_id,
+      courseId: body.courseId,
+    });
 
     const columns = {
       title: 'title', description: 'description', budgetHeadId: 'budget_head_id',

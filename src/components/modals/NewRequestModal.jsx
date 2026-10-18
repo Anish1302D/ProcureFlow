@@ -13,8 +13,8 @@ import { serializeCustomItem } from '../../utils/customItem';
 // plain HTTP would crash this form on open.
 let nextKey = 0;
 const blankLine = () => ({ key: ++nextKey, budgetItemId: '', quantity: '', unitCost: '', remarks: '', customItemName: '' });
-const blankForm = () => ({
-  title: '', description: '', budgetHeadId: '', financialYearId: '', departmentId: '', courseId: '', urgency: 'Medium',
+const blankForm = (departmentId = '') => ({
+  title: '', description: '', budgetHeadId: '', financialYearId: '', departmentId, courseId: '', urgency: 'Medium',
   // "Other" free-text overrides
   customBudgetHead: '',
   customDepartment: '',
@@ -43,9 +43,13 @@ const otherItem = (catalogue) => catalogue.find((i) => isOther(i.code));
 // ---------------------------------------------------------------------------
 
 export const NewRequestModal = () => {
-  const { modals, closeModal, showToast, refresh, openRecord } = useApp();
+  const { user, modals, closeModal, showToast, refresh, openRecord } = useApp();
   const open = modals.newRequest;
-  const [form, setForm] = useState(blankForm);
+  // A requester the admin has placed in a department (an HOD) raises requests
+  // for that department only; the server rejects any other.
+  const ownDept = user && !user.roles.includes('ADMIN') && user.departmentId != null
+    ? String(user.departmentId) : '';
+  const [form, setForm] = useState(() => blankForm(ownDept));
   const [lines, setLines] = useState(() => [blankLine()]);
   const [files, setFiles] = useState([]);
   const [saving, setSaving] = useState(null); // 'draft' | 'submit' | null
@@ -53,7 +57,7 @@ export const NewRequestModal = () => {
 
   const heads = useApi(open ? '/api/budget-heads' : null);
   const years = useApi(open ? '/api/financial-years' : null);
-  const departments = useApi(open ? '/api/departments' : null);
+  const departments = useApi(open && !ownDept ? '/api/departments' : null);
   const courses = useApi(open && form.departmentId && form.departmentId !== 'OTHER' ? `/api/courses${qs({ departmentId: form.departmentId })}` : null);
   const stages = useApi(open ? '/api/workflow/stages' : null);
   const catalogue = useApi(open && form.budgetHeadId && form.budgetHeadId !== 'OTHER' ? `/api/budget-heads/${form.budgetHeadId}/items` : null);
@@ -63,6 +67,11 @@ export const NewRequestModal = () => {
     const active = years.data?.find((y) => y.isActive);
     if (active && !form.financialYearId) setForm((f) => ({ ...f, financialYearId: String(active.id) }));
   }, [years.data, form.financialYearId]);
+
+  // The modal can mount before sign-in finishes, so pin the department once known.
+  useEffect(() => {
+    if (ownDept) setForm((f) => (f.departmentId === ownDept ? f : { ...f, departmentId: ownDept, courseId: '' }));
+  }, [ownDept]);
 
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
   const setLine = (key, patch) => setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
@@ -126,7 +135,7 @@ export const NewRequestModal = () => {
   // ---------------------------------------------------------------------------
   // Reset / close
   // ---------------------------------------------------------------------------
-  const reset = () => { setForm(blankForm()); setLines([blankLine()]); setFiles([]); setAttempted(null); };
+  const reset = () => { setForm(blankForm(ownDept));setLines([blankLine()]); setFiles([]); setAttempted(null); };
   const close = () => { closeModal('newRequest'); reset(); };
 
   // ---------------------------------------------------------------------------
@@ -287,11 +296,19 @@ export const NewRequestModal = () => {
           {/* Department */}
           <div>
             <label htmlFor="req-dept" className={labelCls}>Department</label>
-            <select id="req-dept" className={inputCls} value={form.departmentId} onChange={(e) => changeDept(e.target.value)}>
-              <option value="">Not specific to a department</option>
-              {(departments.data ?? []).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-              <option value="OTHER">Other (specify below)</option>
-            </select>
+            {ownDept ? (
+              <>
+                <input id="req-dept" className={`${inputCls} bg-gray-50 text-gray-600`} readOnly
+                  value={user.departmentName ?? 'Your department'} />
+                <p className="mt-1 text-[11px] text-gray-400">Requests are raised for the department you head.</p>
+              </>
+            ) : (
+              <select id="req-dept" className={inputCls} value={form.departmentId} onChange={(e) => changeDept(e.target.value)}>
+                <option value="">Not specific to a department</option>
+                {(departments.data ?? []).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                <option value="OTHER">Other (specify below)</option>
+              </select>
+            )}
             {deptIsOther && (
               <input className={otherInputCls} placeholder="e.g. Sports & Physical Education"
                 value={form.customDepartment} onChange={(e) => set({ customDepartment: e.target.value })} />
