@@ -548,3 +548,13 @@ test('new recovery codes need a current authenticator code', async () => {
     token: tok.admin, body: { code: t.totpFor('admin@spcollege.edu') } }), 200);
   assert.equal(fresh.recoveryCodes.length, 10);
 });
+
+test('the signed-in profile says whether 2-step verification is on, never the secret', async () => {
+  const admin = expectStatus(await t.api('GET', '/api/auth/me', { token: tok.admin }), 200);
+  assert.equal(admin.mfa.enabled, true);
+  assert.ok(admin.mfa.enabledAt);
+  assert.doesNotMatch(JSON.stringify(admin), /mfa_secret|v1:/);
+  const requester = await t.login('incharge@spcollege.edu', 'violet-harbour-lantern-42');
+  const plain = expectStatus(await t.api('GET', '/api/auth/me', { token: requester }), 200);
+  assert.equal(plain.mfa.enabled, false);
+});

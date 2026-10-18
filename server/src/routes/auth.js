@@ -658,7 +658,7 @@ export const APPROVAL_BUDGET_ROLES = [
 
 async function describe(userId) {
   const { rows } = await anonQuery(
-    `SELECT u.user_id, u.email, u.full_name, u.employee_id, u.department_id,
+    `SELECT u.user_id, u.email, u.full_name, u.employee_id, u.department_id, u.mfa_enabled_at,
             d.name AS department_name, d.code AS department_code,
             ARRAY(SELECT r.code FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id
                    WHERE ur.user_id = u.user_id ORDER BY r.code) AS roles,
@@ -683,6 +683,8 @@ async function describe(userId) {
     departmentCode: u.department_code,
     roles: u.roles,
     stages: u.stages,
+    // Whether 2-step verification is on; never the secret itself.
+    mfa: { enabled: u.mfa_enabled_at !== null, enabledAt: u.mfa_enabled_at },
     // Hints for showing and hiding UI. The server enforces every one of these
     // independently — they grant nothing on their own.
     can: {
