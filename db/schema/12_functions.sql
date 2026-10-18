@@ -635,16 +635,16 @@ BEGIN
     END IF;
 
     IF v_token.used_at IS NOT NULL THEN
-        RETURN QUERY SELECT 'ALREADY_USED'::TEXT, v_token.user_id, v_token.email, v_token.full_name;
+        RETURN QUERY SELECT 'ALREADY_USED'::TEXT, v_token.user_id, v_token.email::TEXT, v_token.full_name;
         RETURN;
     END IF;
 
     IF v_token.expires_at < NOW() THEN
-        RETURN QUERY SELECT 'EXPIRED'::TEXT, v_token.user_id, v_token.email, v_token.full_name;
+        RETURN QUERY SELECT 'EXPIRED'::TEXT, v_token.user_id, v_token.email::TEXT, v_token.full_name;
         RETURN;
     END IF;
 
-    RETURN QUERY SELECT 'VALID'::TEXT, v_token.user_id, v_token.email, v_token.full_name;
+    RETURN QUERY SELECT 'VALID'::TEXT, v_token.user_id, v_token.email::TEXT, v_token.full_name;
 END;
 $$;
 
@@ -680,6 +680,7 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
+#variable_conflict use_column
 DECLARE
     v_token RECORD;
     v_new_version INTEGER;
@@ -854,6 +855,7 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
+#variable_conflict use_column
 DECLARE
     v RECORD;
     v_new_version INTEGER;
@@ -949,6 +951,7 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
+#variable_conflict use_column
 DECLARE
     v RECORD;
     v_new_version INTEGER;
