@@ -7,6 +7,7 @@ import { issueToken, requireAuth } from '../auth.js';
 import { anonQuery, withUser } from '../db.js';
 import { configService } from '../configService.js';
 import { HttpError, conflict } from '../errors.js';
+import { assertPasswordAcceptable, hashPassword, passwordRules } from '../passwordPolicy.js';
 import { REQUESTER_ROLES, ISSUE_MANAGER_ROLES, INVENTORY_READER_ROLES, hasAnyRole } from '../roles.js';
 
 export const authRouter = Router();
@@ -24,7 +25,7 @@ const registerSchema = z.object({
 
 const setupAccountSchema = z.object({
   token: z.string().trim().min(16).max(256),
-  password: z.string().min(8, 'Password must be at least 8 characters').max(200),
+  password: z.string().min(1, 'Choose a password').max(200),
 });
 
 // Global IP rate limiter to protect against credential stuffing across accounts.
@@ -297,7 +298,20 @@ authRouter.post('/setup-account', setupAccountLimiter, loginIpLimiter, async (re
 
   const { token, password } = setupAccountSchema.parse(req.body);
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-  const newHash = await bcrypt.hash(password, 12);
+
+  // Whose password this is, so the policy can refuse one built from their
+  // own name or email. A token that does not verify gets the same answers
+  // the consume step would give.
+  const { rows: invitee } = await anonQuery(
+    'SELECT status, email, full_name FROM fn_verify_account_setup_token($1)', [tokenHash],
+  );
+  const state = invitee[0]?.status ?? 'INVALID';
+  if (state === 'INVALID') throw new HttpError(404, 'Invalid or unknown setup token');
+  if (state === 'ALREADY_USED') throw new HttpError(400, 'This setup link has already been used');
+  if (state === 'EXPIRED') throw new HttpError(400, 'This setup link has expired. Please contact your administrator.');
+  await assertPasswordAcceptable(password, { email: invitee[0].email, fullName: invitee[0].full_name });
+
+  const newHash = await hashPassword(password);
   const clientIp = req.ip || 'unknown';
 
   let userId;
@@ -411,7 +425,7 @@ const changePasswordLimiter = rateLimit({
 const changePasswordSchema = z
   .object({
     currentPassword: z.string().min(1, 'Current password is required').max(200),
-    newPassword: z.string().min(8, 'New password must be at least 8 characters').max(200),
+    newPassword: z.string().min(1, 'Choose a new password').max(200),
   })
   .refine((v) => v.currentPassword !== v.newPassword, {
     message: 'New password must be different from current password',
@@ -431,7 +445,8 @@ authRouter.post('/change-password', requireAuth, changePasswordLimiter, async (r
   const valid = await bcrypt.compare(currentPassword, account.password_hash);
   if (!valid) throw new HttpError(401, 'Current password is incorrect');
 
-  const newHash = await bcrypt.hash(newPassword, 12);
+  await assertPasswordAcceptable(newPassword, { email: req.user.email, fullName: req.user.name });
+  const newHash = await hashPassword(newPassword);
   await withUser(req.user.id, async (db) => {
     try {
       await db.query(
@@ -451,6 +466,11 @@ authRouter.post('/change-password', requireAuth, changePasswordLimiter, async (r
   });
 
   res.status(204).end();
+});
+
+// The password rules, so every page shows the real policy rather than a copy.
+authRouter.get('/password-policy', async (_req, res) => {
+  res.json(await passwordRules());
 });
 
 authRouter.get('/me', requireAuth, async (req, res) => {
