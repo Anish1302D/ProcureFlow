@@ -64,9 +64,19 @@ function mailTransport() {
   return value;
 }
 
+// The time zone dates in emails are written in.
+function timeZone() {
+  const zone = (process.env.APP_TIMEZONE ?? 'Asia/Kolkata').trim();
+  try { new Intl.DateTimeFormat('en-IN', { timeZone: zone }); } catch {
+    throw new Error(`APP_TIMEZONE "${zone}" is not a recognised time zone`);
+  }
+  return zone;
+}
+
 export const config = Object.freeze({
   isProduction,
   appUrl: appUrl(),
+  timeZone: timeZone(),
   bcryptRounds: bcryptRounds(),
   port: Number(process.env.PORT ?? 4000),
   databaseUrl: required('DATABASE_URL'),

@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
@@ -6,6 +5,7 @@ import { z } from 'zod';
 import { issueToken, requireAuth } from '../auth.js';
 import { anonQuery, withUser } from '../db.js';
 import { HttpError } from '../errors.js';
+import { NO_STORE, assertTokenShape, hashToken, linkError } from '../oneTimeLinks.js';
 import { assertPasswordAcceptable, hashPassword, passwordRules } from '../passwordPolicy.js';
 import { REQUESTER_ROLES, ISSUE_MANAGER_ROLES, INVENTORY_READER_ROLES, hasAnyRole } from '../roles.js';
 
@@ -17,9 +17,11 @@ const loginSchema = z.object({
 });
 
 const setupAccountSchema = z.object({
-  token: z.string().trim().min(16).max(256),
+  token: z.string().trim().min(1).max(256),
   password: z.string().min(1, 'Choose a password').max(200),
 });
+
+const tokenOnlySchema = z.object({ token: z.string().trim().min(1).max(256) });
 
 // Global IP rate limiter to protect against credential stuffing across accounts.
 // 60 attempts per 15 minutes per IP allows shared campus networks while blocking automated attacks.
@@ -136,194 +138,63 @@ authRouter.post('/logout', requireAuth, (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Account setup & activation for admin-invited users
+// Accepting an invitation
 // ---------------------------------------------------------------------------
-authRouter.get('/verify-setup-token', verifySetupLimiter, async (req, res) => {
-  res.set({
-    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
-    Pragma: 'no-cache',
-    Expires: '0',
-  });
+// The link's token travels in the request body, never in a URL, so it cannot
+// be written to an access log. Responses are never cached.
 
-  const token = String(req.query.token ?? '').trim();
-  if (!token || token.length < 16) {
-    throw new HttpError(400, 'Invalid or missing setup token');
-  }
+/** The invitation behind a token, or the reason it cannot be used. */
+async function liveInvitation(token) {
+  assertTokenShape(token);
+  const { rows } = await anonQuery(
+    'SELECT status, user_id, email, full_name FROM fn_verify_account_setup_token($1)',
+    [hashToken(token)],
+  );
+  const row = rows[0];
+  if (!row || row.status !== 'VALID') throw linkError(row?.status ?? 'INVALID', 'invitation');
+  return row;
+}
 
-  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-
-  let rows;
-  try {
-    const result = await anonQuery(
-      `SELECT status, user_id, email, full_name
-         FROM fn_verify_account_setup_token($1)`,
-      [tokenHash],
-    );
-    rows = result.rows;
-  } catch (err) {
-    // Fallback if stored function is not yet installed in a test environment
-    if (err.message && (err.message.includes('does not exist') || err.message.includes('undefined_function'))) {
-      const result = await anonQuery(
-        `SELECT t.token_id, t.user_id, t.expires_at, t.used_at,
-                u.email, u.full_name, u.is_active
-           FROM account_setup_tokens t
-           JOIN users u ON u.user_id = t.user_id
-          WHERE t.token_hash = $1`,
-        [tokenHash],
-      );
-      const entry = result.rows[0];
-      if (!entry) {
-        throw new HttpError(404, 'Invalid or unknown setup token');
-      }
-      if (entry.used_at) {
-        throw new HttpError(400, 'This setup link has already been used');
-      }
-      if (new Date(entry.expires_at) < new Date()) {
-        throw new HttpError(400, 'This setup link has expired. Please contact your administrator.');
-      }
-      return res.json({
-        valid: true,
-        email: entry.email,
-        fullName: entry.full_name,
-      });
-    }
-    throw err;
-  }
-
-  const statusRow = rows?.[0];
-  if (!statusRow || statusRow.status === 'INVALID') {
-    throw new HttpError(404, 'Invalid or unknown setup token');
-  }
-  if (statusRow.status === 'ALREADY_USED') {
-    throw new HttpError(400, 'This setup link has already been used');
-  }
-  if (statusRow.status === 'EXPIRED') {
-    throw new HttpError(400, 'This setup link has expired. Please contact your administrator.');
-  }
-
+authRouter.post('/verify-setup-token', verifySetupLimiter, async (req, res) => {
+  res.set(NO_STORE);
+  const { token } = tokenOnlySchema.parse(req.body ?? {});
+  const invite = await liveInvitation(token);
+  const { rows: roles } = await anonQuery(
+    'SELECT r.name FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id WHERE ur.user_id = $1 ORDER BY r.name',
+    [invite.user_id],
+  );
   res.json({
     valid: true,
-    email: statusRow.email,
-    fullName: statusRow.full_name,
+    email: invite.email,
+    fullName: invite.full_name,
+    roles: roles.map((r) => r.name),
+    passwordRules: await passwordRules(),
   });
 });
 
 authRouter.post('/setup-account', setupAccountLimiter, loginIpLimiter, async (req, res) => {
-  res.set({
-    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
-    Pragma: 'no-cache',
-    Expires: '0',
-  });
-
+  res.set(NO_STORE);
   const { token, password } = setupAccountSchema.parse(req.body);
-  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
 
-  // Whose password this is, so the policy can refuse one built from their
-  // own name or email. A token that does not verify gets the same answers
-  // the consume step would give.
-  const { rows: invitee } = await anonQuery(
-    'SELECT status, email, full_name FROM fn_verify_account_setup_token($1)', [tokenHash],
-  );
-  const state = invitee[0]?.status ?? 'INVALID';
-  if (state === 'INVALID') throw new HttpError(404, 'Invalid or unknown setup token');
-  if (state === 'ALREADY_USED') throw new HttpError(400, 'This setup link has already been used');
-  if (state === 'EXPIRED') throw new HttpError(400, 'This setup link has expired. Please contact your administrator.');
-  await assertPasswordAcceptable(password, { email: invitee[0].email, fullName: invitee[0].full_name });
+  // The policy is checked against the invitee before the link is used, so a
+  // refused password leaves the invitation intact to try again.
+  const invite = await liveInvitation(token);
+  await assertPasswordAcceptable(password, { email: invite.email, fullName: invite.full_name });
 
-  const newHash = await hashPassword(password);
-  const clientIp = req.ip || 'unknown';
-
-  let userId;
-  let newVersion;
-
+  let consumed;
   try {
-    const { rows } = await anonQuery(
-      `SELECT user_id, token_version
-         FROM fn_consume_account_setup_token($1, $2, $3)`,
-      [tokenHash, newHash, clientIp],
-    );
-    if (!rows || rows.length === 0) {
-      throw new HttpError(404, 'Invalid or unknown setup token');
-    }
-    userId = rows[0].user_id;
-    newVersion = rows[0].token_version ?? 1;
+    ({ rows: [consumed] } = await anonQuery(
+      'SELECT user_id, token_version FROM fn_consume_account_setup_token($1, $2, $3)',
+      [hashToken(token), await hashPassword(password), req.ip || 'unknown'],
+    ));
   } catch (err) {
-    if (err instanceof HttpError) throw err;
-    if (err.code === 'ST001' || (err.message && err.message.includes('invalid or unknown'))) {
-      throw new HttpError(404, 'Invalid or unknown setup token');
-    }
-    if (err.code === 'ST002' || (err.message && err.message.includes('already been used'))) {
-      throw new HttpError(400, 'This setup link has already been used');
-    }
-    if (err.code === 'ST003' || (err.message && err.message.includes('expired'))) {
-      throw new HttpError(400, 'This setup link has expired. Please contact your administrator.');
-    }
-
-    // Transactional fallback with FOR UPDATE row locking if function is missing in mock environment
-    if (err.message && (err.message.includes('does not exist') || err.message.includes('undefined_function'))) {
-      const { pool } = await import('../db.js');
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-        const { rows: tRows } = await client.query(
-          `SELECT token_id, user_id, expires_at, used_at
-             FROM account_setup_tokens
-            WHERE token_hash = $1
-              FOR UPDATE`,
-          [tokenHash],
-        );
-        const entry = tRows[0];
-        if (!entry) {
-          throw new HttpError(404, 'Invalid or unknown setup token');
-        }
-        if (entry.used_at) {
-          throw new HttpError(400, 'This setup link has already been used');
-        }
-        if (new Date(entry.expires_at) < new Date()) {
-          throw new HttpError(400, 'This setup link has expired. Please contact your administrator.');
-        }
-
-        await client.query(
-          `UPDATE account_setup_tokens
-              SET used_at = NOW()
-            WHERE token_id = $1`,
-          [entry.token_id],
-        );
-
-        const { rows: uRows } = await client.query(
-          `UPDATE users
-              SET password_hash = $1,
-                  is_active = TRUE,
-                  token_version = COALESCE(token_version, 1) + 1,
-                  updated_at = NOW()
-            WHERE user_id = $2
-        RETURNING COALESCE(token_version, 1) AS token_version`,
-          [newHash, entry.user_id],
-        );
-
-        await client.query(
-          `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
-           VALUES ('user', $1::text, $1::uuid, 'ACCOUNT_ACTIVATED', jsonb_build_object('ip', $2::text))`,
-          [entry.user_id, clientIp],
-        );
-
-        await client.query('COMMIT');
-        userId = entry.user_id;
-        newVersion = uRows[0]?.token_version ?? 1;
-      } catch (txErr) {
-        await client.query('ROLLBACK');
-        throw txErr;
-      } finally {
-        client.release();
-      }
-    } else {
-      throw err;
-    }
+    throw linkError(err.code, 'invitation') ?? err;
   }
+  if (!consumed) throw linkError('INVALID', 'invitation');
 
   res.json({
-    token: issueToken(userId, newVersion),
-    user: await describe(userId),
+    token: issueToken(consumed.user_id, consumed.token_version ?? 1),
+    user: await describe(consumed.user_id),
   });
 });
 

@@ -1,8 +1,11 @@
 import crypto from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
+import { sendInvitation } from '../accountEmails.js';
 import { requireRole } from '../auth.js';
+import { config } from '../config.js';
 import { configService } from '../configService.js';
+import { NO_STORE, hashToken, newToken } from '../oneTimeLinks.js';
 import { anonQuery, withUser } from '../db.js';
 import { HttpError, conflict, notFound } from '../errors.js';
 
@@ -30,10 +33,27 @@ const ALLOWED_INSTITUTIONAL_ROLES = [
   'ADMIN',
 ];
 
-async function userDetail(userId) {
-  const { rows } = await anonQuery(
+// Accounts created by invitation start with this unusable password hash until
+// the invitee chooses their own password.
+const UNSET_PASSWORD_PREFIX = '$2a$12$unusable.placeholder';
+
+// Every account with its roles and where it stands: ACTIVE, INVITED (link
+// live), INVITE_EXPIRED, INVITE_CANCELLED, DEACTIVATED or NOT_INVITED. Read
+// as the signed-in administrator, because invitation rows are visible only
+// to administrators under row-level security.
+async function loadUsers(viewerId, userId = null) {
+  const { rows } = await withUser(viewerId, (db) => db.query(
     `SELECT u.user_id, u.email, u.full_name, u.employee_id, u.is_active, u.created_at, u.updated_at,
             u.department_id, d.name AS department_name, d.code AS department_code,
+            u.invited_at, u.activated_at, inv.expires_at AS invite_expires_at,
+            CASE
+              WHEN u.is_active THEN 'ACTIVE'
+              WHEN u.activated_at IS NOT NULL OR u.password_hash NOT LIKE $2 || '%' THEN 'DEACTIVATED'
+              WHEN inv.token_id IS NULL THEN 'NOT_INVITED'
+              WHEN inv.revoked_at IS NOT NULL THEN 'INVITE_CANCELLED'
+              WHEN inv.expires_at < NOW() THEN 'INVITE_EXPIRED'
+              ELSE 'INVITED'
+            END AS account_status,
             COALESCE(
               json_agg(
                 json_build_object('id', r.role_id, 'code', r.code, 'name', r.name)
@@ -45,13 +65,19 @@ async function userDetail(userId) {
        LEFT JOIN departments d ON d.department_id = u.department_id
        LEFT JOIN user_roles ur ON ur.user_id = u.user_id
        LEFT JOIN roles r       ON r.role_id  = ur.role_id
-      WHERE u.user_id = $1
-      GROUP BY u.user_id, d.name, d.code`,
-    [userId],
-  );
-  if (!rows[0]) return null;
-  const u = rows[0];
-  return {
+       LEFT JOIN LATERAL (
+         SELECT t.token_id, t.expires_at, t.revoked_at
+           FROM account_setup_tokens t
+          WHERE t.user_id = u.user_id AND t.purpose = 'INVITE'
+          ORDER BY t.created_at DESC, t.token_id
+          LIMIT 1
+       ) inv ON TRUE
+      WHERE $1::uuid IS NULL OR u.user_id = $1::uuid
+      GROUP BY u.user_id, d.name, d.code, inv.token_id, inv.expires_at, inv.revoked_at
+      ORDER BY u.full_name`,
+    [userId, UNSET_PASSWORD_PREFIX],
+  ));
+  return rows.map((u) => ({
     id: u.user_id,
     email: u.email,
     name: u.full_name,
@@ -63,7 +89,84 @@ async function userDetail(userId) {
     departmentName: u.department_name,
     departmentCode: u.department_code,
     roles: u.roles,
-  };
+    account: {
+      status: u.account_status,
+      invitedAt: u.invited_at,
+      activatedAt: u.activated_at,
+      inviteExpiresAt: u.account_status === 'INVITED' || u.account_status === 'INVITE_EXPIRED' ? u.invite_expires_at : null,
+    },
+  }));
+}
+
+async function userDetail(viewerId, userId) {
+  return (await loadUsers(viewerId, userId))[0] ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Invitations
+// ---------------------------------------------------------------------------
+
+function assertInvitesDeliverable() {
+  if (!config.appUrl) {
+    throw new HttpError(503,
+      'Invitations cannot be sent until APP_URL — the address people open the app at — is configured on the server.',
+      { code: 'APP_URL_REQUIRED' });
+  }
+}
+
+async function assertEmailDomainAllowed(email) {
+  const allowed = await configService.get('auth.allowed_email_domains');
+  const domain = email.split('@')[1]?.toLowerCase();
+  if (allowed.length && !allowed.includes(domain)) {
+    throw new HttpError(422, `Invitations can only be sent to these email domains: ${allowed.join(', ')}`,
+      { code: 'EMAIL_DOMAIN_NOT_ALLOWED' });
+  }
+}
+
+// A fresh invitation link inside the caller's transaction; any live one is
+// revoked first. Returns the raw token, which must go only into the email.
+async function issueInvite(db, { userId, email, ip }) {
+  const hours = await configService.get('auth.invite_ttl_hours');
+  const token = newToken();
+  const issuedAt = new Date();
+  const expiresAt = new Date(issuedAt.getTime() + hours * 3_600_000);
+  await db.query(
+    `UPDATE account_setup_tokens SET revoked_at = NOW()
+      WHERE user_id = $1 AND purpose = 'INVITE' AND used_at IS NULL AND revoked_at IS NULL`,
+    [userId],
+  );
+  await db.query(
+    `INSERT INTO account_setup_tokens (user_id, token_hash, expires_at, purpose, sent_to_email, requested_ip)
+     VALUES ($1, $2, $3, 'INVITE', $4, $5)`,
+    [userId, hashToken(token), expiresAt, email, ip ?? null],
+  );
+  return { token, issuedAt, expiresAt };
+}
+
+// Emails the link after the transaction has committed. The response says only
+// whether it was sent — the link itself is never shown to the administrator.
+async function deliverInvite(viewerId, { userId, email, fullName, invitedBy, link }) {
+  const { rows } = await withUser(viewerId, (db) => db.query(
+    'SELECT r.name FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id WHERE ur.user_id = $1 ORDER BY r.name',
+    [userId],
+  ));
+  const invitation = { sentTo: email, expiresAt: link.expiresAt.toISOString() };
+  try {
+    await sendInvitation({
+      to: email, fullName, roleNames: rows.map((r) => r.name), invitedBy,
+      token: link.token, issuedAt: link.issuedAt, expiresAt: link.expiresAt,
+    });
+    return { ...invitation, delivery: 'SENT' };
+  } catch (err) {
+    console.error(`[invite] could not email ${email}: ${err.message}`);
+    return { ...invitation, delivery: 'FAILED' };
+  }
+}
+
+function inviteMessage(invitation, fullName) {
+  return invitation.delivery === 'SENT'
+    ? `Invitation emailed to ${invitation.sentTo}. ${fullName} chooses their own password from the link.`
+    : `The invitation email to ${invitation.sentTo} could not be sent. Check the email settings, then use "Resend invitation".`;
 }
 
 async function validateRoleIds(db, roleIds) {
@@ -96,37 +199,8 @@ async function validateDepartmentId(db, departmentId) {
 // ---------------------------------------------------------------------------
 // GET /api/admin/users  —  list every user with their roles
 // ---------------------------------------------------------------------------
-adminRouter.get('/users', async (_req, res) => {
-  const { rows } = await anonQuery(
-    `SELECT u.user_id, u.email, u.full_name, u.employee_id, u.is_active, u.created_at, u.updated_at,
-            u.department_id, d.name AS department_name, d.code AS department_code,
-            COALESCE(
-              json_agg(
-                json_build_object('id', r.role_id, 'code', r.code, 'name', r.name)
-                ORDER BY r.code
-              ) FILTER (WHERE r.role_id IS NOT NULL),
-              '[]'
-            ) AS roles
-       FROM users u
-       LEFT JOIN departments d ON d.department_id = u.department_id
-       LEFT JOIN user_roles ur ON ur.user_id = u.user_id
-       LEFT JOIN roles r       ON r.role_id  = ur.role_id
-      GROUP BY u.user_id, d.name, d.code
-      ORDER BY u.full_name`,
-  );
-  res.json(rows.map((u) => ({
-    id: u.user_id,
-    email: u.email,
-    name: u.full_name,
-    employeeId: u.employee_id ?? null,
-    isActive: u.is_active,
-    createdAt: u.created_at,
-    updatedAt: u.updated_at,
-    departmentId: u.department_id,
-    departmentName: u.department_name,
-    departmentCode: u.department_code,
-    roles: u.roles,
-  })));
+adminRouter.get('/users', async (req, res) => {
+  res.json(await loadUsers(req.user.id));
 });
 
 // ---------------------------------------------------------------------------
@@ -145,7 +219,7 @@ adminRouter.get('/roles', async (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /api/admin/users  —  invite a new user with single-use setup token
+// POST /api/admin/users  —  invite a new user (the link is emailed to them)
 // ---------------------------------------------------------------------------
 const createUserSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
@@ -158,16 +232,12 @@ const createUserSchema = z.object({
 
 adminRouter.post('/users', async (req, res) => {
   const body = createUserSchema.parse(req.body);
+  assertInvitesDeliverable();
+  await assertEmailDomainAllowed(body.email);
 
-  // Generate an unusable placeholder password hash so unactivated accounts cannot log in.
-  const randomPlaceholder = crypto.randomBytes(16).toString('hex');
-  const initialPasswordHash = `$2a$12$unusable.placeholder.setup.required.${randomPlaceholder}`;
-
-  // Issue a short-lived (24h) cryptographically random setup token.
-  // The raw token is NEVER logged or stored in the database — only its SHA-256 hash.
-  const rawToken = crypto.randomBytes(32).toString('hex');
-  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  // An unusable password hash, so the account cannot sign in until the
+  // invitee chooses their own password from the emailed link.
+  const initialPasswordHash = `${UNSET_PASSWORD_PREFIX}.setup.required.${crypto.randomBytes(16).toString('hex')}`;
 
   const created = await withUser(req.user.id, async (db) => {
     const dup = await db.query(
@@ -187,9 +257,10 @@ adminRouter.post('/users', async (req, res) => {
 
     // Accounts start unactivated (is_active = FALSE) until the invitee completes password setup.
     const { rows } = await db.query(
-      `INSERT INTO users (email, full_name, password_hash, department_id, employee_id, is_active, token_version)
-       VALUES ($1, $2, $3, $4, $5, FALSE, 1) RETURNING user_id`,
-      [body.email, body.fullName, initialPasswordHash, body.departmentId ?? null, body.employeeId ?? null],
+      `INSERT INTO users (email, full_name, password_hash, department_id, employee_id, is_active, token_version,
+                          invited_by, invited_at)
+       VALUES ($1, $2, $3, $4, $5, FALSE, 1, $6, NOW()) RETURNING user_id`,
+      [body.email, body.fullName, initialPasswordHash, body.departmentId ?? null, body.employeeId ?? null, req.user.id],
     );
     const userId = rows[0].user_id;
 
@@ -225,11 +296,7 @@ adminRouter.post('/users', async (req, res) => {
       );
     }
 
-    await db.query(
-      `INSERT INTO account_setup_tokens (user_id, token_hash, expires_at)
-       VALUES ($1, $2, $3)`,
-      [userId, tokenHash, expiresAt],
-    );
+    const link = await issueInvite(db, { userId, email: body.email, ip: req.ip });
 
     await db.query(
       `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
@@ -248,68 +315,94 @@ adminRouter.post('/users', async (req, res) => {
       ],
     );
 
-    return userId;
+    return { userId, link };
   });
 
-  const detail = await userDetail(created);
-  res.set({
-    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
-    Pragma: 'no-cache',
-    Expires: '0',
+  const invitation = await deliverInvite(req.user.id, {
+    userId: created.userId, email: body.email, fullName: body.fullName,
+    invitedBy: req.user.name, link: created.link,
   });
-  res.status(201).json({
-    ...detail,
-    setupToken: rawToken,
-    setupUrl: `/setup-account?token=${rawToken}`,
-    expiresAt: expiresAt.toISOString(),
-    emailDelivery: 'UNCONFIGURED',
-    message: 'User created. Outbound email delivery is unconfigured in this environment. Provide the setup link directly to the invited institutional member.',
+  res.set(NO_STORE).status(201).json({
+    ...(await userDetail(req.user.id, created.userId)),
+    invitation,
+    message: inviteMessage(invitation, body.fullName),
   });
 });
 
 // ---------------------------------------------------------------------------
-// POST /api/admin/users/:id/setup-token  —  generate new setup link for a user
+// POST /api/admin/users/:id/invite  —  resend: a new link, the old one stops working
+// DELETE /api/admin/users/:id/invite —  cancel a pending invitation
 // ---------------------------------------------------------------------------
-adminRouter.post('/users/:id/setup-token', async (req, res) => {
+async function pendingInvitee(db, userId) {
+  const { rows } = await db.query(
+    `SELECT user_id, email, full_name, is_active, activated_at,
+            password_hash LIKE $2 || '%' AS never_set_password
+       FROM users WHERE user_id = $1`,
+    [userId, UNSET_PASSWORD_PREFIX],
+  );
+  const u = rows[0];
+  if (!u) throw notFound('User not found');
+  if (u.is_active || u.activated_at || !u.never_set_password) {
+    throw conflict('This person has already set up their account. If they have forgotten their password, they can reset it from the sign-in page.');
+  }
+  return u;
+}
+
+// Turning an account on is for people who have set their own password. An
+// invitee who has not would otherwise show as active with no way to sign in.
+async function assertHasSetPassword(db, userId) {
+  const { rows } = await db.query(
+    `SELECT activated_at IS NULL AND password_hash LIKE $2 || '%' AS never_set
+       FROM users WHERE user_id = $1`,
+    [userId, UNSET_PASSWORD_PREFIX],
+  );
+  if (rows[0]?.never_set) {
+    throw conflict('This person has not accepted their invitation yet. Resend the invitation instead.');
+  }
+}
+
+adminRouter.post('/users/:id/invite', async (req, res) => {
+  assertInvitesDeliverable();
   const userId = req.params.id;
-  const user = await userDetail(userId);
-  if (!user) throw notFound('User not found');
-
-  const rawToken = crypto.randomBytes(32).toString('hex');
-  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-
-  await withUser(req.user.id, async (db) => {
-    await db.query(
-      'UPDATE account_setup_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL',
-      [userId],
-    );
-    await db.query(
-      'INSERT INTO account_setup_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)',
-      [userId, tokenHash, expiresAt],
-    );
+  const sent = await withUser(req.user.id, async (db) => {
+    const u = await pendingInvitee(db, userId);
+    const link = await issueInvite(db, { userId, email: u.email, ip: req.ip });
     await db.query(
       `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, after_json)
-       VALUES ('user', $1::text, $2::uuid, 'SETUP_TOKEN_ISSUED', jsonb_build_object('expiresAt', $3::text))`,
-      [userId, req.user.id, expiresAt.toISOString()],
+       VALUES ('user', $1::text, $2::uuid, 'INVITE_RESENT', jsonb_build_object('expiresAt', $3::text))`,
+      [userId, req.user.id, link.expiresAt.toISOString()],
     );
+    return { link, email: u.email, fullName: u.full_name };
   });
 
-  res.set({
-    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
-    Pragma: 'no-cache',
-    Expires: '0',
+  const invitation = await deliverInvite(req.user.id, {
+    userId, email: sent.email, fullName: sent.fullName, invitedBy: req.user.name, link: sent.link,
   });
-  res.json({
-    userId,
-    setupToken: rawToken,
-    setupUrl: `/setup-account?token=${rawToken}`,
-    expiresAt: expiresAt.toISOString(),
-    emailDelivery: 'UNCONFIGURED',
-    message: 'New setup token generated. Outbound email delivery is unconfigured in this environment. Provide the setup link directly to the invited institutional member.',
+  res.set(NO_STORE).json({
+    ...(await userDetail(req.user.id, userId)),
+    invitation,
+    message: inviteMessage(invitation, sent.fullName),
   });
 });
 
+adminRouter.delete('/users/:id/invite', async (req, res) => {
+  const userId = req.params.id;
+  await withUser(req.user.id, async (db) => {
+    await pendingInvitee(db, userId);
+    const { rowCount } = await db.query(
+      `UPDATE account_setup_tokens SET revoked_at = NOW()
+        WHERE user_id = $1 AND purpose = 'INVITE' AND used_at IS NULL AND revoked_at IS NULL`,
+      [userId],
+    );
+    if (!rowCount) throw notFound('There is no pending invitation to cancel');
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action)
+       VALUES ('user', $1::text, $2::uuid, 'INVITE_CANCELLED')`,
+      [userId, req.user.id],
+    );
+  });
+  res.json(await userDetail(req.user.id, userId));
+});
 
 // ---------------------------------------------------------------------------
 // PATCH /api/admin/users/:id  —  edit name/email/password/department/roles/active status
@@ -352,6 +445,7 @@ adminRouter.patch('/users/:id', async (req, res) => {
     );
     if (!existing.rowCount) throw notFound('User not found');
     const beforeUser = existing.rows[0];
+    if (body.isActive === true) await assertHasSetPassword(db, userId);
 
     if (body.departmentId !== undefined) {
       await validateDepartmentId(db, body.departmentId);
@@ -507,7 +601,7 @@ adminRouter.patch('/users/:id', async (req, res) => {
     );
   });
 
-  res.json(await userDetail(userId));
+  res.json(await userDetail(req.user.id, userId));
 });
 
 // ---------------------------------------------------------------------------
@@ -574,6 +668,7 @@ adminRouter.post('/users/:id/reactivate', async (req, res) => {
   const userId = req.params.id;
 
   await withUser(req.user.id, async (db) => {
+    await assertHasSetPassword(db, userId);
     try {
       const { rowCount } = await db.query(
         `UPDATE users SET is_active = TRUE, token_version = COALESCE(token_version, 1) + 1, updated_at = NOW()
@@ -599,7 +694,7 @@ adminRouter.post('/users/:id/reactivate', async (req, res) => {
     );
   });
 
-  res.json(await userDetail(userId));
+  res.json(await userDetail(req.user.id, userId));
 });
 
 // ---------------------------------------------------------------------------

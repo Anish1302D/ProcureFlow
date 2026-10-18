@@ -106,3 +106,131 @@ test('there is no public sign-up', async () => {
   const after = (await t.superuser.query('SELECT count(*)::int AS n FROM users')).rows[0].n;
   assert.equal(after, before, 'no account was created');
 });
+
+// ---------------------------------------------------------------------------
+// Invitations are emailed; the administrator never sees the link
+// ---------------------------------------------------------------------------
+
+const TOKEN_LIKE = /[0-9a-f]{64}/i;
+const STRONG = 'quiet-meadow-compass-81';
+
+async function roleId(code) {
+  const roles = expectStatus(await t.api('GET', '/api/admin/roles', { token: tok.admin }), 200);
+  return roles.find((r) => r.code === code).id;
+}
+
+async function invite(email, fullName, roleCode = 'CDC_GRANT_MEMBER') {
+  return t.api('POST', '/api/admin/users', {
+    token: tok.admin, body: { email, fullName, roleIds: [await roleId(roleCode)] } });
+}
+
+test('an invitation is emailed, and the response carries no link', async () => {
+  const res = await invite('p.shinde@gmail.com', 'Prakash Shinde');
+  const body = expectStatus(res, 201);
+  assert.equal(body.invitation.delivery, 'SENT');
+  assert.equal(body.invitation.sentTo, 'p.shinde@gmail.com');
+  assert.equal(body.account.status, 'INVITED');
+  assert.doesNotMatch(JSON.stringify(body), TOKEN_LIKE, 'no token anywhere in what the administrator receives');
+  assert.equal(res.headers.get('cache-control'), 'no-store, no-cache, must-revalidate, private');
+
+  const [mail] = await t.inbox('p.shinde@gmail.com');
+  assert.match(mail.subject, /Invitation/);
+  assert.match(mail.html, /CDC Grant Member/, 'the email names the role');
+  assert.match(mail.html, /7 days/, 'and how long the link lasts');
+  assert.match(mail.html, /https:\/\/approvals\.example\.test\/#\/accept-invite\//, 'the token sits after #, out of server logs');
+  t.linkIn(mail, 'accept-invite');
+
+  const { rows } = await t.superuser.query(
+    `SELECT a.after_json::text AS j FROM audit_logs a JOIN users u ON a.entity_id = u.user_id::text
+      WHERE u.email = 'p.shinde@gmail.com'`);
+  assert.ok(rows.length > 0);
+  for (const r of rows) assert.doesNotMatch(r.j ?? '', TOKEN_LIKE, 'the audit log never holds a token');
+});
+
+test('the invitee sees who they are and their role, then sets their own password', async () => {
+  const token = t.linkIn((await t.inbox('p.shinde@gmail.com')).at(-1), 'accept-invite');
+
+  const seen = expectStatus(await t.api('POST', '/api/auth/verify-setup-token', { body: { token } }), 200);
+  assert.equal(seen.email, 'p.shinde@gmail.com');
+  assert.deepEqual(seen.roles, ['CDC Grant Member']);
+  assert.equal(seen.passwordRules.minLength, 12);
+
+  // A weak password is refused and the invitation stays usable.
+  const weak = await t.api('POST', '/api/auth/setup-account', { body: { token, password: 'shinde-2026-abc' } });
+  assert.equal(weak.status, 422);
+  assert.ok(weak.body.error.details.some((p) => /your (name|email)/.test(p)));
+
+  const done = expectStatus(await t.api('POST', '/api/auth/setup-account', { body: { token, password: STRONG } }), 200);
+  assert.equal(done.user.email, 'p.shinde@gmail.com');
+  assert.ok(done.token, 'they are signed in straight away');
+  assert.equal(await canSignIn('p.shinde@gmail.com', STRONG), true);
+
+  const again = await t.api('POST', '/api/auth/setup-account', { body: { token, password: 'another-new-phrase-77' } });
+  assert.equal(again.status, 410);
+  assert.equal(again.body.error.code, 'LINK_USED');
+
+  const users = expectStatus(await t.api('GET', '/api/admin/users', { token: tok.admin }), 200);
+  assert.equal(users.find((u) => u.email === 'p.shinde@gmail.com').account.status, 'ACTIVE');
+});
+
+test('links are checked in the request body, never from a URL', async () => {
+  const res = await t.api('GET', `/api/auth/verify-setup-token?token=${'a'.repeat(64)}`);
+  assert.ok([401, 404].includes(res.status), `the old query-string form is gone, got ${res.status}`);
+  const garbage = await t.api('POST', '/api/auth/verify-setup-token', { body: { token: 'not-a-token' } });
+  assert.equal(garbage.status, 404);
+  assert.equal(garbage.body.error.code, 'LINK_INVALID');
+});
+
+test('resending replaces the link; the old one stops working', async () => {
+  const created = expectStatus(await invite('n.gokhale@outlook.com', 'Neha Gokhale', 'CDC_NON_GRANT_MEMBER'), 201);
+  const first = t.linkIn((await t.inbox('n.gokhale@outlook.com')).at(-1), 'accept-invite');
+
+  const resent = expectStatus(await t.api('POST', `/api/admin/users/${created.id}/invite`, { token: tok.admin }), 200);
+  assert.equal(resent.invitation.delivery, 'SENT');
+  assert.doesNotMatch(JSON.stringify(resent), TOKEN_LIKE);
+  const second = t.linkIn((await t.inbox('n.gokhale@outlook.com')).at(-1), 'accept-invite');
+  assert.notEqual(first, second);
+
+  const old = await t.api('POST', '/api/auth/verify-setup-token', { body: { token: first } });
+  assert.equal(old.status, 410);
+  assert.equal(old.body.error.code, 'LINK_REVOKED');
+  expectStatus(await t.api('POST', '/api/auth/verify-setup-token', { body: { token: second } }), 200);
+});
+
+test('a pending invitation can be cancelled, and an expired one says so', async () => {
+  const users = expectStatus(await t.api('GET', '/api/admin/users', { token: tok.admin }), 200);
+  const neha = users.find((u) => u.email === 'n.gokhale@outlook.com');
+  const link = t.linkIn((await t.inbox('n.gokhale@outlook.com')).at(-1), 'accept-invite');
+
+  const cancelled = expectStatus(await t.api('DELETE', `/api/admin/users/${neha.id}/invite`, { token: tok.admin }), 200);
+  assert.equal(cancelled.account.status, 'INVITE_CANCELLED');
+  assert.equal((await t.api('POST', '/api/auth/verify-setup-token', { body: { token: link } })).body.error.code, 'LINK_REVOKED');
+
+  expectStatus(await t.api('POST', `/api/admin/users/${neha.id}/invite`, { token: tok.admin }), 200);
+  await t.superuser.query(
+    `UPDATE account_setup_tokens SET expires_at = NOW() - interval '1 minute'
+      WHERE user_id = $1 AND purpose = 'INVITE' AND used_at IS NULL AND revoked_at IS NULL`, [neha.id]);
+  const expired = t.linkIn((await t.inbox('n.gokhale@outlook.com')).at(-1), 'accept-invite');
+  assert.equal((await t.api('POST', '/api/auth/verify-setup-token', { body: { token: expired } })).body.error.code, 'LINK_EXPIRED');
+  const listed = expectStatus(await t.api('GET', '/api/admin/users', { token: tok.admin }), 200);
+  assert.equal(listed.find((u) => u.id === neha.id).account.status, 'INVITE_EXPIRED');
+});
+
+test('someone who already set up their account is not re-invited', async () => {
+  const res = await t.api('POST', `/api/admin/users/${id.head}/invite`, { token: tok.admin });
+  assert.equal(res.status, 409);
+  assert.match(res.body.error.message, /reset it from the sign-in page/);
+});
+
+test('an optional allow-list can restrict which email domains are invited', async () => {
+  expectStatus(await t.api('PATCH', '/api/admin/config', {
+    token: tok.admin, body: { settings: { 'auth.allowed_email_domains': ['spcollege.edu.in'] } } }), 200);
+  const refused = await invite('someone@gmail.com', 'Some One');
+  assert.equal(refused.status, 422);
+  assert.equal(refused.body.error.code, 'EMAIL_DOMAIN_NOT_ALLOWED');
+  expectStatus(await invite('staff@spcollege.edu.in', 'College Staff'), 201);
+
+  expectStatus(await t.api('PATCH', '/api/admin/config', {
+    token: tok.admin, body: { settings: { 'auth.allowed_email_domains': [] } } }), 200);
+  expectStatus(await invite('someone@gmail.com', 'Some One'), 201);
+});

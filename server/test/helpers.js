@@ -70,6 +70,13 @@ export async function startApi() {
     process.env.MAX_UPLOAD_MB = '1';
     cleanups.push(() => fs.rm(uploadDir, { recursive: true, force: true }));
 
+    // Emails go to a throwaway outbox the tests can read, never to anyone.
+    const outboxDir = await fs.mkdtemp(path.join(os.tmpdir(), 'spc-outbox-'));
+    process.env.MAIL_TRANSPORT = 'outbox';
+    process.env.MAIL_OUTBOX_DIR = outboxDir;
+    process.env.APP_URL = 'https://approvals.example.test';
+    cleanups.push(() => fs.rm(outboxDir, { recursive: true, force: true }));
+
     // Imported only after the environment is set: config is read at import time.
     const { createApp } = await import('../src/app.js');
     const { pool, assertRlsEnforced } = await import('../src/db.js');
@@ -108,7 +115,21 @@ export async function startApi() {
     await superuser.connect();
     cleanups.push(() => superuser.end());
 
-    return { api, login, superuser, close: unwind };
+    /** Every email sent to an address, oldest first. */
+    async function inbox(address) {
+      const files = (await fs.readdir(outboxDir)).filter((f) => f.endsWith('.json')).sort();
+      const mails = await Promise.all(files.map(async (f) => JSON.parse(await fs.readFile(path.join(outboxDir, f), 'utf8'))));
+      return mails.filter((m) => String(m.to).toLowerCase() === address.toLowerCase());
+    }
+
+    /** The token from a link like https://…/#/accept-invite/<token> in an email. */
+    function linkIn(mail, linkPath) {
+      const match = mail?.html?.match(new RegExp(`#/${linkPath}/([0-9a-f]{64})`));
+      assert.ok(match, `no #/${linkPath}/ link in email "${mail?.subject}"`);
+      return match[1];
+    }
+
+    return { api, login, superuser, inbox, linkIn, close: unwind };
   } catch (err) {
     await unwind();
     throw err;

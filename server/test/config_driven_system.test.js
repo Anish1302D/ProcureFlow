@@ -829,17 +829,22 @@ test('ACCOUNT ACTIVATION: Delivery protection, anti-caching, rate limiters, and 
   assert.ok(verifySetupLimiter, 'verifySetupLimiter must be exported');
   assert.ok(setupAccountLimiter, 'setupAccountLimiter must be exported');
 
-  // 2. Anti-caching headers defined on setup endpoints
+  // 2. Anti-caching headers are defined once and used by every link endpoint
+  const linksSrc = await fs.readFile(path.resolve('src', 'oneTimeLinks.js'), 'utf8');
+  assert.ok(linksSrc.includes("'Cache-Control': 'no-store, no-cache, must-revalidate, private'"));
+  assert.ok(linksSrc.includes("Pragma: 'no-cache'"));
+  assert.ok(linksSrc.includes("Expires: '0'"));
   const authRoutesSrc = await fs.readFile(path.resolve('src', 'routes', 'auth.js'), 'utf8');
-  assert.ok(authRoutesSrc.includes("'Cache-Control': 'no-store, no-cache, must-revalidate, private'"));
-  assert.ok(authRoutesSrc.includes("Pragma: 'no-cache'"));
-  assert.ok(authRoutesSrc.includes("Expires: '0'"));
+  assert.ok(authRoutesSrc.includes('res.set(NO_STORE)'));
 
-  // 3. Admin user creation & token generation sets anti-caching headers and does NOT claim email sent
+  // 3. The administrator never receives the link: it is emailed, and the
+  //    response carries no token. Tokens never travel in a URL query string.
   const adminRoutesSrc = await fs.readFile(path.resolve('src', 'routes', 'admin.js'), 'utf8');
-  assert.ok(adminRoutesSrc.includes("emailDelivery: 'UNCONFIGURED'"));
-  assert.ok(adminRoutesSrc.includes('Outbound email delivery is unconfigured in this environment'));
-  assert.strictEqual(adminRoutesSrc.includes('Email sent successfully'), false);
+  for (const leak of ['setupToken', 'setupUrl']) {
+    assert.strictEqual(adminRoutesSrc.includes(leak), false, `admin.js must not return ${leak}`);
+  }
+  assert.ok(adminRoutesSrc.includes('res.set(NO_STORE)'));
+  assert.strictEqual(authRoutesSrc.includes('req.query.token'), false);
 
   // 4. Server error logging redacts setup token from URLs
   const errorsSrc = await fs.readFile(path.resolve('src', 'errors.js'), 'utf8');
@@ -850,9 +855,11 @@ test('ACCOUNT ACTIVATION: Delivery protection, anti-caching, rate limiters, and 
   assert.strictEqual(redactedUrl, '/api/auth/verify-setup-token?token=[REDACTED]&format=json');
   assert.strictEqual(redactedUrl.includes('supersecrettoken1234567890'), false);
 
-  // 5. Frontend SetupAccount immediately cleanses URL token on mount
+  // 5. Pages opened from links remove the token from the address bar on mount
+  const publicRoutesSrc = await fs.readFile(path.resolve('..', 'src', 'publicRoutes.js'), 'utf8');
+  assert.ok(publicRoutesSrc.includes('window.history.replaceState({}, document.title, window.location.pathname)'));
   const setupAccountPageSrc = await fs.readFile(path.resolve('..', 'src', 'pages', 'SetupAccount.jsx'), 'utf8');
-  assert.ok(setupAccountPageSrc.includes('window.history.replaceState({}, document.title, window.location.pathname)'));
+  assert.ok(setupAccountPageSrc.includes('forgetLinkInAddressBar()'));
 
   // 6. index.html has strict referrer policy
   const indexHtml = await fs.readFile(path.resolve('..', 'index.html'), 'utf8');
