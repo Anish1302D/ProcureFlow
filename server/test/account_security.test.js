@@ -90,3 +90,19 @@ test('an administrator can still edit the other details of an account', async ()
   const { rows } = await t.superuser.query('SELECT employee_id FROM users WHERE user_id = $1', [id.head]);
   assert.equal(rows[0].employee_id, 'EMP-CS-001A');
 });
+
+// ---------------------------------------------------------------------------
+// Invite-only: nobody can create their own account
+// ---------------------------------------------------------------------------
+
+test('there is no public sign-up', async () => {
+  const before = (await t.superuser.query('SELECT count(*)::int AS n FROM users')).rows[0].n;
+  const res = await t.api('POST', '/api/auth/register', {
+    body: { email: 'walk.in@example.com', fullName: 'Walk In', password: 'violet-harbour-lantern-42' } });
+  // Unknown routes meet the sign-in wall (401) rather than a 404: refused either way.
+  assert.ok([401, 404].includes(res.status), `sign-up must be refused, got ${res.status}`);
+  const status = await t.api('GET', '/api/auth/registration-status');
+  assert.ok([401, 404].includes(status.status), `got ${status.status}`);
+  const after = (await t.superuser.query('SELECT count(*)::int AS n FROM users')).rows[0].n;
+  assert.equal(after, before, 'no account was created');
+});

@@ -5,8 +5,7 @@ import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 import { issueToken, requireAuth } from '../auth.js';
 import { anonQuery, withUser } from '../db.js';
-import { configService } from '../configService.js';
-import { HttpError, conflict } from '../errors.js';
+import { HttpError } from '../errors.js';
 import { assertPasswordAcceptable, hashPassword, passwordRules } from '../passwordPolicy.js';
 import { REQUESTER_ROLES, ISSUE_MANAGER_ROLES, INVENTORY_READER_ROLES, hasAnyRole } from '../roles.js';
 
@@ -15,12 +14,6 @@ export const authRouter = Router();
 const loginSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
   password: z.string().min(1).max(200),
-});
-
-const registerSchema = z.object({
-  email: z.string().trim().toLowerCase().email().max(254),
-  fullName: z.string().trim().min(2).max(200),
-  password: z.string().min(8, 'Password must be at least 8 characters').max(200),
 });
 
 const setupAccountSchema = z.object({
@@ -140,80 +133,6 @@ authRouter.post('/login', loginIpLimiter, loginLimiter, async (req, res) => {
 // Signing out is the client discarding its token; there is no server session.
 authRouter.post('/logout', requireAuth, (_req, res) => {
   res.status(204).end();
-});
-
-// ---------------------------------------------------------------------------
-// Public self-registration (controlled by dynamic configuration flag)
-// ---------------------------------------------------------------------------
-authRouter.get('/registration-status', async (_req, res) => {
-  const enabled = await configService.isSelfRegistrationEnabled();
-  res.json({ enabled });
-});
-
-authRouter.post('/register', loginIpLimiter, async (req, res) => {
-  const enabled = await configService.isSelfRegistrationEnabled();
-  if (!enabled) {
-    throw new HttpError(403, 'Self-registration is currently disabled by administrator');
-  }
-
-  // Prevent privilege escalation, role spoofing, or untrusted department assignment.
-  // Anonymous registrants can never select a role, department, or approval stage.
-  if (
-    req.body?.role ||
-    req.body?.roles ||
-    req.body?.roleIds ||
-    req.body?.departmentId ||
-    req.body?.department_id ||
-    req.body?.stageId ||
-    req.body?.stages ||
-    req.body?.permissions
-  ) {
-    throw new HttpError(400, 'Self-registration cannot specify roles, departments, or permissions');
-  }
-
-  const { email, fullName, password } = registerSchema.parse(req.body);
-
-  const dup = await anonQuery('SELECT 1 FROM users WHERE email = $1', [email]);
-  if (dup.rowCount) {
-    throw conflict('An account with this email already exists');
-  }
-
-  // Public registrants are strictly assigned the least-privileged valid requester role.
-  // Privileged roles (HEAD, CDC, PC, PRINCIPAL, FINAL_AUTHORITY, ADMIN) are strictly prohibited.
-  const assignedRoleCode = 'ACTIVITY_INCHARGE';
-  const roleRow = await anonQuery('SELECT role_id FROM roles WHERE code = $1', [assignedRoleCode]);
-  if (!roleRow.rowCount) {
-    throw new HttpError(500, 'Assigned role not found');
-  }
-  const roleId = roleRow.rows[0].role_id;
-
-  const passwordHash = await bcrypt.hash(password, 12);
-
-  // Department assignment requires institutional administrator verification and approval.
-  // Self-registered accounts start with department_id = NULL.
-  const { rows: userRows } = await anonQuery(
-    `INSERT INTO users (email, full_name, password_hash, department_id, is_active, token_version)
-     VALUES ($1, $2, $3, NULL, TRUE, 1)
-     RETURNING user_id`,
-    [email, fullName, passwordHash],
-  );
-  const newUserId = userRows[0].user_id;
-
-  await anonQuery(
-    `INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-    [newUserId, roleId],
-  );
-
-  await anonQuery(
-    `INSERT INTO audit_logs (entity_type, entity_id, action, after_json)
-     VALUES ('user', $1::text, 'SELF_REGISTER', jsonb_build_object('ip', $2::text, 'role', $3::text))`,
-    [newUserId, req.ip, assignedRoleCode],
-  );
-
-  res.status(201).json({
-    token: issueToken(newUserId, 1),
-    user: await describe(newUserId),
-  });
 });
 
 // ---------------------------------------------------------------------------

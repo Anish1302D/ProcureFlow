@@ -14,7 +14,6 @@ export const CONFIG_SCHEMAS = {
   'workflow.stage.intermediate': z.string().trim().min(1).max(50),
   'workflow.stage.final_authority': z.string().trim().min(1).max(50),
   'workflow.authority.final_role': z.string().trim().min(1).max(50),
-  'self_registration.enabled': z.boolean(),
   'roles.vice_chairman.title': z.string().trim().min(1).max(100),
   'cdc.teaching_members_limit': z.number().int().min(1).max(10),
   'cdc.non_teaching_members_limit': z.number().int().min(0).max(10),
@@ -46,7 +45,6 @@ export const DEFAULT_CONFIGS = {
   'workflow.stage.intermediate': 'CDC',
   'workflow.stage.final_authority': 'FINAL_AUTHORITY',
   'workflow.authority.final_role': 'CHAIRMAN',
-  'self_registration.enabled': false,
   'roles.vice_chairman.title': 'Vice Chairman',
   'cdc.teaching_members_limit': 3,
   'cdc.non_teaching_members_limit': 1,
@@ -71,7 +69,6 @@ export const CONFIG_DESCRIPTIONS = {
   'workflow.stage.intermediate': 'Stage code for College Development Committee intermediate authority',
   'workflow.stage.final_authority': 'Stage code for the final governing authority',
   'workflow.authority.final_role': 'Role code authorized for final sanction',
-  'self_registration.enabled': 'Whether public user self-registration is enabled. Default false.',
   'roles.vice_chairman.title': 'Institutional title for Vice Chairman role',
   'cdc.teaching_members_limit': 'Maximum number of teaching faculty members on the College Development Committee',
   'cdc.non_teaching_members_limit': 'Maximum number of non-teaching staff members on the College Development Committee',
@@ -95,7 +92,6 @@ export const CONFIG_CATEGORIES = {
   'workflow.stage.intermediate': 'approval_workflow',
   'workflow.stage.final_authority': 'approval_workflow',
   'workflow.authority.final_role': 'approval_workflow',
-  'self_registration.enabled': 'feature_flags',
   'roles.vice_chairman.title': 'institutional',
   'cdc.teaching_members_limit': 'institutional',
   'cdc.non_teaching_members_limit': 'institutional',
@@ -276,10 +272,6 @@ class ConfigService {
       return DEFAULT_CONFIGS[key];
     }
 
-    if (key === 'self_registration.enabled') {
-      return false; // Fail closed: disabled by default
-    }
-
     throw new HttpError(500, `Configuration "${key}" is missing from database`);
   }
 
@@ -336,7 +328,7 @@ class ConfigService {
     const validatedUpdates = {};
     for (const [key, rawValue] of Object.entries(updates)) {
       // Reject any secret or credentials
-      if (/(password|secret|key|token|credential)/i.test(key) && !key.startsWith('roles.') && !key.startsWith('workflow.') && !key.startsWith('self_registration.') && !key.startsWith('cdc.') && !key.startsWith('budget.') && !key.startsWith('institution.') && !NON_SECRET_POLICY_KEYS.has(key)) {
+      if (/(password|secret|key|token|credential)/i.test(key) && !key.startsWith('roles.') && !key.startsWith('workflow.') && !key.startsWith('cdc.') && !key.startsWith('budget.') && !key.startsWith('institution.') && !NON_SECRET_POLICY_KEYS.has(key)) {
         throw new HttpError(400, 'Secret configuration cannot be stored in database configuration');
       }
       validatedUpdates[key] = this.validate(key, rawValue);
@@ -406,19 +398,6 @@ class ConfigService {
    */
   async update(key, value, actorUserId = null) {
     return this.updateMultiple({ [key]: value }, actorUserId);
-  }
-
-  /**
-   * Helper: Check whether public self-registration is enabled.
-   * Fails closed (returns false) if configuration cannot be retrieved or validated.
-   */
-  async isSelfRegistrationEnabled() {
-    try {
-      const val = await this.get('self_registration.enabled');
-      return Boolean(val);
-    } catch {
-      return false; // Fail closed
-    }
   }
 
   /**
