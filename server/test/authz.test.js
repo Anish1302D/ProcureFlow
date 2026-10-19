@@ -290,3 +290,28 @@ test('13. Returning for correction belongs to the committee and the Principal al
   assert.equal(detail.status, 'UNDER_CDC_REVIEW', 'the request did not move');
   assert.equal(detail.permissions.actions.includes('RETURN'), false, 'nor is it offered to them');
 });
+
+test('14. A head raises requests only for their own department', async () => {
+  // Another department is refused; leaving it blank pins the head's own.
+  const other = await t.api('POST', '/api/requests', {
+    token: tok.head,
+    body: { title: 'Authz test - other department', budgetHeadId: ids.it, departmentId: ids.chemDept },
+  });
+  assert.equal(other.status, 403);
+  assert.match(other.body.error.message, /own department/);
+
+  const blank = expectStatus(await t.api('POST', '/api/requests', {
+    token: tok.head,
+    body: { title: 'Authz test - no department sent', budgetHeadId: ids.it, departmentId: null },
+  }), 201);
+  assert.equal(blank.department.id, ids.csDept);
+
+  // Nor can a course from another department be slipped in on edit.
+  const chemCourses = expectStatus(await t.api('GET', `/api/courses?departmentId=${ids.chemDept}`, { token: tok.head }), 200);
+  const res = await t.api('PATCH', `/api/requests/${blank.id}`, {
+    token: tok.head,
+    body: { courseId: chemCourses[0].id },
+  });
+  assert.equal(res.status, 422);
+  assert.match(res.body.error.message, /different department/);
+});
