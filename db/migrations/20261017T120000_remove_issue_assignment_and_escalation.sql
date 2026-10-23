@@ -51,14 +51,9 @@ BEGIN
 END;
 $$;
 
--- ── 3. Narrow the update trigger to fire only on status changes ───────────────
+-- ── 3. Drop the update trigger before altering status column type ───────────
 
 DROP TRIGGER IF EXISTS issues_notify_update ON issues;
-
-CREATE TRIGGER issues_notify_update
-    AFTER UPDATE OF status ON issues
-    FOR EACH ROW
-    EXECUTE FUNCTION fn_notify_issue();
 
 -- ── 4. Update app_can_see_issue ───────────────────────────────────────────────
 -- Visibility is now: Principal (all issues) or the raiser (their own).
@@ -131,6 +126,13 @@ DROP TYPE issue_status;
 ALTER TYPE issue_status_new RENAME TO issue_status;
 
 ALTER TABLE issues ALTER COLUMN status SET DEFAULT 'SUBMITTED'::issue_status;
+
+-- ── 8. Recreate the update trigger to fire only on status changes ───────────
+
+CREATE TRIGGER issues_notify_update
+    AFTER UPDATE OF status ON issues
+    FOR EACH ROW
+    EXECUTE FUNCTION fn_notify_issue();
 
 -- ── Bookkeeping ───────────────────────────────────────────────────────────────
 
