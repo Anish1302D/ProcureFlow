@@ -22,28 +22,37 @@ function secret(name) {
 
 const isProduction = process.env.NODE_ENV === 'production';
 
-// Where people open the app: the base of every link in an email (invitations,
-// password resets). In production it must be set and must be https — a link
+// Where people open the app: the base of every link in an email (requests,
+// invitations, password resets). In production it must be set and must be https — a link
 // to localhost or plain http would be useless or unsafe. Outside production a
 // local default keeps development simple. null means "not usable": features
 // that email links refuse to run rather than send a broken one.
-function appUrl() {
-  const raw = (process.env.APP_URL ?? '').trim().replace(/\/+$/, '');
+export function resolveAppUrl(env = process.env) {
+  const isProd = env.NODE_ENV === 'production';
+  const raw = (env.FRONTEND_URL ?? env.APP_URL ?? '').trim().replace(/\/+$/, '');
   if (!raw) {
-    if (isProduction) {
-      console.error('[config] APP_URL is not set: invitation and password reset emails are disabled until it is.');
+    if (isProd) {
+      console.error('[config] FRONTEND_URL / APP_URL is not set: emailed links are disabled in production until configured.');
       return null;
     }
     return 'http://localhost:3000';
   }
   let url;
-  try { url = new URL(raw); } catch {
-    console.error(`[config] APP_URL "${raw}" is not a valid URL: emailed links are disabled.`);
+  try {
+    url = new URL(raw);
+  } catch {
+    console.error(`[config] APP_URL / FRONTEND_URL "${raw}" is not a valid URL: emailed links are disabled.`);
     return null;
   }
-  if (isProduction && url.protocol !== 'https:') {
-    console.error('[config] APP_URL must use https in production: emailed links are disabled.');
-    return null;
+  if (isProd) {
+    if (url.protocol !== 'https:') {
+      console.error('[config] APP_URL / FRONTEND_URL must use https in production: emailed links are disabled.');
+      return null;
+    }
+    if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
+      console.error('[config] APP_URL / FRONTEND_URL cannot be localhost in production: emailed links are disabled.');
+      return null;
+    }
   }
   return raw;
 }
@@ -97,7 +106,12 @@ function timeZone() {
 
 export const config = Object.freeze({
   isProduction,
-  appUrl: appUrl(),
+  get appUrl() {
+    return resolveAppUrl();
+  },
+  get frontendUrl() {
+    return resolveAppUrl();
+  },
   timeZone: timeZone(),
   mfaKey: mfaKey(),
   bcryptRounds: bcryptRounds(),

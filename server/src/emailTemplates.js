@@ -7,13 +7,33 @@
  * required, and workflow status.
  */
 
+import { config } from './config.js';
 import { parseCustomItem } from './customItem.js';
 
 const SYSTEM_NAME = 'College Procurement & Approval Workflow System';
 const COLLEGE_NAME = 'S.P. College';
 const SUPPORT_EMAIL = 'support@spcollege.edu.in';
 const CURRENCY = '₹';
-const APP_URL = process.env.APP_URL || 'http://localhost:3000';
+
+/**
+ * Generates the canonical absolute URL to view a request in the frontend.
+ * Hash route: #/requests/<id> (parsed by AppContext.jsx).
+ */
+export function getRequestUrl(requestId, customBaseUrl = null) {
+  const base = customBaseUrl !== null ? customBaseUrl : (config.frontendUrl || config.appUrl);
+  if (!base) return null;
+  return `${base.replace(/\/+$/, '')}/#/requests/${requestId}`;
+}
+
+/**
+ * Generates the canonical absolute URL to view an issue in the frontend.
+ * Hash route: #/issues/<id> (parsed by AppContext.jsx).
+ */
+export function getIssueUrl(issueId, customBaseUrl = null) {
+  const base = customBaseUrl !== null ? customBaseUrl : (config.frontendUrl || config.appUrl);
+  if (!base) return null;
+  return `${base.replace(/\/+$/, '')}/#/issues/${issueId}`;
+}
 
 function escapeHtml(str) {
   if (!str) return '';
@@ -321,9 +341,12 @@ export function buildIssueCreatedEmail({ issue, raiser, principalEmail, principa
     <div class="section-title">Action Required</div>
     <div class="action-box">
       <p>Please review this issue and assign it to the appropriate person, or take direct action.</p>
-      <a href="${APP_URL}/issues/${issue.id || issue.issue_id}" class="cta-btn">
-        Review Issue ${escapeHtml(issueNumber)}
-      </a>
+      ${(() => {
+        const url = getIssueUrl(issue.id || issue.issue_id);
+        return url
+          ? `<a href="${url}" class="cta-btn">Review Issue ${escapeHtml(issueNumber)}</a>`
+          : '';
+      })()}
     </div>
 
     <!-- WORKFLOW INFORMATION -->
@@ -459,7 +482,13 @@ export function buildRequestStatusEmail({
     <div class="section-title">Action Required</div>
     <div class="action-box">
       <p>${escapeHtml(actionRequired || 'No action required at this time.')}</p>
-      ${ctaText ? `<a href="${ctaUrl || `${APP_URL}/requests/${request.id}`}" class="cta-btn">${escapeHtml(ctaText)}</a>` : ''}
+      ${(() => {
+        const reqId = request.id || request.request_id;
+        const targetUrl = ctaUrl || (reqId ? getRequestUrl(reqId) : null);
+        return ctaText && targetUrl
+          ? `<a href="${targetUrl}" class="cta-btn">${escapeHtml(ctaText)}</a>`
+          : '';
+      })()}
     </div>
 
     <div class="section-title">Workflow Information</div>
