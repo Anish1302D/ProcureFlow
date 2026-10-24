@@ -10,6 +10,7 @@ import { sendMail } from '../mailer.js';
 import { REQUESTER_ROLES } from '../roles.js';
 import { seal, verifySeal } from '../signing.js';
 import { removeFile } from '../storage.js';
+import { assertWithinBudgetLimit } from '../budgetLimit.js';
 import {
   amount, approvedQuantity, flag, id, intId, pagination, param, positiveAmount, quantity,
 } from '../validate.js';
@@ -935,6 +936,24 @@ requestsRouter.post('/', requireRole(...REQUESTER_ROLES), async (req, res) => {
     const requestId = rows[0].request_id;
     await insertItems(db, requestId, body.items);
     await recalcTotal(db, requestId);
+
+    if (body.items.length > 0 && body.departmentId) {
+      const { rows: rRows } = await db.query(
+        'SELECT financial_year_id, tentative_total_cost FROM requests WHERE request_id = $1',
+        [requestId],
+      );
+      const total = Number(rRows[0]?.tentative_total_cost ?? 0);
+      if (total > 0) {
+        await assertWithinBudgetLimit(db, {
+          departmentId: body.departmentId,
+          financialYearId: rRows[0]?.financial_year_id ?? body.financialYearId,
+          budgetHeadId: body.budgetHeadId,
+          amount: total,
+          excludeRequestId: requestId,
+        });
+      }
+    }
+
     return requireDetail(db, requestId, req.user);
   });
 
@@ -1026,6 +1045,22 @@ requestsRouter.post('/:id/items', async (req, res) => {
     await checkItems(db, current.budget_head_id, [item.budgetItemId], rows.map((r) => r.budget_item_id));
     await insertItems(db, requestId, [item]);
     await recalcTotal(db, requestId);
+
+    if (current.department_id) {
+      const { rows: rRows } = await db.query(
+        'SELECT tentative_total_cost FROM requests WHERE request_id = $1', [requestId]);
+      const total = Number(rRows[0]?.tentative_total_cost ?? 0);
+      if (total > 0) {
+        await assertWithinBudgetLimit(db, {
+          departmentId: current.department_id,
+          financialYearId: current.financial_year_id,
+          budgetHeadId: current.budget_head_id,
+          amount: total,
+          excludeRequestId: requestId,
+        });
+      }
+    }
+
     return requireDetail(db, requestId, req.user);
   });
 
@@ -1043,7 +1078,7 @@ requestsRouter.patch('/:id/items/:itemId', async (req, res) => {
   const body = itemUpdate.parse(req.body);
 
   const detail = await withUser(req.user.id, async (db) => {
-    await lockEditableRequest(db, requestId, req.user);
+    const current = await lockEditableRequest(db, requestId, req.user);
     const { rowCount } = await db.query(
       `UPDATE request_items
           SET requested_quantity  = COALESCE($3, requested_quantity),
@@ -1057,6 +1092,22 @@ requestsRouter.patch('/:id/items/:itemId', async (req, res) => {
     );
     if (!rowCount) throw notFound('Item not found on this request');
     await recalcTotal(db, requestId);
+
+    if (current.department_id) {
+      const { rows: rRows } = await db.query(
+        'SELECT tentative_total_cost FROM requests WHERE request_id = $1', [requestId]);
+      const total = Number(rRows[0]?.tentative_total_cost ?? 0);
+      if (total > 0) {
+        await assertWithinBudgetLimit(db, {
+          departmentId: current.department_id,
+          financialYearId: current.financial_year_id,
+          budgetHeadId: current.budget_head_id,
+          amount: total,
+          excludeRequestId: requestId,
+        });
+      }
+    }
+
     return requireDetail(db, requestId, req.user);
   });
 
@@ -1087,12 +1138,26 @@ requestsRouter.post('/:id/submit', async (req, res) => {
   const requestId = param(req, 'id');
 
   const detail = await withUser(req.user.id, async (db) => {
-    await lockEditableRequest(db, requestId, req.user, ['DRAFT']);
+    const current = await lockEditableRequest(db, requestId, req.user, ['DRAFT']);
     const { rows } = await db.query(
       'SELECT count(*)::int AS n, COALESCE(SUM(estimated_total), 0)::numeric AS total FROM request_items WHERE request_id = $1', [requestId]);
     if (rows[0].n === 0) throw unprocessable('Add at least one item before submitting');
     if (Number(rows[0].total) <= 0) throw unprocessable('Request total must be greater than ₹0 before submitting');
     await recalcTotal(db, requestId);
+
+    if (current.department_id) {
+      const { rows: rRows } = await db.query(
+        'SELECT tentative_total_cost FROM requests WHERE request_id = $1', [requestId]);
+      const total = Number(rRows[0]?.tentative_total_cost ?? rows[0].total);
+      await assertWithinBudgetLimit(db, {
+        departmentId: current.department_id,
+        financialYearId: current.financial_year_id,
+        budgetHeadId: current.budget_head_id,
+        amount: total,
+        excludeRequestId: requestId,
+      });
+    }
+
     await db.query('SELECT fn_submit_request($1)', [requestId]);
     return requireDetail(db, requestId, req.user);
   });
@@ -1306,6 +1371,21 @@ requestsRouter.post('/:id/resubmit', async (req, res) => {
   // fn_resubmit_request refuses anyone but the requester, and refuses a
   // request that was not returned for correction.
   const detail = await withUser(req.user.id, async (db) => {
+    const { rows: rRows } = await db.query(
+      'SELECT department_id, financial_year_id, budget_head_id, tentative_total_cost FROM requests WHERE request_id = $1',
+      [requestId],
+    );
+    const r = rRows[0];
+    if (r && r.department_id) {
+      await assertWithinBudgetLimit(db, {
+        departmentId: r.department_id,
+        financialYearId: r.financial_year_id,
+        budgetHeadId: r.budget_head_id,
+        amount: Number(r.tentative_total_cost),
+        excludeRequestId: requestId,
+      });
+    }
+
     const signature = seal({
       requestId, action: 'RESUBMIT', actorId: req.user.id, decisions: [], comments: body.comments,
     });

@@ -61,6 +61,8 @@ export const NewRequestModal = () => {
   const courses = useApi(open && form.departmentId && form.departmentId !== 'OTHER' ? `/api/courses${qs({ departmentId: form.departmentId })}` : null);
   const stages = useApi(open ? '/api/workflow/stages' : null);
   const catalogue = useApi(open && form.budgetHeadId && form.budgetHeadId !== 'OTHER' ? `/api/budget-heads/${form.budgetHeadId}/items` : null);
+  const targetDeptId = form.departmentId && form.departmentId !== 'OTHER' ? form.departmentId : (ownDept || null);
+  const budgetProvisions = useApi(open && targetDeptId ? `/api/budget-provisions?departmentId=${targetDeptId}` : null);
 
   // Default the financial year to the active one.
   useEffect(() => {
@@ -109,6 +111,11 @@ export const NewRequestModal = () => {
   const courseIsOther = form.courseId === 'OTHER';
   const urgencyIsOther = form.urgency === 'OTHER';
 
+  const matchedProvision = (budgetProvisions.data ?? []).find(
+    (p) => (!p.budgetHead || String(p.budgetHead.id) === form.budgetHeadId)
+      && (!form.financialYearId || String(p.financialYear.id) === form.financialYearId),
+  );
+
   const problems = [];
   if (form.title.trim().length < 3) problems.push('Give the request a title (at least 3 characters).');
   if (!form.budgetHeadId) problems.push('Choose a budget head.');
@@ -116,6 +123,11 @@ export const NewRequestModal = () => {
   if (deptIsOther && !form.customDepartment.trim()) problems.push('Describe the department (the "Other" field is empty).');
   if (courseIsOther && !form.customCourse.trim()) problems.push('Describe the course (the "Other" field is empty).');
   if (urgencyIsOther && !form.customUrgency.trim()) problems.push('Describe the urgency level (the "Other" field is empty).');
+  if (matchedProvision && total > matchedProvision.remainingAmount) {
+    problems.push(
+      `Total cost (${money(total)}) exceeds available department budget provision (${money(matchedProvision.remainingAmount)}).`,
+    );
+  }
 
   filled.forEach((l, n) => {
     const item = itemById.get(l.budgetItemId);
@@ -416,6 +428,18 @@ export const NewRequestModal = () => {
               <span className="text-lg font-extrabold text-gray-900 tabular-nums">{money(total)}</span>
             </div>
           </div>
+          {matchedProvision && (
+            <div className={`text-xs px-3 py-1.5 rounded-lg flex items-center justify-between ${
+              total > matchedProvision.remainingAmount
+                ? 'bg-red-50 text-red-700 border border-red-200'
+                : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+            }`}>
+              <span>Department budget remaining: <strong>{money(matchedProvision.remainingAmount)}</strong></span>
+              {total > matchedProvision.remainingAmount && (
+                <span className="font-semibold">Exceeds budget by {money(total - matchedProvision.remainingAmount)}</span>
+              )}
+            </div>
+          )}
           {total > 0 && route && (
             <p className="text-[11px] text-gray-600 flex items-center gap-1.5 justify-end">
               <ArrowRight className="w-3.5 h-3.5 text-indigo-500" />
