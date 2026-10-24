@@ -4,7 +4,7 @@ import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 import { issueToken, requireAuth } from '../auth.js';
 import { anonQuery, withUser } from '../db.js';
-import { HttpError } from '../errors.js';
+import { HttpError, forbidden } from '../errors.js';
 import {
   sendAccountLocked, sendEmailChanged, sendPasswordChanged, sendPasswordReset, sendRecoveryCodeUsed, sendTwoStepEnabled,
 } from '../accountEmails.js';
@@ -321,6 +321,9 @@ const changePasswordSchema = z
   });
 
 authRouter.post('/change-password', requireAuth, changePasswordLimiter, async (req, res) => {
+  if (!req.user.roles.includes('ADMIN')) {
+    throw forbidden('Self-service password change is restricted to administrators. Use the password reset recovery flow if needed.');
+  }
   const { currentPassword, newPassword } = changePasswordSchema.parse(req.body);
 
   const { rows } = await anonQuery(
@@ -694,6 +697,7 @@ async function describe(userId) {
       viewAudit: u.roles.includes('ADMIN'),
       approve: u.stages.length > 0,
       downloadApprovalBudget: hasAnyRole(user, APPROVAL_BUDGET_ROLES),
+      changePassword: u.roles.includes('ADMIN'),
     },
   };
 }
