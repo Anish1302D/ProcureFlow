@@ -689,6 +689,7 @@ async function describe(userId) {
     // independently — they grant nothing on their own.
     can: {
       raiseRequests: hasAnyRole(user, REQUESTER_ROLES),
+      logIssues: !u.roles.includes('ADMIN'),
       manageIssues: hasAnyRole(user, ISSUE_MANAGER_ROLES),
       viewInventory: hasAnyRole(user, INVENTORY_READER_ROLES),
       viewAudit: u.roles.includes('ADMIN'),

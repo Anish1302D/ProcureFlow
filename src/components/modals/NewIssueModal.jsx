@@ -7,7 +7,8 @@ import { Modal } from '../ui/Modal';
 
 // Deliberately lightweight (requirements §3.2): free text, no categories.
 export const NewIssueModal = () => {
-  const { modals, closeModal, showToast, refresh, openRecord } = useApp();
+  const { user, modals, closeModal, showToast, refresh, openRecord } = useApp();
+  if (user?.roles?.includes('ADMIN')) return null;
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [file, setFile] = useState(null);

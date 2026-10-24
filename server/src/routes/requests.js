@@ -902,17 +902,17 @@ const createSchema = z.object({
 });
 
 requestsRouter.post('/', requireRole(...REQUESTER_ROLES), async (req, res) => {
+  if (req.user.roles.includes('ADMIN')) {
+    throw forbidden('Administrators cannot raise requests');
+  }
   const body = createSchema.parse(req.body);
 
-  const isAdmin = req.user.roles.includes('ADMIN');
-  if (!isAdmin) {
-    if (body.departmentId != null && req.user.departmentId != null && body.departmentId !== req.user.departmentId) {
-      throw forbidden('You can only raise requests for your own department');
-    }
-    // Automatically set or default to the requester's assigned department
-    if (body.departmentId == null && req.user.departmentId != null) {
-      body.departmentId = req.user.departmentId;
-    }
+  if (body.departmentId != null && req.user.departmentId != null && body.departmentId !== req.user.departmentId) {
+    throw forbidden('You can only raise requests for your own department');
+  }
+  // Automatically set or default to the requester's assigned department
+  if (body.departmentId == null && req.user.departmentId != null) {
+    body.departmentId = req.user.departmentId;
   }
 
   const detail = await withUser(req.user.id, async (db) => {
@@ -1084,6 +1084,9 @@ requestsRouter.delete('/:id/items/:itemId', async (req, res) => {
 // ---------------------------------------------------------------------------
 
 requestsRouter.post('/:id/submit', async (req, res) => {
+  if (req.user.roles.includes('ADMIN')) {
+    throw forbidden('Administrators cannot submit requests');
+  }
   const requestId = param(req, 'id');
 
   const detail = await withUser(req.user.id, async (db) => {

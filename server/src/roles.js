@@ -4,7 +4,7 @@
 // stage staffing inside fn_record_action, never by a role list here.
 
 /** May raise procurement requests (design doc §4: "Raises requisition"). */
-export const REQUESTER_ROLES = ['HEAD', 'ACTIVITY_INCHARGE', 'ADMIN'];
+export const REQUESTER_ROLES = ['HEAD', 'ACTIVITY_INCHARGE'];
 
 /** May move non-financial issues along: review, resolve, close. */
 export const ISSUE_MANAGER_ROLES = ['PRINCIPAL'];

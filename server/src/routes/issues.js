@@ -130,8 +130,11 @@ const createSchema = z.object({
   description: z.string().trim().min(1).max(5000),
 });
 
-// Anyone may raise an issue; that is the point of the channel.
+// Faculty and department members may raise an issue; administrators are prohibited.
 issuesRouter.post('/', async (req, res) => {
+  if (req.user.roles.includes('ADMIN')) {
+    throw forbidden('Administrators cannot log issues');
+  }
   const body = createSchema.parse(req.body);
   const result = await withUser(req.user.id, async (db) => {
     const { rows } = await db.query(

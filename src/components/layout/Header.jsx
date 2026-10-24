@@ -57,9 +57,11 @@ export const Header = ({ toggleSidebar }) => {
             <Plus className="w-3.5 h-3.5" /> New request
           </button>
         )}
-        <button onClick={() => openModal('newIssue')} className="px-3 py-1.5 rounded-lg bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold items-center gap-1.5 hidden sm:flex">
-          <Plus className="w-3.5 h-3.5" /> Log issue
-        </button>
+        {user?.can?.logIssues !== false && !user?.roles?.includes('ADMIN') && (
+          <button onClick={() => openModal('newIssue')} className="px-3 py-1.5 rounded-lg bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold items-center gap-1.5 hidden sm:flex">
+            <Plus className="w-3.5 h-3.5" /> Log issue
+          </button>
+        )}
         {portal !== 'faculty' && (
           <button onClick={() => openModal('export')} className="px-3 py-1.5 rounded-lg bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold items-center gap-1.5 border border-gray-200 hidden md:flex">
             <Download className="w-3.5 h-3.5 text-gray-500" /> Export
