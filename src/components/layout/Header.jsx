@@ -48,7 +48,11 @@ export const Header = ({ toggleSidebar }) => {
         <button onClick={toggleSidebar} aria-label="Open menu" className="p-2 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 lg:hidden">
           <Menu className="w-5 h-5" />
         </button>
-        <h1 className="text-sm font-bold text-gray-900 truncate">{PAGE_TITLES[activePage] ?? 'ProcureFlow'}</h1>
+        <h1 className="text-sm font-bold text-gray-900 truncate">
+          {portal === 'admin' && activePage === 'settings'
+            ? 'System configuration'
+            : (PAGE_TITLES[activePage] ?? 'ProcureFlow')}
+        </h1>
       </div>
 
       <div className="flex items-center gap-2">
