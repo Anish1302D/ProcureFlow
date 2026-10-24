@@ -222,6 +222,24 @@ test('someone who already set up their account is not re-invited', async () => {
   assert.match(res.body.error.message, /reset it from the sign-in page/);
 });
 
+test('a Head of Department cannot be left without a department', async () => {
+  const headRole = await roleId('HEAD');
+  const refused = await invite('no.dept.head@gmail.com', 'No Department Head', 'HEAD');
+  assert.equal(refused.status, 422);
+  assert.equal(refused.body.error.code, 'HEAD_NEEDS_DEPARTMENT');
+  const { rowCount } = await t.superuser.query("SELECT 1 FROM users WHERE email = 'no.dept.head@gmail.com'");
+  assert.equal(rowCount, 0, 'no account was created');
+
+  // Nor can an existing head lose theirs, or someone without one become a head.
+  const cleared = await t.api('PATCH', `/api/admin/users/${id.head}`, { token: tok.admin, body: { departmentId: null } });
+  assert.equal(cleared.body.error.code, 'HEAD_NEEDS_DEPARTMENT');
+  const promoted = await t.api('PATCH', `/api/admin/users/${id.admin}`, {
+    token: tok.admin, body: { roleIds: [headRole, await roleId('ADMIN')], departmentId: null } });
+  assert.equal(promoted.body.error.code, 'HEAD_NEEDS_DEPARTMENT');
+  const { rows } = await t.superuser.query('SELECT department_id FROM users WHERE user_id = $1', [id.head]);
+  assert.notEqual(rows[0].department_id, null, 'the head keeps their department');
+});
+
 test('an optional allow-list can restrict which email domains are invited', async () => {
   expectStatus(await t.api('PATCH', '/api/admin/config', {
     token: tok.admin, body: { settings: { 'auth.allowed_email_domains': ['spcollege.edu.in'] } } }), 200);

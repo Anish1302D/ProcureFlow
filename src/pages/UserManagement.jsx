@@ -197,7 +197,7 @@ function UserModal({ user, roles, departments = [], onClose, onSaved }) {
 
           {/* Department picker */}
           <div>
-            <label className={labelCls}>Department (optional)</label>
+            <label className={labelCls}>Department (required for a Head of Department)</label>
             <select
               className={inputCls}
               value={form.departmentId ?? ''}
