@@ -185,6 +185,20 @@ async function validateRoleIds(db, roleIds) {
   }
 }
 
+// A Head of Department raises requests for the department they head, and the
+// new-request form locks to it. Without one they would be offered every
+// department, so the role cannot be given without a department.
+async function assertHeadHasDepartment(db, roleIds, departmentId) {
+  if (departmentId !== null && departmentId !== undefined) return;
+  const { rowCount } = await db.query(
+    "SELECT 1 FROM roles WHERE code = 'HEAD' AND role_id = ANY($1::int[])",
+    [roleIds],
+  );
+  if (rowCount) {
+    throw new HttpError(422, 'A Head of Department must be assigned the department they head', { code: 'HEAD_NEEDS_DEPARTMENT' });
+  }
+}
+
 async function validateDepartmentId(db, departmentId) {
   if (departmentId === null || departmentId === undefined) return;
   const { rows } = await db.query(
@@ -254,6 +268,7 @@ adminRouter.post('/users', async (req, res) => {
 
     await validateDepartmentId(db, body.departmentId);
     await validateRoleIds(db, body.roleIds);
+    await assertHeadHasDepartment(db, body.roleIds, body.departmentId);
 
     // Accounts start unactivated (is_active = FALSE) until the invitee completes password setup.
     const { rows } = await db.query(
@@ -449,6 +464,13 @@ adminRouter.patch('/users/:id', async (req, res) => {
 
     if (body.departmentId !== undefined) {
       await validateDepartmentId(db, body.departmentId);
+    }
+    if (body.departmentId !== undefined || body.roleIds !== undefined) {
+      await assertHeadHasDepartment(
+        db,
+        body.roleIds ?? beforeUser.role_ids,
+        body.departmentId !== undefined ? body.departmentId : beforeUser.department_id,
+      );
     }
 
     if (body.email) {
