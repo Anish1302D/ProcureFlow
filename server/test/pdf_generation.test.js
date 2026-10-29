@@ -331,4 +331,34 @@ test('generatePdfReport displays user-typed custom item names (e.g. Computers, S
   assert.ok(!foundOther, 'PDF must not show "Other (specify)"');
 });
 
+test('generatePdfReport includes copyright watermark for Anish Mogam, Madhura Lakade and Isha Joshi', async () => {
+  const buffer = await generatePdfReport({ request: { requestNumber: 'REQ-WM-SERVER' } });
+  const rawStr = buffer.toString('latin1');
+  let foundWatermark = false;
+  const re = /stream\r?\n/g;
+  let m;
+  while ((m = re.exec(rawStr)) !== null) {
+    const start = m.index + m[0].length;
+    let end = rawStr.indexOf('\rendstream', start);
+    if (end === -1) end = rawStr.indexOf('\nendstream', start);
+    if (end === -1) continue;
+    try {
+      const inflated = zlib.inflateSync(buffer.subarray(start, end)).toString('utf8');
+      for (const tj of inflated.matchAll(/\[(.*?)\]\s*TJ/gs)) {
+        const text = [...tj[1].matchAll(/<([0-9a-fA-F]+)>/g)]
+          .map((x) => Buffer.from(x[1], 'hex').toString('latin1'))
+          .join('');
+        if (text.includes('Anish Mogam') && text.includes('Madhura Lakade') && text.includes('Isha Joshi')) {
+          foundWatermark = true;
+        }
+      }
+    } catch (_err) {
+      // Ignore
+    }
+  }
+
+  assert.ok(foundWatermark, 'PDF stream must include copyright watermark with all authors');
+});
+
+
 

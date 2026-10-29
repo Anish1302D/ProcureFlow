@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ArrowRight, Loader2, Lock } from 'lucide-react';
 import { TwoStepEnrol, TwoStepVerify } from '../components/auth/TwoStep';
+import { CopyrightNotice } from '../components/auth/CopyrightNotice';
 import { useApp } from '../context/AppContext';
 
 // Development-only demo accounts for local debugging.
@@ -116,9 +117,11 @@ export const Login = () => {
         )}
       </div>
 
-      <div className="max-w-6xl w-full mx-auto flex flex-col sm:flex-row items-center justify-between text-xs text-gray-400 border-t border-gray-200 pt-4">
-        <p>© 2026 S.P. College</p>
-        <p>ProcureFlow</p>
+      <CopyrightNotice />
+
+      <div className="max-w-6xl w-full mx-auto flex flex-col sm:flex-row items-center justify-between text-xs text-gray-400 border-t border-gray-200 pt-4 gap-2">
+        <p>Copyright © 2026 Anish Mogam, Madhura Lakade and Isha Joshi. All Rights Reserved.</p>
+        <p>ProcureFlow · Sir Parashurambhau College</p>
       </div>
     </div>
   );

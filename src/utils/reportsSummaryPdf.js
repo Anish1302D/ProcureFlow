@@ -2,6 +2,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { statusInfo } from '../api/format.js';
 import { formatIST, formatMoney } from './officialPdfGenerator.js';
+import { addPdfWatermark } from './pdfWatermark.js';
 
 /*
  * The Reports page as an official, print-ready institutional document.
@@ -761,6 +762,8 @@ export function generateReportsSummaryPdf(data, saveAsFilename = null) {
     font('bold', 7, NAVY);
     doc.text(`Page ${i} of ${pages}`, RIGHT, fy0 + 11, { align: 'right' });
   }
+
+  addPdfWatermark(doc);
 
   if (typeof saveAsFilename === 'string' && saveAsFilename.trim()) doc.save(saveAsFilename.trim());
   return doc;

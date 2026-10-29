@@ -162,6 +162,10 @@ test('reportsSummaryPdf builds a valid multi-page institutional PDF with all sec
   assert.ok(output.byteLength > 2000, 'sufficient PDF byte stream generated');
   const magic = Buffer.from(output).subarray(0, 8).toString('utf8');
   assert.ok(magic.startsWith('%PDF-1.'), 'PDF magic header valid');
+  const pdfString = doc.output();
+  assert.ok(pdfString.includes('Anish Mogam'), 'Must include Anish Mogam watermark');
+  assert.ok(pdfString.includes('Madhura Lakade'), 'Must include Madhura Lakade watermark');
+  assert.ok(pdfString.includes('Isha Joshi'), 'Must include Isha Joshi watermark');
 });
 
 test('departmentRequestsPdf generates valid PDF for department requisitions and line items', async () => {
@@ -255,4 +259,9 @@ test('issuesReportPdf generates valid PDF for campus issues and maintenance logs
   const output = doc.output('arraybuffer');
   assert.ok(output.byteLength > 1500, 'sufficient PDF bytes');
   assert.ok(Buffer.from(output).subarray(0, 8).toString('utf8').startsWith('%PDF-1.'));
+  const pdfString = doc.output();
+  assert.ok(pdfString.includes('Anish Mogam'), 'Must include Anish Mogam watermark');
+  assert.ok(pdfString.includes('Madhura Lakade'), 'Must include Madhura Lakade watermark');
+  assert.ok(pdfString.includes('Isha Joshi'), 'Must include Isha Joshi watermark');
 });
+

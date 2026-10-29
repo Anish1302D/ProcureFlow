@@ -3,6 +3,7 @@ import autoTable from 'jspdf-autotable';
 import { statusInfo } from '../api/format.js';
 import { formatIST, formatMoney } from './officialPdfGenerator.js';
 import { parseCustomItem } from './customItem.js';
+import { addPdfWatermark } from './pdfWatermark.js';
 
 /*
  * Official SP College Department Requisitions & Itemised Requests Report.
@@ -412,6 +413,8 @@ export function generateDepartmentRequestsPdf(data, saveAsFilename = null) {
     doc.text(`Generated on ${formatIST(generatedAt)} · S. P. College Autonomous Requisition Management System`, LEFT, 822);
     doc.text(`Page ${i} of ${pageCount}`, RIGHT, 822, { align: 'right' });
   }
+
+  addPdfWatermark(doc);
 
   if (saveAsFilename) {
     doc.save(saveAsFilename);
