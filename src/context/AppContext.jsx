@@ -25,10 +25,24 @@ export const HOME = {
 // and need no rewrite rules on the web server (IIS serves index.html as is).
 // #/requests/<id> is the short form used in notification emails.
 function parseHash() {
-  const [page, kind, id] = window.location.hash.replace(/^#\/?/, '').split('/');
+  const hashRaw = window.location.hash.replace(/^#\/?/, '');
+  const [page, kind, id] = hashRaw.split('/');
   if (page === 'requests' && kind) return { page: null, open: { kind: 'request', id: kind } };
   if (page === 'issues' && kind) return { page: null, open: { kind: 'issue', id: kind } };
-  return { page: page || null, open: kind && id ? { kind, id } : null };
+  if (page || (kind && id)) {
+    return { page: page || null, open: kind && id ? { kind, id } : null };
+  }
+
+  // Fallback: in case an email link was opened without a hash (e.g. /requests/123)
+  const pathParts = window.location.pathname.replace(/^\//, '').split('/');
+  if (pathParts[0] === 'requests' && pathParts[1]) {
+    return { page: null, open: { kind: 'request', id: pathParts[1] } };
+  }
+  if (pathParts[0] === 'issues' && pathParts[1]) {
+    return { page: null, open: { kind: 'issue', id: pathParts[1] } };
+  }
+
+  return { page: null, open: null };
 }
 
 function writeHash(page, open) {

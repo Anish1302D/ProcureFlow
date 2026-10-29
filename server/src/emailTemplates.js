@@ -13,7 +13,10 @@ const SYSTEM_NAME = 'College Procurement & Approval Workflow System';
 const COLLEGE_NAME = 'S.P. College';
 const SUPPORT_EMAIL = 'support@spcollege.edu.in';
 const CURRENCY = '₹';
-const APP_URL = process.env.APP_URL || 'http://localhost:3000';
+
+function getAppUrl() {
+  return (process.env.APP_URL || 'http://localhost:3000').trim().replace(/\/+$/, '');
+}
 
 function escapeHtml(str) {
   if (!str) return '';
@@ -321,7 +324,7 @@ export function buildIssueCreatedEmail({ issue, raiser, principalEmail, principa
     <div class="section-title">Action Required</div>
     <div class="action-box">
       <p>Please review this issue and assign it to the appropriate person, or take direct action.</p>
-      <a href="${APP_URL}/issues/${issue.id || issue.issue_id}" class="cta-btn">
+      <a href="${getAppUrl()}/#/issues/${issue.id || issue.issue_id}" class="cta-btn">
         Review Issue ${escapeHtml(issueNumber)}
       </a>
     </div>
@@ -459,7 +462,7 @@ export function buildRequestStatusEmail({
     <div class="section-title">Action Required</div>
     <div class="action-box">
       <p>${escapeHtml(actionRequired || 'No action required at this time.')}</p>
-      ${ctaText ? `<a href="${ctaUrl || `${APP_URL}/requests/${request.id}`}" class="cta-btn">${escapeHtml(ctaText)}</a>` : ''}
+      ${ctaText ? `<a href="${ctaUrl || `${getAppUrl()}/#/requests/${request.id}`}" class="cta-btn">${escapeHtml(ctaText)}</a>` : ''}
     </div>
 
     <div class="section-title">Workflow Information</div>
