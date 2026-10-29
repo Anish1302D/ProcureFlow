@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { ArrowRight, CheckCircle2, Loader2, Lock } from 'lucide-react';
 import { TwoStepEnrol, TwoStepVerify } from '../components/auth/TwoStep';
-import { CopyrightNotice } from '../components/auth/CopyrightNotice';
 import { CopyrightNoticeModal } from '../components/auth/CopyrightNoticeModal';
 import { COPYRIGHT_SHORT } from '../utils/copyright';
 import { useApp } from '../context/AppContext';
@@ -172,8 +171,6 @@ export const Login = () => {
           </div>
         )}
       </div>
-
-      <CopyrightNotice onOpenNoticeModal={() => setShowNoticeModal(true)} />
 
       <CopyrightNoticeModal
         isOpen={showNoticeModal}
