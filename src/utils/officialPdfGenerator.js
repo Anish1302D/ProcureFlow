@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { parseCustomItem } from './customItem.js';
+import { addPdfWatermark } from './pdfWatermark.js';
 
 /**
  * Formats a date to Indian Standard Time: DD/MM/YYYY HH:MM IST
@@ -686,6 +687,8 @@ export async function generateOfficialPdf(reportData, saveAsFilename = null) {
     doc.setTextColor(30, 58, 138);
     doc.text(`Page ${i} of ${totalPages}`, right, footerY + 11, { align: 'right' });
   }
+
+  addPdfWatermark(doc);
 
   if (typeof saveAsFilename === 'string' && saveAsFilename.trim().length > 0) {
     doc.save(saveAsFilename.trim());

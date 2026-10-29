@@ -634,11 +634,24 @@ export async function generatePdfReport(report, _spec = {}, streamOrRes = null) 
       const totalPages = range.count;
       const genIST = formatIST(report.generatedAt);
 
+      const COPYRIGHT_AUTHORS_STRING = 'Anish Mogam, Madhura Lakade and Isha Joshi';
+      const COPYRIGHT_YEAR = '2026';
+
       for (let i = range.start; i < range.start + totalPages; i++) {
         doc.switchToPage(i);
         doc.page.margins.top = 0;
         doc.page.margins.bottom = 0;
         const pageNum = i - range.start + 1;
+
+        // Diagonal watermark across page center
+        doc.save();
+        doc.fillColor('#64748B').fillOpacity(0.11);
+        doc.rotate(-38, { origin: [297.64, 420] });
+        doc.fontSize(14).font('Helvetica-Bold');
+        doc.text(`Copyright © ${COPYRIGHT_YEAR} ${COPYRIGHT_AUTHORS_STRING}`, 297.64 - 250, 410, { width: 500, align: 'center', lineBreak: false });
+        doc.fontSize(10).font('Helvetica');
+        doc.text('ProcureFlow — All Rights Reserved · Proprietary Institutional System', 297.64 - 250, 428, { width: 500, align: 'center', lineBreak: false });
+        doc.restore();
 
         // Running Header on pages 2+
         if (pageNum > 1) {
@@ -656,6 +669,10 @@ export async function generatePdfReport(report, _spec = {}, streamOrRes = null) 
         doc.text(`Report ID: ${r.requestNumber} · S.P. College Institutional Hub`, left, footerY + 4, { width: 220, align: 'left', lineBreak: false });
         doc.text(`Generated: ${genIST}`, left + 200, footerY + 4, { width: 160, align: 'center', lineBreak: false });
         doc.font('Helvetica-Bold').fillColor('#1E3A8A').text(`Page ${pageNum} of ${totalPages}`, right - 100, footerY + 4, { width: 100, align: 'right', lineBreak: false });
+
+        // Copyright running footer
+        doc.fillColor('#64748B').fontSize(6.5).font('Helvetica');
+        doc.text(`Copyright © ${COPYRIGHT_YEAR} ${COPYRIGHT_AUTHORS_STRING}. All Rights Reserved.`, left, footerY + 14, { width: contentWidth, align: 'center', lineBreak: false });
       }
 
       doc.end();

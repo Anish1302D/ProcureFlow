@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { formatIST } from './officialPdfGenerator.js';
+import { addPdfWatermark } from './pdfWatermark.js';
 
 /*
  * Official SP College Campus Issues & Maintenance Log Report.
@@ -349,6 +350,8 @@ export function generateIssuesReportPdf(data, saveAsFilename = null) {
     doc.text(`Generated on ${formatIST(generatedAt)} · S. P. College Facility Management Portal`, LEFT, 822);
     doc.text(`Page ${i} of ${pageCount}`, RIGHT, 822, { align: 'right' });
   }
+
+  addPdfWatermark(doc);
 
   if (saveAsFilename) {
     doc.save(saveAsFilename);

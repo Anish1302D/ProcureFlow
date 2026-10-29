@@ -137,3 +137,17 @@ test('client generateOfficialPdf renders custom item names (Computers, Servers) 
   assert.ok(!pdfText.includes('Other (specify)'), 'PDF output text must not include "Other (specify)"');
 });
 
+test('client generateOfficialPdf includes copyright watermark for Anish Mogam, Madhura Lakade and Isha Joshi', async () => {
+  const sampleData = {
+    title: 'Watermark Check',
+    request: { requestNumber: 'REQ-WM-001', title: 'Test Request' },
+    items: [],
+  };
+  const doc = await generateOfficialPdf(sampleData);
+  const pdfOutput = doc.output();
+  assert.ok(pdfOutput.includes('Anish Mogam'), 'Must include Anish Mogam');
+  assert.ok(pdfOutput.includes('Madhura Lakade'), 'Must include Madhura Lakade');
+  assert.ok(pdfOutput.includes('Isha Joshi'), 'Must include Isha Joshi');
+});
+
+
