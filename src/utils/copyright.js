@@ -7,7 +7,7 @@
 
 export const COPYRIGHT_AUTHORS = ['Anish Mogam', 'Madhura Lakade', 'Isha Joshi'];
 export const COPYRIGHT_AUTHORS_STRING = 'Anish Mogam, Madhura Lakade and Isha Joshi';
-export const COPYRIGHT_YEAR = '2026';
+export const COPYRIGHT_YEAR = String(new Date().getFullYear());
 export const COPYRIGHT_SYSTEM_NAME = 'ProcureFlow';
 
 export const COPYRIGHT_SHORT = `Copyright © ${COPYRIGHT_YEAR} ${COPYRIGHT_AUTHORS_STRING}. All Rights Reserved.`;

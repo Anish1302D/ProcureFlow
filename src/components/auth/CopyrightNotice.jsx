@@ -7,7 +7,7 @@ import {
   COPYRIGHT_YEAR,
 } from '../../utils/copyright';
 
-export const CopyrightNotice = () => {
+export const CopyrightNotice = ({ onOpenNoticeModal }) => {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -39,16 +39,27 @@ export const CopyrightNotice = () => {
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setExpanded(!expanded)}
-          className="inline-flex items-center gap-1.5 self-start sm:self-center px-3 py-1.5 rounded-lg text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200/70 transition-colors"
-          aria-expanded={expanded}
-        >
-          <FileText className="w-3.5 h-3.5" />
-          <span>{expanded ? 'Collapse Notice' : 'View Full Notice'}</span>
-          {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-center flex-wrap">
+          {onOpenNoticeModal && (
+            <button
+              type="button"
+              onClick={onOpenNoticeModal}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 shadow-xs transition-colors cursor-pointer"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>Read &amp; Acknowledge</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setExpanded(!expanded)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200/70 transition-colors cursor-pointer"
+            aria-expanded={expanded}
+          >
+            <span>{expanded ? 'Collapse Notice' : 'View Full Notice'}</span>
+            {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          </button>
+        </div>
       </div>
 
       {/* Notice Content */}

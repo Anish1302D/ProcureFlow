@@ -1,5 +1,6 @@
 import React from 'react';
 import { Lock } from 'lucide-react';
+import { COPYRIGHT_SHORT } from '../../utils/copyright';
 
 /** The shell shared by sign-in and every page opened from an email link. */
 export const AuthFrame = ({ badge = 'Secure access', icon: Icon, title, subtitle, children }) => (
@@ -28,7 +29,7 @@ export const AuthFrame = ({ badge = 'Secure access', icon: Icon, title, subtitle
     </main>
 
     <div className="max-w-6xl w-full mx-auto flex flex-col sm:flex-row items-center justify-between text-xs text-gray-400 border-t border-gray-200 pt-4 gap-2">
-      <p>Copyright © 2026 Anish Mogam, Madhura Lakade and Isha Joshi. All Rights Reserved.</p>
+      <p>{COPYRIGHT_SHORT}</p>
       <p>ProcureFlow · Sir Parashurambhau College</p>
     </div>
   </div>
