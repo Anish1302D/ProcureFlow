@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { ArrowRight, Loader2, Lock } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Loader2, Lock } from 'lucide-react';
 import { TwoStepEnrol, TwoStepVerify } from '../components/auth/TwoStep';
 import { CopyrightNotice } from '../components/auth/CopyrightNotice';
+import { CopyrightNoticeModal } from '../components/auth/CopyrightNoticeModal';
+import { COPYRIGHT_SHORT } from '../utils/copyright';
 import { useApp } from '../context/AppContext';
 
 // Development-only demo accounts for local debugging.
@@ -34,9 +36,17 @@ export const Login = () => {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [mfa, setMfa] = useState(null); // { step: 'verify' | 'enrol', challenge }
+  const [hasReadNotice, setHasReadNotice] = useState(false);
+  const [noticeAccepted, setNoticeAccepted] = useState(false);
+  const [showNoticeModal, setShowNoticeModal] = useState(false);
 
   const submit = async (e, as) => {
     e?.preventDefault();
+    if (!noticeAccepted) {
+      setError('Please read through and agree to the Copyright & Proprietary Notice before signing in.');
+      setShowNoticeModal(true);
+      return;
+    }
     setBusy(true);
     setError('');
 
@@ -90,9 +100,55 @@ export const Login = () => {
             <input id="password" type="password" autoComplete="current-password" required className={inputCls}
               value={password} onChange={(e) => setPassword(e.target.value)} />
           </div>
+
+          <div className="pt-2 pb-1 border-t border-gray-100">
+            <div className="flex items-start gap-2.5">
+              <input
+                id="accept-notice-checkbox"
+                type="checkbox"
+                disabled={!hasReadNotice}
+                checked={noticeAccepted}
+                onChange={(e) => setNoticeAccepted(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              />
+              <div className="flex-1">
+                <label
+                  htmlFor="accept-notice-checkbox"
+                  className={`text-xs select-none block leading-tight ${
+                    hasReadNotice
+                      ? 'text-gray-700 font-medium cursor-pointer'
+                      : 'text-gray-500 cursor-not-allowed'
+                  }`}
+                >
+                  I have read and agree to the{' '}
+                  <button
+                    type="button"
+                    onClick={() => setShowNoticeModal(true)}
+                    className="text-indigo-600 hover:text-indigo-800 underline underline-offset-2 font-semibold cursor-pointer"
+                  >
+                    Copyright &amp; Proprietary Notice
+                  </button>
+                  <span className="text-red-500 ml-0.5">*</span>
+                </label>
+                {!hasReadNotice ? (
+                  <p className="text-[11px] text-amber-700 mt-1 font-normal">
+                    Click the notice link above and read to the end to enable this checkbox.
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-emerald-700 mt-0.5 font-medium flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3" /> Notice reviewed &amp; checkbox unlocked
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+
           {error && <p role="alert" className="text-xs text-red-600">{error}</p>}
-          <button type="submit" disabled={busy}
-            className="w-full py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-60">
+          <button
+            type="submit"
+            disabled={busy || !noticeAccepted}
+            className="w-full py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+          >
             {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />} Sign in
           </button>
           <div className="flex items-center justify-between text-[11px]">
@@ -117,10 +173,21 @@ export const Login = () => {
         )}
       </div>
 
-      <CopyrightNotice />
+      <CopyrightNotice onOpenNoticeModal={() => setShowNoticeModal(true)} />
+
+      <CopyrightNoticeModal
+        isOpen={showNoticeModal}
+        onClose={() => setShowNoticeModal(false)}
+        isAlreadyAcknowledged={hasReadNotice}
+        onAcknowledge={() => {
+          setHasReadNotice(true);
+          setNoticeAccepted(true);
+          setError('');
+        }}
+      />
 
       <div className="max-w-6xl w-full mx-auto flex flex-col sm:flex-row items-center justify-between text-xs text-gray-400 border-t border-gray-200 pt-4 gap-2">
-        <p>Copyright © 2026 Anish Mogam, Madhura Lakade and Isha Joshi. All Rights Reserved.</p>
+        <p>{COPYRIGHT_SHORT}</p>
         <p>ProcureFlow · Sir Parashurambhau College</p>
       </div>
     </div>

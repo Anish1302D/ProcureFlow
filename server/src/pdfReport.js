@@ -635,7 +635,7 @@ export async function generatePdfReport(report, _spec = {}, streamOrRes = null) 
       const genIST = formatIST(report.generatedAt);
 
       const COPYRIGHT_AUTHORS_STRING = 'Anish Mogam, Madhura Lakade and Isha Joshi';
-      const COPYRIGHT_YEAR = '2026';
+      const COPYRIGHT_YEAR = String(new Date().getFullYear());
 
       for (let i = range.start; i < range.start + totalPages; i++) {
         doc.switchToPage(i);
