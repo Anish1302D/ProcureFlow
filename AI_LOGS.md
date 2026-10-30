@@ -412,3 +412,17 @@ as open questions in `requirement.md` - they change the workflow and need the
 Principal's answer rather than a guess.
 
 Email sending was not touched, by instruction.
+
+
+## 2026-10-30
+
+### Prompt
+
+Issue #25: Admin cannot raise requests or issues.
+Prevent ADMIN users from raising procurement requests or creating/logging faculty issues across backend API, frontend UI, and authorization layers, while fully preserving admin viewing, monitoring, and administrative capabilities. Follow a structured 20-commit strategy.
+
+### Work Completed
+
+- Created and verified feature branch `feature/admin-cannot-raise-requests-issues` based on latest `origin/main`.
+- Audited authorization architecture across `server/src/roles.js`, `server/src/routes/requests.js`, `server/src/routes/issues.js`, `server/src/routes/auth.js`, and frontend components.
+- Established Issue #25 implementation plan in `docs/plan/issue-25-admin-restrictions.md`.
