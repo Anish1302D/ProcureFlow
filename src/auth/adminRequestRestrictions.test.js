@@ -2,25 +2,23 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { describe, test } from 'node:test';
-import { canCreateIssues, canRaiseRequests } from '../../server/src/roles.js';
+import { REQUESTER_ROLES, canCreateIssues, canRaiseRequests } from '../../server/src/roles.js';
 
 describe('Issue #25 - Admin Request Creation Restrictions', () => {
-  test('REQUESTER_ROLES specification excludes ADMIN and retains HEAD and ACTIVITY_INCHARGE', () => {
-    // Expected specification for Issue #25
-    const expectedRequesterRoles = ['HEAD', 'ACTIVITY_INCHARGE'];
-
+  test('REQUESTER_ROLES from server/src/roles.js excludes ADMIN and retains HEAD and ACTIVITY_INCHARGE', () => {
     assert.ok(
-      !expectedRequesterRoles.includes('ADMIN'),
-      'ADMIN must NOT be in the eligible requester roles list',
+      !REQUESTER_ROLES.includes('ADMIN'),
+      'ADMIN must NOT be in REQUESTER_ROLES',
     );
     assert.ok(
-      expectedRequesterRoles.includes('HEAD'),
+      REQUESTER_ROLES.includes('HEAD'),
       'HEAD must remain an eligible requester role',
     );
     assert.ok(
-      expectedRequesterRoles.includes('ACTIVITY_INCHARGE'),
+      REQUESTER_ROLES.includes('ACTIVITY_INCHARGE'),
       'ACTIVITY_INCHARGE must remain an eligible requester role',
     );
+    assert.deepEqual(REQUESTER_ROLES, ['HEAD', 'ACTIVITY_INCHARGE']);
   });
 
   test('canRaiseRequests from roles.js strictly disallows ADMIN role', () => {
@@ -61,7 +59,7 @@ describe('Issue #25 - Admin Request Creation Restrictions', () => {
   });
 
   test('Request creation API specification mandates HTTP 403 Forbidden for Admin', () => {
-    function evaluateRequestCreationAuth(user, requesterRoles = ['HEAD', 'ACTIVITY_INCHARGE']) {
+    function evaluateRequestCreationAuth(user, requesterRoles = REQUESTER_ROLES) {
       if (!user) return { status: 401, error: 'Authentication required' };
       if (user.roles?.includes('ADMIN')) {
         return { status: 403, error: 'Administrators cannot create procurement requests' };

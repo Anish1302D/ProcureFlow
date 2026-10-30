@@ -3,8 +3,8 @@
 // Approval authority is deliberately absent: who may approve is decided by
 // stage staffing inside fn_record_action, never by a role list here.
 
-/** May raise procurement requests (design doc §4: "Raises requisition"). */
-export const REQUESTER_ROLES = ['HEAD', 'ACTIVITY_INCHARGE', 'ADMIN'];
+/** May raise procurement requests (design doc §4: "Raises requisition"). Issue #25: ADMIN removed. */
+export const REQUESTER_ROLES = ['HEAD', 'ACTIVITY_INCHARGE'];
 
 /** Roles explicitly barred from raising procurement requests. */
 export const REQUESTER_DISALLOWED_ROLES = ['ADMIN'];
