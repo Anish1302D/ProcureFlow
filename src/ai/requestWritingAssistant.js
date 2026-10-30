@@ -18,7 +18,7 @@ export const SUGGESTION_TYPES = Object.freeze({
 });
 
 /**
- * Sanitizes text by stripping HTML tags and control characters to prevent markup injection
+ * Sanitizes text by stripping HTML tags to prevent markup injection
  * while preserving human-readable quotes, ampersands, and punctuation.
  * @param {string} str
  * @returns {string} Clean, safe plain text
@@ -28,7 +28,7 @@ export function sanitizeText(str) {
   return str
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
     .replace(/<[^>]+>/g, '')
-    .replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F]/g, '');
+    .trim();
 }
 
 /**
