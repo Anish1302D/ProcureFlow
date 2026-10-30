@@ -7,7 +7,7 @@ import { Modal } from '../ui/Modal';
 
 // Deliberately lightweight (requirements §3.2): free text, no categories.
 export const NewIssueModal = () => {
-  const { modals, closeModal, showToast, refresh, openRecord } = useApp();
+  const { user, modals, closeModal, showToast, refresh, openRecord } = useApp();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [file, setFile] = useState(null);
@@ -43,6 +43,8 @@ export const NewIssueModal = () => {
 
   const inputCls = 'w-full bg-white border border-gray-200 rounded-lg px-3.5 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400';
 
+  if (user?.roles?.includes('ADMIN')) return null;
+
   return (
     <Modal isOpen={modals.newIssue} onClose={close} title="Log an issue" subtitle="Maintenance, facilities or anything else that needs the Principal's attention — not purchases.">
       <form onSubmit={submit} className="space-y-4">
@@ -54,25 +56,26 @@ export const NewIssueModal = () => {
         <div>
           <label htmlFor="issue-desc" className="block text-xs font-semibold text-gray-600 uppercase tracking-wider mb-1.5">Details *</label>
           <textarea id="issue-desc" required rows={4} maxLength={5000} className={inputCls}
-            placeholder="Where, since when, and how it affects teaching or students." value={description} onChange={(e) => setDescription(e.target.value)} />
+            placeholder="Where is it, how urgent is it, who does it affect?" value={description} onChange={(e) => setDescription(e.target.value)} />
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wider mb-1.5">Attachment (optional)</label>
           {file ? (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-gray-100 text-xs text-gray-700">
-              <Paperclip className="w-3 h-3" /> {file.name}
-              <button type="button" onClick={() => setFile(null)} aria-label="Remove file" className="text-gray-400 hover:text-red-600"><X className="w-3 h-3" /></button>
-            </span>
+            <div className="flex items-center justify-between p-2.5 rounded-lg border border-gray-200 bg-gray-50 text-xs">
+              <span className="truncate max-w-xs">{file.name}</span>
+              <button type="button" onClick={() => setFile(null)} className="p-1 hover:bg-gray-200 rounded"><X className="w-3.5 h-3.5" /></button>
+            </div>
           ) : (
-            <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 cursor-pointer hover:underline">
-              <Paperclip className="w-3.5 h-3.5" /> Attach a photo or document
-              <input type="file" accept={ACCEPT} className="hidden" onChange={(e) => setFile(e.target.files[0] ?? null)} />
+            <label className="border border-dashed border-gray-300 rounded-lg p-4 text-center cursor-pointer hover:border-gray-400 block text-xs text-gray-500">
+              <Paperclip className="w-4 h-4 mx-auto mb-1 text-gray-400" />
+              <span>Attach a photo, quotation or report (PDF, PNG, JPEG up to 10 MB)</span>
+              <input type="file" accept={ACCEPT} onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="hidden" />
             </label>
           )}
-          <span className="text-[11px] text-gray-400">optional</span>
         </div>
-        <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-100">
-          <button type="button" onClick={close} className="px-4 py-2 rounded-lg text-sm text-gray-500 hover:bg-gray-100">Cancel</button>
-          <button type="submit" disabled={saving} className="px-5 py-2 rounded-lg text-sm font-semibold bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50">
+        <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
+          <button type="button" onClick={close} className="px-3.5 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+          <button type="submit" disabled={saving} className="px-4 py-1.5 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg disabled:opacity-50">
             {saving ? 'Logging…' : 'Log issue'}
           </button>
         </div>

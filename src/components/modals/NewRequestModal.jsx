@@ -239,6 +239,8 @@ export const NewRequestModal = () => {
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
+  if (user?.roles?.includes('ADMIN')) return null;
+
   return (
     <Modal isOpen={open} onClose={close} title="New procurement request" subtitle="List each item separately — approvers can approve some lines and cut others." maxWidth="max-w-4xl">
       <div className="space-y-5">

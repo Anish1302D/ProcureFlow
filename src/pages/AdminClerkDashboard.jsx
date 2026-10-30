@@ -7,7 +7,7 @@ import { StatCard } from '../components/ui/StatCard';
 import { DataState } from '../components/ui/States';
 
 export const AdminClerkDashboard = () => {
-  const { setActivePage, openModal } = useApp();
+  const { user, setActivePage, openModal } = useApp();
   const dashboard = useApi('/api/dashboard');
   const inventory = useApi('/api/inventory?limit=1');
   const bills = useApi('/api/purchase-bills?limit=6');
@@ -18,7 +18,9 @@ export const AdminClerkDashboard = () => {
       <div className="p-5 rounded-2xl bg-violet-50 border border-violet-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-violet-100 text-violet-700 border border-violet-200 uppercase tracking-widest">Administrator</span>
-          <h2 className="text-xl font-extrabold text-gray-900 mt-1">Operations</h2>
+          <h2 className="text-xl font-extrabold text-gray-900 mt-1">
+            Operations{user?.name ? ` · ${user.name.replace(/\s*\(.*\)$/, '')}` : ''}
+          </h2>
           <p className="text-xs text-gray-600 mt-0.5">Inventory, purchase bills, exports and the audit log. You can see every request.</p>
         </div>
         <div className="flex items-center gap-2">

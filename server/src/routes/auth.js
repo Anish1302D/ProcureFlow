@@ -16,7 +16,10 @@ import { config } from '../config.js';
 import { configService } from '../configService.js';
 import { NO_STORE, assertTokenShape, hashToken, linkError, newToken } from '../oneTimeLinks.js';
 import { assertPasswordAcceptable, hashPassword, passwordRules } from '../passwordPolicy.js';
-import { REQUESTER_ROLES, ISSUE_MANAGER_ROLES, INVENTORY_READER_ROLES, hasAnyRole } from '../roles.js';
+import {
+  ISSUE_MANAGER_ROLES, INVENTORY_READER_ROLES, hasAnyRole,
+  canRaiseRequests, canCreateIssues,
+} from '../roles.js';
 
 export const authRouter = Router();
 
@@ -688,7 +691,8 @@ async function describe(userId) {
     // Hints for showing and hiding UI. The server enforces every one of these
     // independently — they grant nothing on their own.
     can: {
-      raiseRequests: hasAnyRole(user, REQUESTER_ROLES),
+      raiseRequests: canRaiseRequests(user),
+      logIssues: canCreateIssues(user),
       manageIssues: hasAnyRole(user, ISSUE_MANAGER_ROLES),
       viewInventory: hasAnyRole(user, INVENTORY_READER_ROLES),
       viewAudit: u.roles.includes('ADMIN'),
