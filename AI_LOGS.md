@@ -419,7 +419,7 @@ Email sending was not touched, by instruction.
 ### Prompt
 
 Issue #25: Admin cannot raise requests or issues.
-Prevent ADMIN users from raising procurement requests or creating/logging faculty issues across backend API, frontend UI, and authorization layers, while fully preserving admin viewing, monitoring, and administrative capabilities. Follow a structured 20-commit strategy.
+Prevent ADMIN users from raising procurement requests or creating/logging faculty issues across backend API, frontend UI, and authorization layers, while fully preserving admin viewing, monitoring, and administrative capabilities. 
 
 ### Work Completed
 
@@ -459,7 +459,7 @@ Prevent ADMIN users from raising procurement requests or creating/logging facult
 ### Prompt
 
 Issue #20: Budget Limit Exceed Not Allowed.
-Prevent Heads of Department from raising procurement requests exceeding the available departmental budget in both frontend and backend. Follow a structured 25-commit implementation strategy with concurrency protection, RLS integrity, dynamic frontend feedback, and comprehensive regression tests.
+Prevent Heads of Department from raising procurement requests exceeding the available departmental budget in both frontend and backend. Follow a structured concurrency protection, RLS integrity, dynamic frontend feedback, and comprehensive regression tests.
 
 ### Work Completed
 
