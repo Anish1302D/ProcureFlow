@@ -9,6 +9,7 @@ import {
   validateBudgetForRequest,
   getDepartmentBudgetStatus,
   computeRequestAccountingImpact,
+  assertDepartmentBudgetAvailable,
 } from '../../server/src/budgetService.js';
 
 describe('Issue #20 - Reusable Budget Service Calculations', () => {
@@ -178,3 +179,43 @@ describe('Issue #20 - Reusable Budget Service Calculations', () => {
     assert.equal(carriedForward.isReleased, true);
   });
 });
+
+
+  test('assertDepartmentBudgetAvailable throws HttpError 422 with structured details on missing provision', () => {
+    assert.throws(
+      () => assertDepartmentBudgetAvailable(null, 50000),
+      (err) => {
+        assert.equal(err.status, 422);
+        assert.equal(err.code, 'UNPROCESSABLE');
+        assert.equal(err.details.code, 'NO_PROVISION');
+        assert.equal(
+          err.message,
+          'No budget provision has been declared for this department for the selected financial year.'
+        );
+        return true;
+      }
+    );
+  });
+
+  test('assertDepartmentBudgetAvailable throws HttpError 422 with structured details on budget exceeded', () => {
+    const budgetStatus = {
+      allocatedAmount: 500000,
+      utilizedAmount: 300000,
+      committedAmount: 0,
+      remainingAmount: 200000,
+    };
+
+    assert.throws(
+      () => assertDepartmentBudgetAvailable(budgetStatus, 250000),
+      (err) => {
+        assert.equal(err.status, 422);
+        assert.equal(err.code, 'UNPROCESSABLE');
+        assert.equal(err.details.code, 'BUDGET_EXCEEDED');
+        assert.equal(err.details.excessAmount, 50000);
+        assert.equal(err.details.remainingAmount, 200000);
+        assert.equal(err.details.requestedAmount, 250000);
+        assert.ok(err.message.includes('exceeds the available departmental budget by ₹50,000'));
+        return true;
+      }
+    );
+  });

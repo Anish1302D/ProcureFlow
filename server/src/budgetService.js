@@ -2,6 +2,8 @@
 // Authoritative calculation logic aligns with v_department_budget_summary
 // and fn_get_department_budget_context.
 
+import { unprocessable } from './errors.js';
+
 /** Request statuses that count towards utilized budget (sanctioned/fulfilled). */
 export const STATUSES_UTILIZED = [
   'APPROVED',
@@ -146,6 +148,26 @@ export function validateBudgetForRequest(budgetStatus, requestedTotal) {
     excessAmount: excess,
     error: `Request exceeds the available departmental budget by ₹${formatInr(excess)}. Maximum permitted amount: ₹${formatInr(remaining)}.`,
   };
+}
+
+/**
+ * Asserts that the proposed request total is within the department's available budget.
+ * Throws unprocessable (HTTP 422) if missing provision or budget exceeded.
+ */
+export function assertDepartmentBudgetAvailable(budgetStatus, requestedTotal) {
+  const result = validateBudgetForRequest(budgetStatus, requestedTotal);
+  if (!result.isValid) {
+    throw unprocessable(result.error, {
+      code: result.reason,
+      requestedAmount: result.requestedAmount,
+      allocatedAmount: result.allocatedAmount ?? 0,
+      utilizedAmount: result.utilizedAmount ?? 0,
+      committedAmount: result.committedAmount ?? 0,
+      remainingAmount: result.remainingAmount ?? 0,
+      excessAmount: result.excessAmount ?? 0,
+    });
+  }
+  return result;
 }
 
 /**
