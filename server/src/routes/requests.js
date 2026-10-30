@@ -1021,6 +1021,26 @@ requestsRouter.patch('/:id', async (req, res) => {
       values.push(requestId);
       await db.query(`UPDATE requests SET ${sets.join(', ')} WHERE request_id = $${values.length}`, values);
     }
+
+    const effectiveDeptId = body.departmentId !== undefined ? body.departmentId : current.department_id;
+    const effectiveFyId = body.financialYearId !== undefined ? body.financialYearId : current.financial_year_id;
+    const effectiveHeadId = body.budgetHeadId !== undefined ? body.budgetHeadId : current.budget_head_id;
+
+    if (effectiveDeptId != null) {
+      const { rows: totRows } = await db.query(
+        'SELECT COALESCE(tentative_total_cost, 0)::numeric AS total FROM requests WHERE request_id = $1',
+        [requestId],
+      );
+      const currentTotal = Number(totRows[0]?.total ?? 0);
+      const budgetStatus = await getDepartmentBudgetStatus(db, {
+        departmentId: effectiveDeptId,
+        financialYearId: effectiveFyId,
+        budgetHeadId: effectiveHeadId,
+        forUpdate: true,
+      });
+      assertDepartmentBudgetAvailable(budgetStatus, currentTotal);
+    }
+
     return requireDetail(db, requestId, req.user);
   });
 
