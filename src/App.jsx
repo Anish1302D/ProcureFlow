@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { AppProvider, HOME, useApp } from './context/AppContext';
 import { AppShell } from './components/layout/AppShell';
-import { canAccessPage } from './components/layout/Sidebar';
+import { pagesFor } from './components/layout/Sidebar';
 
 import { Login } from './pages/Login';
 import { PrincipalDashboard } from './pages/PrincipalDashboard';
@@ -65,7 +65,6 @@ const PAGES = {
   reports: ReportsAnalytics,
   notifications: NotificationsCenter,
   settings: SettingsPreferences,
-  'approval-route': SettingsPreferences,
 };
 
 const PageRenderer = () => {
@@ -96,7 +95,7 @@ const PageRenderer = () => {
 
   // A page outside this portal (an old link, an edited URL) falls back to the
   // portal's home. The API would refuse its data anyway.
-  const page = canAccessPage(portal, activePage) ? activePage : HOME[portal];
+  const page = pagesFor(portal).has(activePage) ? activePage : HOME[portal];
   const Page = PAGES[page] ?? PAGES[HOME[portal]];
   return <AppShell><Page /></AppShell>;
 };

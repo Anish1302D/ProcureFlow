@@ -412,23 +412,3 @@ as open questions in `requirement.md` - they change the workflow and need the
 Principal's answer rather than a guess.
 
 Email sending was not touched, by instruction.
-
-
-## 2026-10-30
-
-### Prompt
-
-Issue #26: Remove Approval Route navigation.
-Eliminate the redundant Approval Route entry in shared Account navigation while preserving System Configuration in the Admin sidebar and all existing approval routing functionality. Target a 12-commit structured sequence.
-
-### Work Completed
-
-- Created and verified feature branch `feature/remove-approval-route`.
-- Audited navigation structure (`Sidebar.jsx`, `Header.jsx`, `App.jsx`, `SettingsPreferences.jsx`).
-- Established Issue #26 baseline and execution plan in `docs/plan/issue-26-remove-approval-route.md`.
-- Centralized navigation architecture in `src/components/layout/navigation.js` and re-exported backwards-compatible utilities in `Sidebar.jsx`.
-- Removed redundant `Approval route` entry from shared `ACCOUNT` navigation.
-- Preserved `System configuration` in Admin Operations menu and updated Header title mapping (`PAGE_TITLES.settings = 'System configuration'`).
-- Aligned role permissions: `canAccessPage` and `pagesFor` strictly grant `settings` to Admin portal.
-- Implemented `normalizePageSlug` in `AppContext.jsx` and alias mapping in `App.jsx` to redirect legacy `#/approval-route` to `settings` without breaking bookmarks or bypassing auth.
-- Added comprehensive regression test suites for navigation, route accessibility, mobile/desktop responsiveness, and workflow integrity.

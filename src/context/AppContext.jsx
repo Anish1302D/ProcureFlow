@@ -20,28 +20,17 @@ export const HOME = {
   faculty: 'faculty-dashboard',
 };
 
-/**
- * Normalizes legacy/redundant route slugs.
- * Issue #26: 'approval-route' was a redundant navigation entry that mapped to the settings page.
- * Any legacy bookmarks or links gracefully map to 'settings'.
- */
-export function normalizePageSlug(slug) {
-  if (!slug) return null;
-  if (slug === 'approval-route' || slug === 'approval_route') return 'settings';
-  return slug;
-}
-
 // Navigation lives in the URL hash: #/requests-all, #/review-queue/request/<id>.
 // Hash routes survive a refresh, can be bookmarked or linked from an email,
 // and need no rewrite rules on the web server (IIS serves index.html as is).
 // #/requests/<id> is the short form used in notification emails.
-export function parseHash() {
+function parseHash() {
   const hashRaw = window.location.hash.replace(/^#\/?/, '');
   const [page, kind, id] = hashRaw.split('/');
   if (page === 'requests' && kind) return { page: null, open: { kind: 'request', id: kind } };
   if (page === 'issues' && kind) return { page: null, open: { kind: 'issue', id: kind } };
   if (page || (kind && id)) {
-    return { page: normalizePageSlug(page), open: kind && id ? { kind, id } : null };
+    return { page: page || null, open: kind && id ? { kind, id } : null };
   }
 
   // Fallback: in case an email link was opened without a hash (e.g. /requests/123)
