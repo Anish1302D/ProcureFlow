@@ -141,3 +141,4 @@ describe('Issue #20 - Frontend Request Form Budget Validation', () => {
     assert.equal(state.problems.length, 1);
   });
 });
+

@@ -88,21 +88,24 @@ It prefers the specific `budget_head_id` provision, falling back to the departme
 
 ---
 
-## 4. Concurrency Protection Strategy
+## 4. Concurrency Protection & Row-Level Locking
 To prevent double-spend race conditions (e.g., remaining budget is ₹1,00,000; Request A for ₹70,000 and Request B for ₹60,000 submitted concurrently):
-- Request creation and submission transactions acquire a row-level lock on the applicable `budget_provisions` record using `SELECT budget_provision_id FROM budget_provisions WHERE ... FOR UPDATE`.
+- Request creation and line item mutation transactions acquire row-level locks on the applicable `budget_provisions` record using `SELECT ... FROM budget_provisions WHERE ... FOR UPDATE`.
 - This serializes concurrent requests for the same department/provision so that each transaction evaluates the latest committed state of requests.
+- Rollbacks cleanly restore transaction state without leaving orphaned request records or artificial deficits.
 
 ---
 
 ## 5. API Error Specification
 When a request exceeds the available budget:
 - **HTTP Status**: `422 Unprocessable Entity`
+- **Error Code**: `BUDGET_EXCEEDED`
 - **Error Message**:
-  `"Request amount exceeds available departmental budget by ₹<excess>. Maximum permitted amount: ₹<remaining>."`
+  `"Request exceeds the available departmental budget by ₹<excess>. Maximum permitted amount: ₹<remaining>."`
 - **Error Details Payload**:
   ```json
   {
+    "code": "BUDGET_EXCEEDED",
     "requestedAmount": 250000,
     "allocatedAmount": 500000,
     "utilizedAmount": 300000,
@@ -113,5 +116,42 @@ When a request exceeds the available budget:
   ```
 When no budget provision exists for the department:
 - **HTTP Status**: `422 Unprocessable Entity`
+- **Error Code**: `NO_PROVISION`
 - **Error Message**:
   `"No budget provision has been declared for this department for the selected financial year."`
+
+---
+
+## 6. Frontend Dynamic UI Feedback & Submission Prevention
+- **Departmental Budget Context Card**: Displayed in `NewRequestModal.jsx` showing Annual Provision, Utilized, Committed, and Remaining Balance.
+- **Dynamic Overrun Warning Banner**: Rendered in real-time when item lines cause the tentative request total to exceed `remainingAmount`.
+- **Submission Prevention**: Both "Save as draft" and "Submit for approval" buttons are disabled with `disabled:cursor-not-allowed` when `!budgetValidation.isValid`. Attempting to submit adds the exact error message to form problems and displays an error toast.
+
+---
+
+## 7. 25-Commit Implementation Structure
+1. `chore: prepare departmental budget enforcement branch`
+2. `docs: document existing departmental budget architecture`
+3. `test: add departmental budget calculation regression tests`
+4. `test: add budget availability and financial year test cases`
+5. `refactor: centralize reusable budget calculation logic`
+6. `fix: resolve department budget allocation correctly`
+7. `fix: calculate remaining departmental budget accurately`
+8. `fix: align budget utilization with existing accounting rules`
+9. `fix: handle missing departmental budget provisions`
+10. `test: cover budget head and financial year validation`
+11. `fix: validate departmental budget during request creation`
+12. `fix: calculate request totals using trusted server values`
+13. `fix: reject requests exceeding available budget`
+14. `fix: enforce department ownership in budget validation`
+15. `test: cover backend budget limit enforcement`
+16. `fix: protect budget validation against concurrent requests`
+17. `fix: ensure transactional consistency during request creation`
+18. `test: cover concurrent departmental budget submissions`
+19. `test: verify budget authorization and rls integrity`
+20. `feat: display departmental budget availability in request form`
+21. `feat: add dynamic request amount budget validation`
+22. `fix: prevent frontend submission beyond available budget`
+23. `test: cover budget validation across request form states`
+24. `test: verify budget enforcement across existing procurement workflows`
+25. `docs: finalize departmental budget enforcement and regression coverage`

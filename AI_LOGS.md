@@ -466,3 +466,46 @@ Prevent Heads of Department from raising procurement requests exceeding the avai
 - Created and verified feature branch `feature/department-budget-limit-enforcement` based on latest `origin/main`.
 - Audited existing budget architecture across `db/schema/` (`budget_provisions`, `v_department_budget_summary`, `fn_get_department_budget_context`), backend request creation routes, and frontend request modal.
 - Documented implementation plan in `docs/plan/issue-20-budget-enforcement.md`.
+
+- **Centralized Budget Service (`server/src/budgetService.js`)**:
+  - Implemented exact paise arithmetic (`toPaise`, `fromPaise`, `roundMoney`) eliminating floating point drift.
+  - Implemented `calculateRemainingBudget(allocated, stats)` enforcing the rule:
+    `remainingAmount = allocatedAmount - (utilizedAmount + committedAmount)`.
+  - Implemented `computeRequestAccountingImpact(request)` aligning status accounting with college financial guidelines:
+    - `UTILIZED`: `APPROVED`, `PARTIALLY_APPROVED`, `FULFILMENT_PENDING`, `FULFILLED` (using `sanctioned_amount` with fallback to `tentative_total_cost`).
+    - `COMMITTED`: `SUBMITTED`, `UNDER_*`, `AWAITING_RESUBMISSION`.
+    - `RELEASED`: `DRAFT`, `REJECTED`, `CLOSED`, `CARRIED_FORWARD`.
+  - Implemented `getDepartmentBudgetStatus(db, { departmentId, financialYearId, budgetHeadId, forUpdate })`:
+    - Resolves active financial year when omitted.
+    - Resolves specific `budget_head_id` provision with fallback to general department-wide provision.
+    - Acquires row-level exclusive lock `SELECT ... FOR UPDATE` on `budget_provisions` when mutating to serialize concurrent requests.
+  - Implemented `validateBudgetForRequest` and `assertDepartmentBudgetAvailable`:
+    - Rejects missing provisions with HTTP 422 `NO_PROVISION`.
+    - Rejects budget overruns with HTTP 422 `BUDGET_EXCEEDED` and structured details (`requestedAmount`, `allocatedAmount`, `utilizedAmount`, `committedAmount`, `remainingAmount`, `excessAmount`).
+- **Backend Mutation Gateways (`server/src/routes/requests.js` & `server/src/routes/budget.js`)**:
+  - `POST /api/requests`:
+    - Enforced HOD department assignment checks (`HEAD` users must be assigned to a department and cannot spoof other departments).
+    - Calculated total from trusted line item data (`calculateItemsTotal(body.items)`).
+    - Asserted budget availability inside transaction with row-level locking.
+  - `POST /api/requests/:id/items`: Recalculates request total and validates against departmental budget.
+  - `PATCH /api/requests/:id/items/:itemId`: Recalculates total and revalidates budget with row-level lock.
+  - `PATCH /api/requests/:id`: Validates budget if `departmentId`, `financialYearId`, or `budgetHeadId` are modified.
+  - `POST /api/requests/:id/submit`: Recalculates total and asserts budget availability before executing `fn_submit_request`.
+  - `GET /api/budget-context`: Added dedicated endpoint for client forms to query live budget status.
+- **Frontend Dynamic Form Feedback (`src/components/modals/NewRequestModal.jsx`)**:
+  - Added live departmental budget context overview (Annual Provision, Utilized, Committed, and Remaining Balance).
+  - Dynamic budget calculation comparing real-time line item totals against `remainingAmount`.
+  - Real-time warning banner: `"Request exceeds the available departmental budget by ₹<excess>. Maximum permitted amount: ₹<remaining>."`
+  - Form submission gating: Disabled both "Save as draft" and "Submit for approval" buttons when budget is exceeded or provision is missing; populated problem list and displayed error toast.
+- **Comprehensive Regression & Test Coverage**:
+  - Added 9 targeted test suites across `src/budget/`:
+    - `budgetCalculation.test.js`: Core regression tests matching Issue #20 specifications (exact budget, under budget, over by ₹1, over by ₹50,000, zero budget).
+    - `budgetAvailability.test.js`: Financial year isolation and department isolation tests.
+    - `budgetService.test.js`: Integer-paise arithmetic, roundMoney, formatInr, and accounting impact categorizations.
+    - `budgetHeadFinancialYear.test.js`: Hardware/software head routing and active financial year resolution.
+    - `backendBudgetLimitEnforcement.test.js`: HTTP 422 errors and HOD department ownership checks.
+    - `concurrentBudgetSubmissions.test.js`: Concurrent transaction serialization and rollback integrity.
+    - `budgetRlsIntegrity.test.js`: Row Level Security policies (`budget_provisions_read`, `budget_provisions_write`) and view security caller context.
+    - `frontendRequestFormValidation.test.js`: Dynamic total calculation, warning banner rendering, and submit prevention.
+    - `procurementWorkflowsBudgetRegression.test.js`: Complete workflow integrity verification (Purchase Committee review, Principal thresholds, CDC & Final Authority decisions, partial approvals, and carry forwards).
+  - Verified 114 tests passing across 21 test suites.

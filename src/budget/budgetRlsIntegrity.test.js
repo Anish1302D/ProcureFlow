@@ -105,3 +105,4 @@ describe('Issue #20 - Budget Authorization and RLS Policy Integrity', () => {
     assert.equal(remaining.availableAmount, 200000.0);
   });
 });
+

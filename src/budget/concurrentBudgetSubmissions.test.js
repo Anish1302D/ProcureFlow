@@ -166,3 +166,4 @@ describe('Issue #20 - Concurrent Departmental Budget Submissions', () => {
     assert.equal(mockDb.committedRequests.length, 1);
   });
 });
+
