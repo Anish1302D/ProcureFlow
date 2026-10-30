@@ -43,6 +43,18 @@ describe('Issue #26 - Navigation Regression Coverage', () => {
     );
   });
 
+  test('Account navigation definitions strictly exclude Approval route and settings', async () => {
+    const navSource = await fs.readFile(path.resolve('src/components/layout/navigation.js'), 'utf8');
+
+    // Extract ACCOUNT definition from navigation.js
+    const accountMatch = navSource.match(/export const ACCOUNT = \{[\s\S]*?\n\};/);
+    assert.ok(accountMatch, 'navigation.js must export ACCOUNT');
+    const accountDef = accountMatch[0];
+
+    assert.ok(!accountDef.includes('Approval route'), 'ACCOUNT must not contain "Approval route"');
+    assert.ok(!accountDef.includes("id: 'settings'"), 'ACCOUNT must not contain id: "settings"');
+  });
+
   test('SettingsPreferences.jsx contains System Configuration & Governance and live route overview', async () => {
     const settingsSource = await fs.readFile(path.resolve('src/pages/SettingsPreferences.jsx'), 'utf8');
 

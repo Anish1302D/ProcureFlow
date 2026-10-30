@@ -63,12 +63,12 @@ export const NAV = {
 };
 
 // Shared account navigation displayed across portals.
+// Approval route removed per Issue #26 (it was redundant with System configuration in Admin).
 export const ACCOUNT = {
   title: 'Account',
   items: [
     { id: 'notifications', label: 'Notifications', icon: BellRing, badge: 'unread' },
     { id: 'profile', label: 'Profile', icon: UserCircle },
-    { id: 'settings', label: 'Approval route', icon: Settings },
   ],
 };
 
