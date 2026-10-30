@@ -1,4 +1,4 @@
-import React, { useState, useId } from 'react';
+import React, { useState, useEffect, useId } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
@@ -25,6 +25,7 @@ import { analyzeRequestText, SUGGESTION_TYPES } from '../ai/requestWritingAssist
  * Integrates:
  * 1. Deterministic validation (authoritative, gates submission).
  * 2. Optional browser-local AI writing assistant (advisory only, runs 100% on device).
+ *    Auto-rechecks debounced after initial run; manual re-run button kept for confirmation.
  */
 export const LocalAiAssistant = ({
   request = {},
@@ -57,19 +58,15 @@ export const LocalAiAssistant = ({
     try {
       let pipelineInstance = null;
       try {
-        pipelineInstance = await loadLocalModel((p) => {
-          if (p?.status === 'progress' && p?.progress !== undefined) {
-            setLoadingProgress(`Loading model weights: ${Math.round(p.progress)}%`);
-          } else if (p?.status) {
-            setLoadingProgress(`Status: ${p.status}`);
-          }
+        pipelineInstance = await loadLocalModel((progressStr) => {
+          setLoadingProgress(progressStr);
         });
       } catch (loadErr) {
-        // Fall back gracefully to browser-local heuristic engine
+        // Fall back gracefully to browser-local rule assistant
         console.warn('[Smart Check] Model download or WebGPU unavailable, using local rule assistant:', loadErr.message);
       }
 
-      setLoadingProgress('Analyzing request clarity and completeness...');
+      setLoadingProgress('Evaluating request quality and domain context...');
       const results = await analyzeRequestText(request, {
         existingRequests,
         localPipeline: pipelineInstance,
@@ -84,6 +81,37 @@ export const LocalAiAssistant = ({
       setLoadingProgress(null);
     }
   };
+
+  // Automatic background re-check once AI has been run at least once
+  useEffect(() => {
+    if (!hasRunAi || aiLoading) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        const pipelineInstance = await loadLocalModel().catch(() => null);
+        const results = await analyzeRequestText(request, {
+          existingRequests,
+          localPipeline: pipelineInstance,
+        });
+        setAiResults(results);
+      } catch {
+        // Background check failed non-fatally; preserve existing suggestions
+      }
+    }, 700);
+
+    return () => clearTimeout(timer);
+  }, [
+    hasRunAi,
+    request.title,
+    request.description,
+    request.urgency,
+    request.budgetHeadId,
+    request.budgetHeadName,
+    request.departmentName,
+    request.courseName,
+    request.items,
+    request.totalAmount,
+  ]);
 
   const handleApply = (suggestionId, suggestion) => {
     setPendingConfirm({ id: suggestionId, suggestion });
@@ -162,33 +190,35 @@ export const LocalAiAssistant = ({
         </div>
       </div>
 
-      {/* 1. Deterministic Validation Checks (Always Shown) */}
+      {/* 1. Authoritative Deterministic Rules Summary */}
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold text-gray-700 flex items-center gap-1.5">
+        <div className="flex items-center justify-between text-xs text-gray-600">
+          <span className="font-semibold text-gray-800">
             Institutional Rule Compliance
-            <span className="text-[10px] text-gray-400 font-normal">
+            <span className="ml-1.5 font-normal text-gray-500">
               ({validation.deterministicChecks.filter((c) => c.passed).length}/{validation.deterministicChecks.length} passed)
             </span>
           </span>
+
           <button
             type="button"
             onClick={() => setShowDeterministicDetails((v) => !v)}
-            className="text-xs text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1 cursor-pointer"
             aria-expanded={showDeterministicDetails}
+            className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium cursor-pointer"
           >
             {showDeterministicDetails ? 'Hide details' : 'Show details'}
-            {showDeterministicDetails ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            {showDeterministicDetails ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
           </button>
         </div>
 
-        {/* High-priority errors if any */}
+        {/* Blocking Errors Banner */}
         {validation.errors.length > 0 && (
-          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl space-y-1">
-            <p className="text-xs font-bold text-rose-800 flex items-center gap-1">
-              <AlertCircle className="w-3.5 h-3.5 shrink-0" /> Submission Blocked by Institutional Rules:
-            </p>
-            <ul className="text-xs text-rose-700 list-disc pl-5 space-y-0.5">
+          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-900 space-y-1">
+            <div className="font-semibold flex items-center gap-1.5 text-rose-700">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>Submission Blocked by Institutional Rules:</span>
+            </div>
+            <ul className="list-disc pl-5 space-y-0.5 text-rose-800">
               {validation.errors.map((err, i) => (
                 <li key={i}>{err}</li>
               ))}
@@ -196,13 +226,14 @@ export const LocalAiAssistant = ({
           </div>
         )}
 
-        {/* Warnings if any */}
+        {/* Warnings Banner */}
         {validation.warnings.length > 0 && (
-          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-1">
-            <p className="text-xs font-bold text-amber-800 flex items-center gap-1">
-              <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Recommended Clarifications:
-            </p>
-            <ul className="text-xs text-amber-700 list-disc pl-5 space-y-0.5">
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1">
+            <div className="font-semibold flex items-center gap-1.5 text-amber-700">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>Recommended Clarifications:</span>
+            </div>
+            <ul className="list-disc pl-5 space-y-0.5 text-amber-800">
               {validation.warnings.map((warn, i) => (
                 <li key={i}>{warn}</li>
               ))}
@@ -210,22 +241,17 @@ export const LocalAiAssistant = ({
           </div>
         )}
 
-        {/* Detailed checks list */}
+        {/* Expandable Deterministic Checks List */}
         {showDeterministicDetails && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+          <div className="mt-2 space-y-1.5 rounded-xl bg-gray-50 p-3 border border-gray-200 text-xs">
             {validation.deterministicChecks.map((check) => (
-              <div
-                key={check.code}
-                className={`p-2 rounded-lg border text-xs flex items-start gap-2 ${
-                  check.passed
-                    ? 'bg-gray-50/50 border-gray-200 text-gray-700'
-                    : 'bg-rose-50/50 border-rose-200 text-rose-800 font-medium'
-                }`}
-              >
+              <div key={check.code} className="flex items-start gap-2 text-gray-700">
                 {check.passed ? (
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 mt-0.5 shrink-0" />
+                ) : check.severity === 'WARNING' ? (
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-500 mt-0.5 shrink-0" />
                 ) : (
-                  <XCircle className="w-3.5 h-3.5 text-rose-600 mt-0.5 shrink-0" />
+                  <XCircle className="w-3.5 h-3.5 text-rose-500 mt-0.5 shrink-0" />
                 )}
                 <span className="leading-snug">{check.message}</span>
               </div>
@@ -261,7 +287,7 @@ export const LocalAiAssistant = ({
             {/* Run Button / Progress */}
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="text-xs text-gray-500">
-                <span className="font-semibold text-gray-700">AI Assistance:</span> Advisory only · No effect on approval routing or thresholds.
+                <span className="font-semibold text-gray-700">AI Assistance:</span> Advisory only · Auto-updates as you type.
               </div>
 
               <button
@@ -321,9 +347,23 @@ export const LocalAiAssistant = ({
                 </div>
 
                 {activeSuggestions.length === 0 ? (
-                  <div className="p-4 bg-emerald-50/60 border border-emerald-100 rounded-xl text-xs text-emerald-800 flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Your request text is well-detailed and clear. No additional wording improvements suggested.</span>
+                  <div className="p-4 rounded-xl border border-emerald-200 bg-emerald-50/70 text-emerald-950 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="p-1 rounded-lg bg-emerald-100 text-emerald-700">
+                          <CheckCircle2 className="w-4 h-4" />
+                        </div>
+                        <span className="text-xs font-bold uppercase tracking-wider text-emerald-900">
+                          Request Writing Quality Verified
+                        </span>
+                      </div>
+                      <span className="text-[10px] uppercase font-semibold px-2.5 py-0.5 rounded-full bg-emerald-200/80 text-emerald-800">
+                        Ready for review
+                      </span>
+                    </div>
+                    <p className="text-xs text-emerald-800 leading-relaxed">
+                      Everything is correct and well-specified. Your title is clear, the justification outlines institutional need, and item specifications are properly defined.
+                    </p>
                   </div>
                 ) : (
                   <div className="space-y-2.5">
@@ -371,7 +411,7 @@ export const LocalAiAssistant = ({
                             >
                               {isApplied ? (
                                 <>
-                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  <CheckCircle2 className="w-3 h-3" />
                                   <span>Applied</span>
                                 </>
                               ) : (
@@ -388,8 +428,8 @@ export const LocalAiAssistant = ({
                   </div>
                 )}
 
-                {/* Disclaimer */}
-                <p className="text-[10px] text-gray-400 italic leading-relaxed pt-1">
+                {/* Statutory Disclaimer */}
+                <p className="text-[11px] text-gray-400 italic pt-1">
                   {aiResults?.disclaimer}
                 </p>
               </div>
@@ -398,39 +438,44 @@ export const LocalAiAssistant = ({
         )}
       </div>
 
-      {/* Confirmation Modal for Applying Suggestions */}
+      {/* Confirmation Modal */}
       {pendingConfirm && (
         <div
           role="dialog"
           aria-modal="true"
-          aria-labelledby="confirm-apply-title"
-          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+          aria-labelledby="confirm-modal-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs"
         >
-          <div className="bg-white rounded-2xl max-w-md w-full p-5 space-y-3 shadow-xl border border-gray-200">
-            <h4 id="confirm-apply-title" className="text-sm font-bold text-gray-900 flex items-center gap-2">
-              <Shield className="w-4 h-4 text-indigo-600" />
-              Apply Suggested Text?
-            </h4>
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl border border-gray-200 space-y-4">
+            <div className="flex items-center gap-2.5 text-indigo-700">
+              <Shield className="w-5 h-5 shrink-0" />
+              <h4 id="confirm-modal-title" className="text-sm font-bold text-gray-900">
+                Confirm Applying Suggestion
+              </h4>
+            </div>
+
             <p className="text-xs text-gray-600 leading-relaxed">
-              This will update the {pendingConfirm.suggestion.type.toLowerCase().replace('_', ' ')} field. You can continue editing the field manually at any time.
+              This will update your request field with the suggested text below. You can continue editing manually afterwards:
             </p>
-            <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 text-xs font-mono text-gray-800 whitespace-pre-wrap max-h-36 overflow-y-auto">
+
+            <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 font-mono text-xs text-gray-800 whitespace-pre-wrap max-h-40 overflow-y-auto">
               {pendingConfirm.suggestion.suggestedText}
             </div>
+
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
                 type="button"
                 onClick={() => setPendingConfirm(null)}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-100 cursor-pointer"
+                className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-100 cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={confirmApply}
-                className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold cursor-pointer shadow-2xs"
+                className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs cursor-pointer"
               >
-                Confirm &amp; Apply
+                Apply to request
               </button>
             </div>
           </div>
