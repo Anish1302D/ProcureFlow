@@ -63,7 +63,7 @@ export const DEFAULT_CONFIGS = {
   'auth.reset_requests_per_hour': 3,
   'auth.lockout_threshold': 5,
   'auth.lockout_minutes': 15,
-  'auth.mfa_required_roles': ['ADMIN', 'ALL'],
+  'auth.mfa_required_roles': ['ADMIN'],
   'auth.allowed_email_domains': [],
 };
 
