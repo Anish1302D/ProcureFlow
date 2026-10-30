@@ -96,3 +96,4 @@ describe('Issue #26 - Desktop and Mobile Navigation Responsive Behavior', () => 
     assert.equal(approvalRouteItem, undefined, 'Admin items must not have any item labelled Approval route');
   });
 });
+

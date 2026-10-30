@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { AppProvider, HOME, useApp } from './context/AppContext';
 import { AppShell } from './components/layout/AppShell';
-import { canAccessPage, pagesFor } from './components/layout/Sidebar';
+import { canAccessPage } from './components/layout/Sidebar';
 
 import { Login } from './pages/Login';
 import { PrincipalDashboard } from './pages/PrincipalDashboard';
