@@ -2,6 +2,32 @@
 // Authoritative calculation logic aligns with v_department_budget_summary
 // and fn_get_department_budget_context.
 
+/** Request statuses that count towards utilized budget (sanctioned/fulfilled). */
+export const STATUSES_UTILIZED = [
+  'APPROVED',
+  'PARTIALLY_APPROVED',
+  'FULFILMENT_PENDING',
+  'FULFILLED',
+];
+
+/** Request statuses that count towards committed budget (in-flight under review). */
+export const STATUSES_COMMITTED = [
+  'SUBMITTED',
+  'UNDER_PURCHASE_COMMITTEE_REVIEW',
+  'UNDER_PRINCIPAL_REVIEW',
+  'UNDER_CDC_REVIEW',
+  'UNDER_FINAL_AUTHORITY_REVIEW',
+  'AWAITING_RESUBMISSION',
+];
+
+/** Request statuses that release or do not consume budget (drafts, rejections, closed). */
+export const STATUSES_RELEASED = [
+  'DRAFT',
+  'REJECTED',
+  'CLOSED',
+  'CARRIED_FORWARD',
+];
+
 /** Converts an Indian Rupee amount to integer paise to ensure exact arithmetic. */
 export const toPaise = (val) => Math.round(Number(val ?? 0) * 100);
 
@@ -13,6 +39,45 @@ export const roundMoney = (val) => fromPaise(toPaise(val));
 
 /** Format an Indian Rupee amount for user-facing error messages. */
 export const formatInr = (val) => Math.round(Number(val ?? 0)).toLocaleString('en-IN');
+
+/**
+ * Categorizes a request's accounting impact based on its current status.
+ * Returns { isUtilized, isCommitted, isReleased, effectiveAmount }
+ */
+export function computeRequestAccountingImpact(req) {
+  const status = req?.status ?? req?.current_status;
+  const tentative = roundMoney(req?.tentativeTotalCost ?? req?.tentative_total_cost ?? 0);
+  const sanctioned = req?.sanctionedAmount ?? req?.sanctioned_amount;
+  const sanctionedOrTentative = sanctioned != null ? roundMoney(sanctioned) : tentative;
+
+  if (STATUSES_UTILIZED.includes(status)) {
+    return {
+      type: 'UTILIZED',
+      effectiveAmount: sanctionedOrTentative,
+      isUtilized: true,
+      isCommitted: false,
+      isReleased: false,
+    };
+  }
+
+  if (STATUSES_COMMITTED.includes(status)) {
+    return {
+      type: 'COMMITTED',
+      effectiveAmount: tentative,
+      isUtilized: false,
+      isCommitted: true,
+      isReleased: false,
+    };
+  }
+
+  return {
+    type: 'RELEASED',
+    effectiveAmount: 0,
+    isUtilized: false,
+    isCommitted: false,
+    isReleased: true,
+  };
+}
 
 /**
  * Calculates remaining and available budget amounts from allocation, utilization and commitments

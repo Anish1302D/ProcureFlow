@@ -8,6 +8,7 @@ import {
   calculateRemainingBudget,
   validateBudgetForRequest,
   getDepartmentBudgetStatus,
+  computeRequestAccountingImpact,
 } from '../../server/src/budgetService.js';
 
 describe('Issue #20 - Reusable Budget Service Calculations', () => {
@@ -140,5 +141,40 @@ describe('Issue #20 - Reusable Budget Service Calculations', () => {
     assert.equal(status.allocatedAmount, 450000);
     assert.equal(status.remainingAmount, 250000);
     assert.equal(queriedQueries.some((q) => q.sql.includes('FROM financial_years WHERE is_active')), true);
+  });
+
+  test('computeRequestAccountingImpact categorizes requests according to accounting rules', () => {
+    const approved = computeRequestAccountingImpact({
+      status: 'APPROVED',
+      sanctionedAmount: 180000,
+      tentativeTotalCost: 200000,
+    });
+    assert.equal(approved.type, 'UTILIZED');
+    assert.equal(approved.effectiveAmount, 180000);
+    assert.equal(approved.isUtilized, true);
+
+    const underReview = computeRequestAccountingImpact({
+      status: 'UNDER_PRINCIPAL_REVIEW',
+      tentativeTotalCost: 75000,
+    });
+    assert.equal(underReview.type, 'COMMITTED');
+    assert.equal(underReview.effectiveAmount, 75000);
+    assert.equal(underReview.isCommitted, true);
+
+    const rejected = computeRequestAccountingImpact({
+      status: 'REJECTED',
+      tentativeTotalCost: 90000,
+    });
+    assert.equal(rejected.type, 'RELEASED');
+    assert.equal(rejected.effectiveAmount, 0);
+    assert.equal(rejected.isReleased, true);
+
+    const carriedForward = computeRequestAccountingImpact({
+      status: 'CARRIED_FORWARD',
+      tentativeTotalCost: 60000,
+    });
+    assert.equal(carriedForward.type, 'RELEASED');
+    assert.equal(carriedForward.effectiveAmount, 0);
+    assert.equal(carriedForward.isReleased, true);
   });
 });
