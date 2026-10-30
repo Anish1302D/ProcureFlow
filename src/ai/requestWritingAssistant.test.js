@@ -123,3 +123,49 @@ test('9. Ambiguous item description triggers specification advice', async () => 
   assert.ok(itemSug.message.toLowerCase().includes('specification'));
 });
 
+
+test('10. Contextual title suggestion accurately expands generic title with department', async () => {
+  const req = {
+    title: 'computers',
+    departmentName: 'History',
+    urgency: 'Medium',
+    items: [],
+  };
+  const result = await analyzeRequestText(req);
+  const titleSug = result.suggestions.find((s) => s.type === SUGGESTION_TYPES.TITLE);
+  assert.ok(titleSug);
+  assert.equal(titleSug.suggestedText, 'Procurement of Desktop Computers for Department of History');
+});
+
+test('11. Detailed hardware specification template suggested for generic computer item', async () => {
+  const req = {
+    title: 'Procurement of Desktop Computers for Department of History',
+    description: 'Required by Department of History to support curriculum requirements and student research.',
+    items: [{ name: 'computer', quantity: 5, unitCost: 45000, remarks: '' }],
+  };
+  const result = await analyzeRequestText(req);
+  const itemSug = result.suggestions.find((s) => s.type === SUGGESTION_TYPES.ITEM_SPECIFICATION);
+  assert.ok(itemSug);
+  assert.ok(itemSug.suggestedText.includes('Core i5/i7'));
+  assert.ok(itemSug.suggestedText.includes('RAM'));
+  assert.ok(itemSug.suggestedText.includes('Warranty'));
+});
+
+test('12. Well-specified request produces zero suggestions (triggers Verified state)', async () => {
+  const req = {
+    title: 'Procurement of 10 Desktop Computers for Department of History',
+    description: 'Required by the Department of History to upgrade existing aging systems, support practical coursework, and ensure faculty and student research uninterrupted.',
+    urgency: 'Medium',
+    items: [{
+      name: 'Desktop Computers',
+      quantity: 10,
+      unitCost: 50000,
+      remarks: 'Intel Core i5 13th Gen, 16GB RAM, 512GB SSD, 24" FHD Monitor with 3-year onsite warranty',
+    }],
+  };
+  const result = await analyzeRequestText(req);
+  const qualitySuggestions = result.suggestions.filter(
+    (s) => s.type === SUGGESTION_TYPES.TITLE || s.type === SUGGESTION_TYPES.JUSTIFICATION || s.type === SUGGESTION_TYPES.ITEM_SPECIFICATION
+  );
+  assert.equal(qualitySuggestions.length, 0);
+});
