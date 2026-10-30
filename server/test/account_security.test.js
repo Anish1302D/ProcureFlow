@@ -19,6 +19,21 @@ before(async () => {
     tok[key] = await t.login(email);
     id[key] = (await t.superuser.query('SELECT user_id FROM users WHERE email = $1', [email])).rows[0].user_id;
   }
+
+  // Dedicated administrator for testing password change policies so
+  // admin@spcollege.edu does not exhaust the 10-attempt login rate limiter.
+  const { rows: [pwAdmin] } = await t.superuser.query(
+    `INSERT INTO users (email, full_name, password_hash, is_active, token_version)
+     VALUES ('pwadmin@spcollege.edu', 'Admin Password Test', crypt($1, gen_salt('bf', 12)), TRUE, 1)
+     RETURNING user_id`,
+    [PASSWORD],
+  );
+  await t.superuser.query(
+    `INSERT INTO user_roles (user_id, role_id)
+     VALUES ($1, (SELECT role_id FROM roles WHERE code = 'ADMIN'))`,
+    [pwAdmin.user_id],
+  );
+  tok.pwadmin = await t.login('pwadmin@spcollege.edu');
 });
 
 after(() => t?.close());
@@ -51,38 +66,32 @@ test('non-admin users are rejected from changing password with HTTP 403', async 
 
 test('a weak new password for admin is refused with every reason listed', async () => {
   const short = await t.api('POST', '/api/auth/change-password', {
-    token: tok.admin, body: { currentPassword: PASSWORD, newPassword: 'Short#1' } });
+    token: tok.pwadmin, body: { currentPassword: PASSWORD, newPassword: 'Short#1' } });
   assert.equal(short.status, 422);
   assert.equal(short.body.error.code, 'WEAK_PASSWORD');
   assert.ok(short.body.error.details.some((p) => /at least 12/.test(p)));
 
   // Built from the person's own name: refused even though it is long.
   const named = await t.api('POST', '/api/auth/change-password', {
-    token: tok.admin, body: { currentPassword: PASSWORD, newPassword: 'Administrator-2026-Strong' } });
+    token: tok.pwadmin, body: { currentPassword: PASSWORD, newPassword: 'Password-Test-2026-Strong' } });
   assert.equal(named.status, 422);
   assert.ok(named.body.error.details.some((p) => /your (name|email)/.test(p)));
 
   const common = await t.api('POST', '/api/auth/change-password', {
-    token: tok.admin, body: { currentPassword: PASSWORD, newPassword: 'Password123!' } });
+    token: tok.pwadmin, body: { currentPassword: PASSWORD, newPassword: 'Password123!' } });
   assert.equal(common.status, 422);
 
-  assert.equal(await canSignIn('admin@spcollege.edu', PASSWORD), true, 'a refused change leaves the old password working');
+  assert.equal(await canSignIn('pwadmin@spcollege.edu', PASSWORD), true, 'a refused change leaves the old password working');
 });
 
 test('admin strong new password is accepted and signs out every other session', async () => {
   const strong = 'violet-harbour-lantern-42';
   expectStatus(await t.api('POST', '/api/auth/change-password', {
-    token: tok.admin, body: { currentPassword: PASSWORD, newPassword: strong } }), 204);
+    token: tok.pwadmin, body: { currentPassword: PASSWORD, newPassword: strong } }), 204);
 
-  expectStatus(await t.api('GET', '/api/auth/me', { token: tok.admin }), 401);
-  assert.equal(await canSignIn('admin@spcollege.edu', PASSWORD), false);
-  assert.equal(await canSignIn('admin@spcollege.edu', strong), true);
-
-  // Restore admin password and re-login so subsequent tests still have a working tok.admin
-  tok.admin = await t.login('admin@spcollege.edu', strong);
-  expectStatus(await t.api('POST', '/api/auth/change-password', {
-    token: tok.admin, body: { currentPassword: strong, newPassword: PASSWORD } }), 204);
-  tok.admin = await t.login('admin@spcollege.edu', PASSWORD);
+  expectStatus(await t.api('GET', '/api/auth/me', { token: tok.pwadmin }), 401);
+  assert.equal(await canSignIn('pwadmin@spcollege.edu', PASSWORD), false);
+  assert.equal(await canSignIn('pwadmin@spcollege.edu', strong), true);
 });
 
 // ---------------------------------------------------------------------------
