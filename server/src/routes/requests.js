@@ -746,6 +746,9 @@ async function lockEditableRequest(db, requestId, user, statuses = EDITABLE_STAT
   if (r.raised_by !== user.id && !user.roles.includes('ADMIN')) {
     throw forbidden('Only the person who raised this request can change it');
   }
+  if (user.roles.includes('HEAD') && user.departmentId != null && r.department_id != null && r.department_id !== user.departmentId) {
+    throw forbidden('You can only modify requests for your own department');
+  }
   if (!statuses.includes(r.current_status)) {
     throw conflict(statuses.length === 1
       ? 'Only draft requests can be deleted; this one has been submitted'
@@ -908,12 +911,22 @@ requestsRouter.post('/', requireRole(...REQUESTER_ROLES), async (req, res) => {
   }
   const body = createSchema.parse(req.body);
 
-  if (body.departmentId != null && req.user.departmentId != null && body.departmentId !== req.user.departmentId) {
-    throw forbidden('You can only raise requests for your own department');
-  }
-  // Automatically set or default to the requester's assigned department
-  if (body.departmentId == null && req.user.departmentId != null) {
+  if (req.user.roles.includes('HEAD')) {
+    if (!req.user.departmentId) {
+      throw forbidden('Department Head must be assigned to a department to raise requests');
+    }
+    if (body.departmentId != null && body.departmentId !== req.user.departmentId) {
+      throw forbidden('You can only raise requests for your own department');
+    }
     body.departmentId = req.user.departmentId;
+  } else {
+    if (body.departmentId != null && req.user.departmentId != null && body.departmentId !== req.user.departmentId) {
+      throw forbidden('You can only raise requests for your own department');
+    }
+    // Automatically set or default to the requester's assigned department
+    if (body.departmentId == null && req.user.departmentId != null) {
+      body.departmentId = req.user.departmentId;
+    }
   }
 
   const detail = await withUser(req.user.id, async (db) => {
@@ -972,6 +985,9 @@ requestsRouter.patch('/:id', async (req, res) => {
     if (req.user.departmentId != null && body.departmentId !== req.user.departmentId) {
       throw forbidden('You cannot assign a request to a different department');
     }
+  }
+  if (req.user.roles.includes('HEAD') && body.departmentId !== undefined && body.departmentId !== req.user.departmentId) {
+    throw forbidden('Department Head cannot reassign request to a different department');
   }
 
   const detail = await withUser(req.user.id, async (db) => {
