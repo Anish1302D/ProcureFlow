@@ -45,7 +45,7 @@ export function normalizeConfidence(val) {
 /**
  * Generates advisory writing improvements for a procurement request.
  *
- * @param {object} request
+ * @param {object} [request]
  * @param {string} [request.title]
  * @param {string} [request.description]
  * @param {string|number} [request.budgetHeadName]
@@ -57,18 +57,19 @@ export function normalizeConfidence(val) {
  * @param {object} [options.localPipeline] Optional pre-loaded ML pipeline
  * @returns {Promise<object>} Structured advisory suggestions
  */
-export async function analyzeRequestText(request = {}, options = {}) {
-  const { existingRequests = [], localPipeline = null } = options;
+export async function analyzeRequestText(request, options = {}) {
+  const safeReq = request || {};
+  const { existingRequests = [], localPipeline = null } = options || {};
 
   const suggestions = [];
 
   // Safe string coercion and length clamping to prevent resource exhaustion attacks
-  const rawTitle = String(request.title ?? '').slice(0, 500).trim();
-  const rawDescription = String(request.description ?? '').slice(0, 5000).trim();
-  const rawUrgency = String(request.urgency ?? 'Medium').trim();
-  const rawHeadName = String(request.budgetHeadName ?? 'Departmental Budget').trim();
-  const rawItems = Array.isArray(request.items) ? request.items.slice(0, 50) : [];
-  const totalAmount = Number(request.totalAmount) || 0;
+  const rawTitle = String(safeReq.title ?? '').slice(0, 500).trim();
+  const rawDescription = String(safeReq.description ?? '').slice(0, 5000).trim();
+  const rawUrgency = String(safeReq.urgency ?? 'Medium').trim();
+  const rawHeadName = String(safeReq.budgetHeadName ?? 'Departmental Budget').trim();
+  const rawItems = Array.isArray(safeReq.items) ? safeReq.items.slice(0, 50) : [];
+  const totalAmount = Number(safeReq.totalAmount) || 0;
 
   // 1. Title Quality Analysis
   if (rawTitle) {
@@ -103,24 +104,24 @@ export async function analyzeRequestText(request = {}, options = {}) {
   if (rawDescription) {
     const descLower = rawDescription.toLowerCase();
     const hasAcademicContext = /student|curriculum|syllabus|practical|experiment|lab|research|teaching|faculty|course/i.test(descLower);
-    const hasUrgencyExplanation = /urgent|emergency|replace|broken|damage|deadline|inspection/i.test(descLower);
+    const hasUrgencyExplanation = /urgent|emergency|replace|broken|damage|deadline|inspection|schedule/i.test(descLower);
     const isUrgent = rawUrgency.toLowerCase() === 'high' || rawUrgency.toLowerCase() === 'critical';
 
-    if (!hasAcademicContext && rawDescription.length < 120) {
-      const enrichedJustification = `${rawDescription} These items are required to support upcoming practical sessions and curriculum requirements, ensuring uninterrupted coursework for students.`;
-      suggestions.push({
-        type: SUGGESTION_TYPES.JUSTIFICATION,
-        message: 'Approvers look for curriculum or operational relevance. Consider clarifying how this procurement supports academic coursework or departmental functions.',
-        suggestedText: enrichedJustification,
-        confidence: 0.80,
-      });
-    } else if (isUrgent && !hasUrgencyExplanation) {
+    if (isUrgent && !hasUrgencyExplanation) {
       const urgentJustification = `${rawDescription} High urgency: immediate procurement is required to prevent disruption to ongoing laboratory schedules.`;
       suggestions.push({
         type: SUGGESTION_TYPES.JUSTIFICATION,
         message: 'This request is marked with high urgency, but the justification does not state the operational deadline or impact of delay.',
         suggestedText: urgentJustification,
         confidence: 0.88,
+      });
+    } else if (!hasAcademicContext && rawDescription.length < 120) {
+      const enrichedJustification = `${rawDescription} These items are required to support upcoming practical sessions and curriculum requirements, ensuring uninterrupted coursework for students.`;
+      suggestions.push({
+        type: SUGGESTION_TYPES.JUSTIFICATION,
+        message: 'Approvers look for curriculum or operational relevance. Consider clarifying how this procurement supports academic coursework or departmental functions.',
+        suggestedText: enrichedJustification,
+        confidence: 0.80,
       });
     }
   }
@@ -168,7 +169,7 @@ export async function analyzeRequestText(request = {}, options = {}) {
       const currentVector = Array.from(output.data);
 
       for (const prior of existingRequests.slice(0, 20)) {
-        if (!prior.title || prior.id === request.id) continue;
+        if (!prior.title || prior.id === safeReq.id) continue;
         const priorOutput = await localPipeline(prior.title, { pooling: 'mean', normalize: true });
         const sim = cosineSimilarity(currentVector, Array.from(priorOutput.data));
         if (sim >= 0.82) {
