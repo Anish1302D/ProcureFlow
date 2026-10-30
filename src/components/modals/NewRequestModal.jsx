@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, Paperclip, Plus, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowRight, Paperclip, Plus, Trash2, X } from 'lucide-react';
 import { api, qs } from '../../api/client';
 import { money } from '../../api/format';
 import { useApp } from '../../context/AppContext';
@@ -116,6 +116,37 @@ export const NewRequestModal = () => {
   ), [stages.data, total]);
 
   const catalogueItems = catalogue.data ?? [];
+
+  // Dynamic departmental budget limit calculation
+  const budgetValidation = useMemo(() => {
+    if (!deptIdForBudget || budgetContext.isLoading) {
+      return { isValid: true, excessAmount: 0 };
+    }
+    if (!budgetContext.data) {
+      return {
+        isValid: false,
+        reason: 'NO_PROVISION',
+        excessAmount: 0,
+        error: 'No budget provision has been declared for this department for the selected financial year.',
+      };
+    }
+    const remaining = Number(budgetContext.data.remainingAmount ?? 0);
+    const excess = Math.max(0, Math.round((total - remaining) * 100) / 100);
+    if (excess > 0) {
+      return {
+        isValid: false,
+        reason: 'BUDGET_EXCEEDED',
+        excessAmount: excess,
+        remainingAmount: remaining,
+        error: `Request exceeds the available departmental budget by ${money(excess)}. Maximum permitted amount: ${money(remaining)}.`,
+      };
+    }
+    return {
+      isValid: true,
+      excessAmount: 0,
+      remainingAmount: remaining,
+    };
+  }, [deptIdForBudget, budgetContext.isLoading, budgetContext.data, total]);
   const itemById = new Map(catalogueItems.map((i) => [String(i.id), i]));
   const chosen = filled.map((l) => l.budgetItemId).filter(Boolean);
 
@@ -491,6 +522,21 @@ export const NewRequestModal = () => {
               <ArrowRight className="w-3.5 h-3.5 text-indigo-500" />
               At this amount the request goes first to <strong className="text-gray-900">{route.name}</strong>.
             </p>
+          )}
+
+          {/* Dynamic Budget Overrun Warning Banner */}
+          {!budgetValidation.isValid && (
+            <div className="flex items-start gap-2.5 p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <div className="space-y-0.5">
+                <p className="font-semibold">{budgetValidation.error}</p>
+                {budgetValidation.reason === 'BUDGET_EXCEEDED' && (
+                  <p className="text-[11px] text-rose-600">
+                    Reduce quantities or estimated unit costs so the total request does not exceed the remaining balance of {money(budgetValidation.remainingAmount)}.
+                  </p>
+                )}
+              </div>
+            </div>
           )}
         </div>
 
