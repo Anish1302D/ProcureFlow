@@ -62,6 +62,24 @@ export const NewRequestModal = () => {
   const stages = useApi(open ? '/api/workflow/stages' : null);
   const catalogue = useApi(open && form.budgetHeadId && form.budgetHeadId !== 'OTHER' ? `/api/budget-heads/${form.budgetHeadId}/items` : null);
 
+  const deptIdForBudget = form.departmentId && form.departmentId !== 'OTHER'
+    ? form.departmentId
+    : (ownDept || null);
+  const headIdForBudget = form.budgetHeadId && form.budgetHeadId !== 'OTHER'
+    ? form.budgetHeadId
+    : null;
+  const fyIdForBudget = form.financialYearId || null;
+
+  const budgetContextUrl = open && deptIdForBudget
+    ? `/api/budget-context${qs({
+        departmentId: deptIdForBudget,
+        financialYearId: fyIdForBudget,
+        budgetHeadId: headIdForBudget,
+      })}`
+    : null;
+
+  const budgetContext = useApi(budgetContextUrl);
+
   // Default the financial year to the active one.
   useEffect(() => {
     const active = years.data?.find((y) => y.isActive);
@@ -335,6 +353,56 @@ export const NewRequestModal = () => {
             )}
           </div>
         </div>
+
+        {/* Departmental Budget Status Card */}
+        {deptIdForBudget && (
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                Departmental Budget Availability
+              </span>
+              {budgetContext.data?.financialYearCode && (
+                <span className="text-xs font-medium text-slate-500">
+                  FY {budgetContext.data.financialYearCode}
+                </span>
+              )}
+            </div>
+            {budgetContext.data ? (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-center">
+                <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-sm">
+                  <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Annual Provision</div>
+                  <div className="text-sm font-bold text-slate-900 tabular-nums">
+                    {money(budgetContext.data.allocatedAmount)}
+                  </div>
+                </div>
+                <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-sm">
+                  <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Utilized</div>
+                  <div className="text-sm font-bold text-emerald-700 tabular-nums">
+                    {money(budgetContext.data.utilizedAmount)}
+                  </div>
+                </div>
+                <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-sm">
+                  <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Committed (In-flight)</div>
+                  <div className="text-sm font-bold text-amber-700 tabular-nums">
+                    {money(budgetContext.data.committedAmount)}
+                  </div>
+                </div>
+                <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-sm">
+                  <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Remaining Balance</div>
+                  <div className={`text-sm font-bold tabular-nums ${budgetContext.data.remainingAmount > 0 ? 'text-indigo-700' : 'text-rose-600'}`}>
+                    {money(budgetContext.data.remainingAmount)}
+                  </div>
+                </div>
+              </div>
+            ) : budgetContext.isLoading ? (
+              <div className="text-xs text-slate-500 italic py-1">Loading budget availability…</div>
+            ) : (
+              <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2.5">
+                No approved budget provision has been declared for this department for the selected financial year.
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Line items */}
         <div className="space-y-2">

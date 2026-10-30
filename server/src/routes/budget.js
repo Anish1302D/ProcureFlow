@@ -4,6 +4,7 @@ import { requireRole } from '../auth.js';
 import { withUser } from '../db.js';
 import { forbidden, notFound } from '../errors.js';
 import { amount, intId, param } from '../validate.js';
+import { getDepartmentBudgetStatus } from '../budgetService.js';
 
 export const budgetRouter = Router();
 
@@ -164,4 +165,37 @@ budgetRouter.post('/budget-provisions', requireRole('HEAD', 'ADMIN'), async (req
   });
 
   res.status(201).json(detail);
+});
+
+// GET /api/budget-context — Query active budget status for departmental requests
+budgetRouter.get('/budget-context', async (req, res) => {
+  const { departmentId, financialYearId, budgetHeadId } = z.object({
+    departmentId: intId.optional(),
+    financialYearId: intId.optional(),
+    budgetHeadId: intId.nullable().optional(),
+  }).parse(req.query);
+
+  const targetDeptId = departmentId ?? req.user.departmentId;
+  if (!targetDeptId) {
+    return res.json(null);
+  }
+
+  const reviewerRoles = [
+    'ADMIN', 'PRINCIPAL', 'PURCHASE_COMMITTEE',
+    'CDC_GRANT_MEMBER', 'CDC_NON_GRANT_MEMBER',
+    'CHAIRMAN', 'VICE_PRESIDENT',
+  ];
+  const isReviewer = req.user.roles.some((r) => reviewerRoles.includes(r));
+  if (!isReviewer && req.user.departmentId != null && targetDeptId !== req.user.departmentId) {
+    throw forbidden('You can only view budget availability for your own department');
+  }
+
+  const status = await withUser(req.user.id, (db) => getDepartmentBudgetStatus(db, {
+    departmentId: targetDeptId,
+    financialYearId,
+    budgetHeadId,
+    forUpdate: false,
+  }));
+
+  res.json(status);
 });
