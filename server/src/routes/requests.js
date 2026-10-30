@@ -8,7 +8,7 @@ import { buildRequestStatusEmail } from '../emailTemplates.js';
 import { HttpError, conflict, forbidden, notFound, unprocessable } from '../errors.js';
 import { sendMail } from '../mailer.js';
 import { REQUESTER_ROLES } from '../roles.js';
-import { getDepartmentBudgetStatus, assertDepartmentBudgetAvailable, roundMoney } from '../budgetService.js';
+import { getDepartmentBudgetStatus, assertDepartmentBudgetAvailable, calculateItemsTotal, roundMoney } from '../budgetService.js';
 import { seal, verifySeal } from '../signing.js';
 import { removeFile } from '../storage.js';
 import {
@@ -923,20 +923,18 @@ requestsRouter.post('/', requireRole(...REQUESTER_ROLES), async (req, res) => {
     await checkItems(db, body.budgetHeadId, body.items.map((i) => i.budgetItemId));
     await checkPlacement(db, body);
 
+    let budgetStatus = null;
     if (body.departmentId != null) {
-      const budgetStatus = await getDepartmentBudgetStatus(db, {
+      budgetStatus = await getDepartmentBudgetStatus(db, {
         departmentId: body.departmentId,
         financialYearId: body.financialYearId,
         budgetHeadId: body.budgetHeadId,
         forUpdate: true,
       });
 
-      const requestedTotal = body.items.reduce(
-        (sum, item) => sum + Math.round(Number(item.quantity) * Number(item.unitCost) * 100),
-        0,
-      ) / 100;
-
-      assertDepartmentBudgetAvailable(budgetStatus, requestedTotal);
+      // Trusted server-side calculation from item quantities and unit costs
+      const serverCalculatedTotal = calculateItemsTotal(body.items);
+      assertDepartmentBudgetAvailable(budgetStatus, serverCalculatedTotal);
     }
 
     const { rows } = await db.query(

@@ -43,6 +43,23 @@ export const roundMoney = (val) => fromPaise(toPaise(val));
 export const formatInr = (val) => Math.round(Number(val ?? 0)).toLocaleString('en-IN');
 
 /**
+ * Calculates the exact line-by-line total cost of an items array using trusted server arithmetic.
+ */
+export function calculateItemsTotal(items = []) {
+  let totalPaise = 0;
+  for (const item of items) {
+    const qty = Number(item?.quantity ?? 0);
+    const unitCost = Number(item?.unitCost ?? 0);
+    if (qty > 0 && unitCost > 0) {
+      // Line total rounded to nearest paise, matching round(qty * cost, 2) in SQL
+      const linePaise = Math.round(qty * unitCost * 100);
+      totalPaise += linePaise;
+    }
+  }
+  return fromPaise(totalPaise);
+}
+
+/**
  * Categorizes a request's accounting impact based on its current status.
  * Returns { isUtilized, isCommitted, isReleased, effectiveAmount }
  */

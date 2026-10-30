@@ -10,6 +10,7 @@ import {
   getDepartmentBudgetStatus,
   computeRequestAccountingImpact,
   assertDepartmentBudgetAvailable,
+  calculateItemsTotal,
 } from '../../server/src/budgetService.js';
 
 describe('Issue #20 - Reusable Budget Service Calculations', () => {
@@ -218,4 +219,18 @@ describe('Issue #20 - Reusable Budget Service Calculations', () => {
         return true;
       }
     );
+  });
+
+
+  test('calculateItemsTotal sums line items with exact paise rounding', () => {
+    const items = [
+      { quantity: 2, unitCost: 15000.5 },
+      { quantity: 3, unitCost: 4999.25 },
+      { quantity: 0, unitCost: 100 }, // ignored
+    ];
+    // 2 * 15000.5 = 30001
+    // 3 * 4999.25 = 14997.75
+    // Total = 44998.75
+    assert.equal(calculateItemsTotal(items), 44998.75);
+    assert.equal(calculateItemsTotal([]), 0);
   });
