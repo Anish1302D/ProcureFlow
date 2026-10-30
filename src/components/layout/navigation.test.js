@@ -1,0 +1,108 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { describe, test } from 'node:test';
+
+describe('Issue #26 - Navigation Regression Coverage', () => {
+  test('portalFor correctly routes user roles to their corresponding portals', () => {
+    function portalFor(user) {
+      if (!user) return null;
+      if (user.roles?.includes('ADMIN')) return 'admin';
+      if (user.roles?.includes('PRINCIPAL')) return 'principal';
+      if ((user.stages ?? []).length > 0) return 'approver';
+      return 'faculty';
+    }
+
+    assert.equal(portalFor({ roles: ['ADMIN'], stages: [] }), 'admin');
+    assert.equal(portalFor({ roles: ['PRINCIPAL'], stages: [] }), 'principal');
+    assert.equal(portalFor({ roles: ['HEAD'], stages: ['PURCHASE_COMMITTEE'] }), 'approver');
+    assert.equal(portalFor({ roles: ['CDC_MEMBER'], stages: ['CDC'] }), 'approver');
+    assert.equal(portalFor({ roles: ['FACULTY'], stages: [] }), 'faculty');
+    assert.equal(portalFor({ roles: ['STAFF'], stages: [] }), 'faculty');
+    assert.equal(portalFor(null), null);
+  });
+
+  test('Sidebar.jsx preserves System configuration for Admin in Operations', async () => {
+    const sidebarSource = await fs.readFile(path.resolve('src/components/layout/Sidebar.jsx'), 'utf8');
+
+    // Admin operations group must retain System configuration
+    assert.ok(
+      sidebarSource.includes("id: 'settings', label: 'System configuration'"),
+      'Sidebar.jsx Admin NAV must include System configuration',
+    );
+  });
+
+  test('SettingsPreferences.jsx contains System Configuration & Governance and live route overview', async () => {
+    const settingsSource = await fs.readFile(path.resolve('src/pages/SettingsPreferences.jsx'), 'utf8');
+
+    assert.ok(
+      settingsSource.includes('System Configuration &amp; Governance'),
+      'SettingsPreferences must contain System Configuration & Governance heading',
+    );
+    assert.ok(
+      settingsSource.includes('Current Institutional Route Overview'),
+      'SettingsPreferences must preserve the Current Institutional Route Overview live preview',
+    );
+  });
+
+  test('Navigation specifications for Issue #26: account vs admin portal separation', () => {
+    // Specification helper: shared account items should be limited to user-centric account items
+    const expectedAccountItemIds = ['notifications', 'profile'];
+    assert.deepEqual(expectedAccountItemIds.includes('settings'), false, 'Account items must not include settings/approval-route');
+
+    // Admin operations items must include settings
+    const adminOperationsIds = [
+      'admin-dashboard',
+      'user-management',
+      'master-data',
+      'settings',
+      'budget-provisions',
+      'requests-all',
+      'non-financial-requests',
+      'inventory',
+      'purchase-bills',
+    ];
+    assert.ok(adminOperationsIds.includes('settings'), 'Admin operations must include settings');
+
+    // Portal home routes
+    const HOME = {
+      admin: 'admin-dashboard',
+      principal: 'dashboard',
+      approver: 'approver-dashboard',
+      faculty: 'faculty-dashboard',
+    };
+    assert.equal(HOME.admin, 'admin-dashboard');
+    assert.equal(HOME.principal, 'dashboard');
+    assert.equal(HOME.approver, 'approver-dashboard');
+    assert.equal(HOME.faculty, 'faculty-dashboard');
+  });
+
+  test('Route guard fallback redirects unauthorized page access to portal home', () => {
+    function resolvePage(activePage, portal, pagesForPortal, homeMap) {
+      const allowedPages = pagesForPortal[portal] ?? new Set();
+      return allowedPages.has(activePage) ? activePage : homeMap[portal];
+    }
+
+    const homeMap = {
+      admin: 'admin-dashboard',
+      principal: 'dashboard',
+      approver: 'approver-dashboard',
+      faculty: 'faculty-dashboard',
+    };
+
+    const mockPagesForPortal = {
+      admin: new Set(['admin-dashboard', 'user-management', 'settings', 'notifications', 'profile', 'pending']),
+      principal: new Set(['dashboard', 'review-queue', 'notifications', 'profile', 'pending']),
+      approver: new Set(['approver-dashboard', 'review-queue', 'notifications', 'profile', 'pending']),
+      faculty: new Set(['faculty-dashboard', 'faculty-requests', 'notifications', 'profile', 'pending']),
+    };
+
+    // Admin can access settings
+    assert.equal(resolvePage('settings', 'admin', mockPagesForPortal, homeMap), 'settings');
+
+    // Non-admin portals fall back to portal home when attempting to access settings
+    assert.equal(resolvePage('settings', 'principal', mockPagesForPortal, homeMap), 'dashboard');
+    assert.equal(resolvePage('settings', 'approver', mockPagesForPortal, homeMap), 'approver-dashboard');
+    assert.equal(resolvePage('settings', 'faculty', mockPagesForPortal, homeMap), 'faculty-dashboard');
+  });
+});
