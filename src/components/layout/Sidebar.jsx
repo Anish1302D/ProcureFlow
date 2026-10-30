@@ -3,9 +3,9 @@ import { LogOut } from 'lucide-react';
 import { initials, roleLabel } from '../../api/format';
 import { useApp } from '../../context/AppContext';
 import { useApi } from '../../hooks/useApi';
-import { ACCOUNT, NAV, pagesFor } from './navigation';
+import { ACCOUNT, NAV, canAccessPage, pagesFor } from './navigation';
 
-export { ACCOUNT, NAV, pagesFor };
+export { ACCOUNT, NAV, canAccessPage, pagesFor };
 
 export const Sidebar = ({ isOpen, closeSidebar }) => {
   const { user, portal, activePage, setActivePage, signOut } = useApp();

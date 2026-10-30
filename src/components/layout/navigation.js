@@ -102,3 +102,9 @@ export function pagesFor(portal) {
   const ids = [...(NAV[portal] ?? []), ACCOUNT].flatMap((g) => g.items.map((i) => i.id));
   return new Set([...ids, 'pending']);
 }
+
+/** Decides whether a given page is permitted for the user's active portal. */
+export function canAccessPage(portal, pageId) {
+  if (!portal || !pageId) return false;
+  return pagesFor(portal).has(pageId);
+}

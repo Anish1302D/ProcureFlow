@@ -32,14 +32,14 @@ describe('Issue #26 - Navigation Regression Coverage', () => {
       'navigation.js Admin NAV must include System configuration',
     );
 
-    // Sidebar.jsx must import and re-export NAV and ACCOUNT
+    // Sidebar.jsx must import and re-export NAV, ACCOUNT, and canAccessPage
     assert.ok(
-      sidebarSource.includes("import { ACCOUNT, NAV, pagesFor } from './navigation'"),
-      'Sidebar.jsx must import centralized navigation definitions',
+      sidebarSource.includes("import { ACCOUNT, NAV, canAccessPage, pagesFor } from './navigation'"),
+      'Sidebar.jsx must import centralized navigation definitions and canAccessPage',
     );
     assert.ok(
-      sidebarSource.includes('export { ACCOUNT, NAV, pagesFor }'),
-      'Sidebar.jsx must re-export NAV, ACCOUNT, and pagesFor for backwards compatibility',
+      sidebarSource.includes('export { ACCOUNT, NAV, canAccessPage, pagesFor }'),
+      'Sidebar.jsx must re-export NAV, ACCOUNT, canAccessPage, and pagesFor for backwards compatibility',
     );
   });
 
@@ -71,6 +71,30 @@ describe('Issue #26 - Navigation Regression Coverage', () => {
 
     assert.ok(!accountDef.includes('Approval route'), 'ACCOUNT must not contain "Approval route"');
     assert.ok(!accountDef.includes("id: 'settings'"), 'ACCOUNT must not contain id: "settings"');
+  });
+
+  test('canAccessPage aligns navigation permissions strictly with user roles', async () => {
+    // Dynamic import of navigation helper functions
+    const { canAccessPage, pagesFor } = await import('./navigation.js');
+
+    // Admin can access settings (System configuration)
+    assert.equal(canAccessPage('admin', 'settings'), true, 'Admin portal must be allowed to access settings');
+    assert.ok(pagesFor('admin').has('settings'), 'pagesFor("admin") must contain settings');
+
+    // Non-admin portals must NOT be allowed to access settings
+    assert.equal(canAccessPage('principal', 'settings'), false, 'Principal portal must NOT access settings');
+    assert.equal(canAccessPage('approver', 'settings'), false, 'Approver portal must NOT access settings');
+    assert.equal(canAccessPage('faculty', 'settings'), false, 'Faculty portal must NOT access settings');
+    assert.equal(canAccessPage(null, 'settings'), false, 'Null portal must NOT access settings');
+    assert.equal(canAccessPage('admin', null), false, 'Null page must return false');
+
+    // Shared pages accessible to all portals
+    const sharedPages = ['notifications', 'profile', 'pending'];
+    for (const portal of ['admin', 'principal', 'approver', 'faculty']) {
+      for (const p of sharedPages) {
+        assert.equal(canAccessPage(portal, p), true, `${portal} should be able to access shared page ${p}`);
+      }
+    }
   });
 
   test('SettingsPreferences.jsx contains System Configuration & Governance and live route overview', async () => {
