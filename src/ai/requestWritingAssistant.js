@@ -18,18 +18,17 @@ export const SUGGESTION_TYPES = Object.freeze({
 });
 
 /**
- * Escapes HTML characters to prevent XSS vulnerability in rendered suggestions.
+ * Sanitizes text by stripping HTML tags and control characters to prevent markup injection
+ * while preserving human-readable quotes, ampersands, and punctuation.
  * @param {string} str
- * @returns {string} Sanitized string
+ * @returns {string} Clean, safe plain text
  */
 export function sanitizeText(str) {
   if (typeof str !== 'string') return '';
   return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F]/g, '');
 }
 
 /**
@@ -145,15 +144,15 @@ export async function analyzeRequestText(request, options = {}) {
       if (titleLower.includes('computer') || titleLower === 'pc') {
         refinedTitle = `Procurement of Desktop Computers${deptSuffix || ' for Academic Labs'}`;
       } else if (titleLower.includes('laptop')) {
-        refinedTitle = `Procurement of Laptops for Academic & Faculty Use${deptSuffix}`;
+        refinedTitle = `Procurement of Laptops for Academic and Faculty Use${deptSuffix}`;
       } else if (titleLower.includes('printer')) {
         refinedTitle = `Procurement of Network Laser Printers${deptSuffix}`;
       } else if (titleLower.includes('projector')) {
         refinedTitle = `Procurement of Multimedia Projectors for Classrooms${deptSuffix}`;
       } else if (titleLower.includes('furniture') || titleLower.includes('chair') || titleLower.includes('table')) {
-        refinedTitle = `Procurement of Institutional Furniture & Seating${deptSuffix}`;
+        refinedTitle = `Procurement of Institutional Furniture and Seating${deptSuffix}`;
       } else if (titleLower.includes('book')) {
-        refinedTitle = `Procurement of Reference Books & Course Materials${deptSuffix}`;
+        refinedTitle = `Procurement of Reference Books and Course Materials${deptSuffix}`;
       } else if (rawItems.length > 0 && (rawItems[0].name || rawItems[0].customItemName)) {
         const itemPrimary = rawItems[0].name || rawItems[0].customItemName;
         refinedTitle = `Procurement of ${toTitleCase(itemPrimary)}${deptSuffix}`;
