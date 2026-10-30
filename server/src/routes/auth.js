@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
-import { issueToken, requireAuth } from '../auth.js';
+import { issueToken, requireAuth, requireRole } from '../auth.js';
 import { anonQuery, withUser } from '../db.js';
 import { HttpError } from '../errors.js';
 import {
@@ -320,7 +320,7 @@ const changePasswordSchema = z
     path: ['newPassword'],
   });
 
-authRouter.post('/change-password', requireAuth, changePasswordLimiter, async (req, res) => {
+authRouter.post('/change-password', requireAuth, requireRole('ADMIN'), changePasswordLimiter, async (req, res) => {
   const { currentPassword, newPassword } = changePasswordSchema.parse(req.body);
 
   const { rows } = await anonQuery(
