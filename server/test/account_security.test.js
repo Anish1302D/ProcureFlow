@@ -557,7 +557,7 @@ test('a role added to the policy must enrol at its next sign-in, and secrets are
 });
 
 test('people in roles that do not require it sign in with their password', async () => {
-  const res = await t.api('POST', '/api/auth/login', { body: { email: 'incharge@spcollege.edu', password: 'violet-harbour-lantern-42' } });
+  const res = await t.api('POST', '/api/auth/login', { body: { email: 'incharge@spcollege.edu', password: PASSWORD } });
   assert.ok(res.body.token);
   assert.equal(res.body.mfa, undefined);
 });
@@ -589,7 +589,7 @@ test('the signed-in profile says whether 2-step verification is on, never the se
   assert.equal(admin.mfa.enabled, true);
   assert.ok(admin.mfa.enabledAt);
   assert.doesNotMatch(JSON.stringify(admin), /mfa_secret|v1:/);
-  const requester = await t.login('incharge@spcollege.edu', 'violet-harbour-lantern-42');
+  const requester = await t.login('incharge@spcollege.edu', PASSWORD);
   const plain = expectStatus(await t.api('GET', '/api/auth/me', { token: requester }), 200);
   assert.equal(plain.mfa.enabled, false);
 });
