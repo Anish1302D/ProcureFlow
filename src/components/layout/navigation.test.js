@@ -43,6 +43,24 @@ describe('Issue #26 - Navigation Regression Coverage', () => {
     );
   });
 
+  test('Admin navigation has exactly one System configuration entry and zero duplicate settings items', async () => {
+    const navSource = await fs.readFile(path.resolve('src/components/layout/navigation.js'), 'utf8');
+
+    // Extract admin group items
+    const adminBlockMatch = navSource.match(/admin:\s*\[([\s\S]*?)\n\s*\],/);
+    assert.ok(adminBlockMatch, 'navigation.js must define admin navigation');
+    const adminBlock = adminBlockMatch[1];
+
+    const settingsMatches = adminBlock.match(/id:\s*['"]settings['"]/g) || [];
+    assert.equal(settingsMatches.length, 1, 'Admin NAV must have exactly one settings item');
+
+    // PAGE_TITLES settings entry must be 'System configuration'
+    assert.ok(
+      navSource.includes("settings: 'System configuration'"),
+      "PAGE_TITLES must map settings to 'System configuration'",
+    );
+  });
+
   test('Account navigation definitions strictly exclude Approval route and settings', async () => {
     const navSource = await fs.readFile(path.resolve('src/components/layout/navigation.js'), 'utf8');
 

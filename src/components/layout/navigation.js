@@ -93,7 +93,7 @@ export const PAGE_TITLES = {
   'audit-history': 'Audit log',
   notifications: 'Notifications',
   profile: 'Profile',
-  settings: 'Approval route',
+  settings: 'System configuration',
   pending: 'Pending over 3 days',
 };
 
