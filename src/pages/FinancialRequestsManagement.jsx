@@ -34,7 +34,7 @@ export const FinancialRequestsManagement = () => {
           <h2 className="text-xl font-extrabold text-gray-900">Requests</h2>
           <p className="text-xs text-gray-500">Everything your role can see, newest activity first.</p>
         </div>
-        {user.can.raiseRequests && (
+        {user.can?.raiseRequests && !user.roles?.includes('ADMIN') && (
           <button onClick={() => openModal('newRequest')} className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold self-start">
             New request
           </button>

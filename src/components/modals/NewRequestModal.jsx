@@ -44,6 +44,8 @@ const otherItem = (catalogue) => catalogue.find((i) => isOther(i.code));
 
 export const NewRequestModal = () => {
   const { user, modals, closeModal, showToast, refresh, openRecord } = useApp();
+  const isAdmin = Boolean(user?.roles?.includes('ADMIN'));
+  if (isAdmin) return null;
   const open = modals.newRequest;
   // A requester the admin has placed in a department (an HOD) raises requests
   // for that department only; the server rejects any other.
