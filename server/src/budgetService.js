@@ -73,11 +73,23 @@ export function validateBudgetForRequest(budgetStatus, requestedTotal) {
 
 /**
  * Fetches the active departmental budget status from the database.
+ * If financialYearId is omitted, resolves the active financial year.
  * If forUpdate is true, places a row-level lock on the budget_provisions record
  * to serialize concurrent submissions and prevent race conditions.
  */
 export async function getDepartmentBudgetStatus(db, { departmentId, financialYearId, budgetHeadId, forUpdate = false }) {
-  if (!departmentId || !financialYearId) return null;
+  if (!departmentId) return null;
+
+  let fyId = financialYearId ? Number(financialYearId) : null;
+  if (!fyId) {
+    const { rows: fyRows } = await db.query(
+      'SELECT financial_year_id FROM financial_years WHERE is_active LIMIT 1',
+    );
+    fyId = fyRows[0]?.financial_year_id ?? null;
+  }
+  if (!fyId) return null;
+
+  const targetHeadId = budgetHeadId != null ? Number(budgetHeadId) : null;
 
   // 1. Resolve applicable provision matching stored procedure logic:
   // specific budget_head_id first, falling back to department-wide (null)
@@ -89,7 +101,7 @@ export async function getDepartmentBudgetStatus(db, { departmentId, financialYea
         AND ($3::int IS NULL OR budget_head_id = $3 OR budget_head_id IS NULL)
       ORDER BY budget_head_id NULLS LAST
       LIMIT 1`,
-    [departmentId, financialYearId, budgetHeadId ?? null],
+    [Number(departmentId), fyId, targetHeadId],
   );
 
   const provision = provRows[0];

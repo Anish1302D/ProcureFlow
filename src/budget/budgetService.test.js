@@ -77,3 +77,59 @@ describe('Issue #20 - Reusable Budget Service Calculations', () => {
     );
   });
 });
+
+
+  test('getDepartmentBudgetStatus resolves active financial year when omitted', async () => {
+    let queriedQueries = [];
+    const mockDb = {
+      async query(sql, params) {
+        queriedQueries.push({ sql, params });
+        if (sql.includes('FROM financial_years WHERE is_active')) {
+          return { rows: [{ financial_year_id: 101 }] };
+        }
+        if (sql.includes('FROM budget_provisions')) {
+          return {
+            rows: [
+              {
+                budget_provision_id: 'bp-uuid-1',
+                department_id: 5,
+                financial_year_id: 101,
+                budget_head_id: 2,
+                allocated_amount: 450000,
+              },
+            ],
+          };
+        }
+        if (sql.includes('FROM v_department_budget_summary')) {
+          return {
+            rows: [
+              {
+                budget_provision_id: 'bp-uuid-1',
+                department_id: 5,
+                financial_year_id: 101,
+                budget_head_id: 2,
+                allocated_amount: '450000.00',
+                utilized_amount: '150000.00',
+                committed_amount: '50000.00',
+                remaining_amount: '250000.00',
+                available_amount: '300000.00',
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      },
+    };
+
+    const status = await (await import('../../server/src/budgetService.js')).getDepartmentBudgetStatus(
+      mockDb,
+      { departmentId: 5, budgetHeadId: 2 }
+    );
+
+    assert.ok(status, 'Must resolve status');
+    assert.equal(status.departmentId, 5);
+    assert.equal(status.financialYearId, 101);
+    assert.equal(status.allocatedAmount, 450000);
+    assert.equal(status.remainingAmount, 250000);
+    assert.equal(queriedQueries.some((q) => q.sql.includes('FROM financial_years WHERE is_active')), true);
+  });
