@@ -77,9 +77,19 @@ export const Login = () => {
 
       <div className="w-full max-w-md mx-auto my-12 space-y-6">
         <div className="text-center space-y-1.5">
-          <h2 className="text-2xl font-extrabold text-gray-900">{mfa ? '2-step verification' : 'Sign in'}</h2>
+          <h2 className="text-2xl font-extrabold text-gray-900">
+            {mfa
+              ? mfa.step === 'enrol'
+                ? 'Set up 2-step verification'
+                : '2-step verification'
+              : 'Sign in'}
+          </h2>
           <p className="text-sm text-gray-500">
-            Use the email address your invitation was sent to. What you see depends on your role.
+            {mfa
+              ? mfa.step === 'enrol'
+                ? 'Complete this one-time setup to secure your account and approvals.'
+                : 'Enter your 6-digit authenticator code or emergency recovery code.'
+              : 'Use the email address your invitation was sent to. What you see depends on your role.'}
           </p>
         </div>
 

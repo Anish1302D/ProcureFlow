@@ -1,3 +1,4 @@
+import QRCode from 'qrcode';
 import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
@@ -162,7 +163,8 @@ async function secondStepFor(userId) {
   );
   if (u?.enabled) return 'verify';
   const required = await configService.get('auth.mfa_required_roles');
-  return u?.roles?.some((r) => required.includes(r)) ? 'enrol' : null;
+  const allRolesRequired = Array.isArray(required) && (required.includes('*') || required.includes('ALL') || required.includes('all'));
+  return (allRolesRequired || u?.roles?.some((r) => required.includes(r))) ? 'enrol' : null;
 }
 
 authRouter.post('/login', loginIpLimiter, loginLimiter, async (req, res) => {
@@ -577,7 +579,21 @@ authRouter.post('/mfa/setup/start', loginIpLimiter, mfaLimiter, async (req, res)
   await anonQuery('UPDATE users SET mfa_pending_secret_enc = $2 WHERE user_id = $1', [account.user_id, encryptSecret(secret)]);
   let issuer = 'Approval hub';
   try { issuer = (await configService.get('institution.name')) || issuer; } catch { /* default */ }
-  res.json({ secret, issuer, account: account.email, otpauthUri: otpauthUri({ secret, account: account.email, issuer }) });
+  const uri = otpauthUri({ secret, account: account.email, issuer });
+  let qrCode = null;
+  try {
+    qrCode = await QRCode.toDataURL(uri, {
+      margin: 2,
+      width: 240,
+      color: {
+        dark: '#1e1b4b',
+        light: '#ffffff',
+      },
+    });
+  } catch (err) {
+    console.error('[mfa] QR code generation error:', err);
+  }
+  res.json({ secret, issuer, account: account.email, otpauthUri: uri, qrCode });
 });
 
 function conflictTwoStep() {

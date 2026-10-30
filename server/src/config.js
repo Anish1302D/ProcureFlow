@@ -74,6 +74,11 @@ function mailTransport() {
 function mfaKey() {
   const raw = (process.env.MFA_ENCRYPTION_KEY ?? '').trim();
   if (!raw) {
+    const fallbackSecret = (process.env.SIGNING_SECRET ?? process.env.JWT_SECRET ?? '').trim();
+    if (fallbackSecret && fallbackSecret.length >= 32) {
+      console.warn('[config] MFA_ENCRYPTION_KEY not set; using a stable 32-byte key derived from SIGNING_SECRET.');
+      return crypto.createHmac('sha256', fallbackSecret).update('spc-mfa-encryption-key-seed').digest();
+    }
     if (isProduction) {
       console.error('[config] MFA_ENCRYPTION_KEY is not set: 2-step verification is unavailable.');
       return null;

@@ -30,8 +30,8 @@ export const CONFIG_SCHEMAS = {
   'auth.lockout_threshold': z.number().int().min(3).max(20),
   'auth.lockout_minutes': z.number().int().min(5).max(1440),
   // Roles that must use 2-step verification. ADMIN is always among them.
-  'auth.mfa_required_roles': z.array(z.string().trim().min(1).max(50)).max(20)
-    .refine((roles) => roles.includes('ADMIN'), 'ADMIN must always require 2-step verification'),
+  'auth.mfa_required_roles': z.array(z.string().trim().min(1).max(50)).max(30)
+    .refine((roles) => roles.includes('ADMIN') || roles.includes('*') || roles.includes('ALL'), 'ADMIN (or ALL / *) must require 2-step verification'),
   // Empty list = every email domain may be invited.
   'auth.allowed_email_domains': z.array(
     z.string().trim().toLowerCase().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/, 'Must be a domain such as example.edu'),
@@ -63,7 +63,7 @@ export const DEFAULT_CONFIGS = {
   'auth.reset_requests_per_hour': 3,
   'auth.lockout_threshold': 5,
   'auth.lockout_minutes': 15,
-  'auth.mfa_required_roles': ['ADMIN'],
+  'auth.mfa_required_roles': ['ADMIN', 'ALL'],
   'auth.allowed_email_domains': [],
 };
 
