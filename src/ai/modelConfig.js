@@ -20,3 +20,4 @@ export const LOCAL_AI_MODEL_CONFIG = Object.freeze({
 
 export const DISCLAIMER_TEXT =
   'AI-generated suggestions are advisory only and do not constitute approval, rejection, financial advice, policy interpretation, or an official institutional decision.';
+

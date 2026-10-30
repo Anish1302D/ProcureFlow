@@ -122,3 +122,4 @@ test('9. Ambiguous item description triggers specification advice', async () => 
   assert.ok(itemSug);
   assert.ok(itemSug.message.toLowerCase().includes('specification'));
 });
+

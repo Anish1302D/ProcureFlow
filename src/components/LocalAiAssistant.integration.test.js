@@ -130,3 +130,4 @@ test('Integration 6: No external network requests during local AI inference', as
     globalThis.fetch = originalFetch;
   }
 });
+

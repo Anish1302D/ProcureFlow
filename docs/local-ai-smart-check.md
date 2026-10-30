@@ -116,3 +116,4 @@ To point to another quantized model or update configuration:
 
 - **First-time Download Latency:** On slow connections, the initial 23 MB download may take a few seconds. A progress indicator informs the user. Subsequent runs use the cached weights instantly.
 - **Device Memory Constraints:** Extremely low-end mobile devices with less than 2 GB RAM may experience slower WebAssembly inference. In such cases, the fallback heuristic engine guarantees suggestions without model overhead.
+

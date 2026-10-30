@@ -147,3 +147,4 @@ export function cosineSimilarity(a, b) {
   if (denom === 0) return 0;
   return dotProduct / denom;
 }
+

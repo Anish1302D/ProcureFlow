@@ -186,3 +186,4 @@ test('16. calculateLinePaise accurately calculates integers without floating dri
   assert.equal(calculateLinePaise(-1, 50), 0);
   assert.equal(calculateLinePaise(1, 'abc'), 0);
 });
+
