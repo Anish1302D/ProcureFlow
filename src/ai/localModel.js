@@ -4,6 +4,7 @@
  * Runs strictly client-side on WebGPU / WebAssembly via Transformers.js.
  * Zero network transmission of request text.
  * Cached in memory to prevent duplicate downloads.
+ * Uses high-capacity all-mpnet-base-v2 (~438 MB) with fallback to all-MiniLM-L6-v2 (~23 MB).
  */
 
 import { LOCAL_AI_MODEL_CONFIG } from './modelConfig.js';
@@ -12,6 +13,7 @@ let cachedPipeline = null;
 let activeLoadPromise = null;
 let modelStatus = 'unloaded'; // 'unloaded' | 'loading' | 'ready' | 'error'
 let lastError = null;
+let activeModelName = LOCAL_AI_MODEL_CONFIG.name;
 
 /**
  * Checks whether the environment supports local AI execution.
@@ -35,17 +37,20 @@ export async function detectHardwareBackend() {
       const adapter = await navigator.gpu.requestAdapter();
       if (adapter) return 'webgpu';
     } catch {
-      // Fall through to wasm
+      // Fallback
     }
   }
-  return 'wasm';
+  if (typeof WebAssembly !== 'undefined') {
+    return 'wasm';
+  }
+  return 'cpu';
 }
 
 /**
- * Lazy loads and caches the browser-local model.
- * Multiple concurrent callers receive the same promise to prevent duplicate downloads.
+ * Lazy loads the browser-local transformer model with concurrency locking and caching.
+ * Attempts high-capacity MPNet (~438 MB) first; seamlessly falls back to MiniLM (~23 MB) if memory/network limits require.
  *
- * @param {Function} [onProgress] Callback receiving progress updates { status, progress }
+ * @param {Function} [onProgress] Callback receiving human-readable loading progress
  * @returns {Promise<object>} The loaded pipeline instance
  */
 export async function loadLocalModel(onProgress) {
@@ -74,19 +79,63 @@ export async function loadLocalModel(onProgress) {
 
       const backend = await detectHardwareBackend();
 
-      const pipe = await pipeline(
-        LOCAL_AI_MODEL_CONFIG.task,
-        LOCAL_AI_MODEL_CONFIG.name,
-        {
-          quantized: LOCAL_AI_MODEL_CONFIG.quantized,
-          device: backend === 'webgpu' ? 'webgpu' : 'wasm',
-          progress_callback: (progressData) => {
-            if (onProgress && typeof onProgress === 'function') {
-              onProgress(progressData);
-            }
-          },
+      const progressBridge = (progressData) => {
+        if (!onProgress || typeof onProgress !== 'function') return;
+
+        if (progressData && typeof progressData === 'object') {
+          if (progressData.status === 'progress' && progressData.total) {
+            const pct = Math.round((progressData.loaded / progressData.total) * 100);
+            const loadedMb = (progressData.loaded / (1024 * 1024)).toFixed(1);
+            const totalMb = (progressData.total / (1024 * 1024)).toFixed(1);
+            onProgress(`Loading neural weights: ${pct}% (${loadedMb}MB / ${totalMb}MB)...`);
+            return;
+          }
+          if (progressData.status === 'initiate') {
+            onProgress(`Initializing model file: ${progressData.file || 'weights'}...`);
+            return;
+          }
+          if (progressData.status === 'done') {
+            onProgress('Weights loaded into browser memory. Initializing runtime...');
+            return;
+          }
         }
-      );
+        if (typeof progressData === 'string') {
+          onProgress(progressData);
+        }
+      };
+
+      let pipe = null;
+      try {
+        if (onProgress) onProgress(`Connecting to local engine (${LOCAL_AI_MODEL_CONFIG.name})...`);
+        pipe = await pipeline(
+          LOCAL_AI_MODEL_CONFIG.task,
+          LOCAL_AI_MODEL_CONFIG.name,
+          {
+            quantized: LOCAL_AI_MODEL_CONFIG.quantized,
+            device: backend === 'webgpu' ? 'webgpu' : 'wasm',
+            progress_callback: progressBridge,
+          }
+        );
+        activeModelName = LOCAL_AI_MODEL_CONFIG.name;
+      } catch (primaryErr) {
+        // If high-capacity model fails (e.g. low memory or connection timeout during download),
+        // gracefully attempt the lightweight fallback
+        if (LOCAL_AI_MODEL_CONFIG.fallbackName) {
+          if (onProgress) onProgress(`Switching to compact model (${LOCAL_AI_MODEL_CONFIG.fallbackName})...`);
+          pipe = await pipeline(
+            LOCAL_AI_MODEL_CONFIG.task,
+            LOCAL_AI_MODEL_CONFIG.fallbackName,
+            {
+              quantized: LOCAL_AI_MODEL_CONFIG.fallbackQuantized,
+              device: backend === 'webgpu' ? 'webgpu' : 'wasm',
+              progress_callback: progressBridge,
+            }
+          );
+          activeModelName = LOCAL_AI_MODEL_CONFIG.fallbackName;
+        } else {
+          throw primaryErr;
+        }
+      }
 
       cachedPipeline = pipe;
       modelStatus = 'ready';
@@ -113,6 +162,7 @@ export function getModelStatus() {
     status: modelStatus,
     isLoaded: Boolean(cachedPipeline),
     error: lastError ? lastError.message : null,
+    activeModelName,
     config: LOCAL_AI_MODEL_CONFIG,
   };
 }
@@ -125,6 +175,7 @@ export function resetModelState() {
   activeLoadPromise = null;
   modelStatus = 'unloaded';
   lastError = null;
+  activeModelName = LOCAL_AI_MODEL_CONFIG.name;
 }
 
 /**
@@ -147,4 +198,3 @@ export function cosineSimilarity(a, b) {
   if (denom === 0) return 0;
   return dotProduct / denom;
 }
-
