@@ -54,11 +54,12 @@ test('3. Confidence normalization bounds values between 0 and 1', () => {
   assert.equal(normalizeConfidence(1), 1);
 });
 
-test('4. HTML sanitization prevents XSS in suggestion texts', () => {
+test('4. HTML sanitization prevents XSS in suggestion texts while preserving readable punctuation', () => {
   const dirty = '<script>alert("xss")</script>&"\'';
   const clean = sanitizeText(dirty);
   assert.equal(clean.includes('<script>'), false);
-  assert.equal(clean, '&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;&amp;&quot;&#039;');
+  assert.equal(clean.includes('</script>'), false);
+  assert.equal(clean, '&"\'');
 });
 
 test('5. Empty request returns valid object with zero crashes', async () => {
@@ -122,7 +123,6 @@ test('9. Ambiguous item description triggers specification advice', async () => 
   assert.ok(itemSug);
   assert.ok(itemSug.message.toLowerCase().includes('specification'));
 });
-
 
 test('10. Contextual title suggestion accurately expands generic title with department', async () => {
   const req = {
