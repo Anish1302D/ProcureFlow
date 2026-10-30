@@ -22,13 +22,24 @@ describe('Issue #26 - Navigation Regression Coverage', () => {
     assert.equal(portalFor(null), null);
   });
 
-  test('Sidebar.jsx preserves System configuration for Admin in Operations', async () => {
+  test('Navigation definitions preserve System configuration for Admin in Operations', async () => {
+    const navSource = await fs.readFile(path.resolve('src/components/layout/navigation.js'), 'utf8');
     const sidebarSource = await fs.readFile(path.resolve('src/components/layout/Sidebar.jsx'), 'utf8');
 
-    // Admin operations group must retain System configuration
+    // Admin operations group must retain System configuration in navigation definitions
     assert.ok(
-      sidebarSource.includes("id: 'settings', label: 'System configuration'"),
-      'Sidebar.jsx Admin NAV must include System configuration',
+      navSource.includes("id: 'settings', label: 'System configuration'"),
+      'navigation.js Admin NAV must include System configuration',
+    );
+
+    // Sidebar.jsx must import and re-export NAV and ACCOUNT
+    assert.ok(
+      sidebarSource.includes("import { ACCOUNT, NAV, pagesFor } from './navigation'"),
+      'Sidebar.jsx must import centralized navigation definitions',
+    );
+    assert.ok(
+      sidebarSource.includes('export { ACCOUNT, NAV, pagesFor }'),
+      'Sidebar.jsx must re-export NAV, ACCOUNT, and pagesFor for backwards compatibility',
     );
   });
 
