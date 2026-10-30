@@ -412,3 +412,17 @@ as open questions in `requirement.md` - they change the workflow and need the
 Principal's answer rather than a guess.
 
 Email sending was not touched, by instruction.
+
+
+## 2026-10-30
+
+### Prompt
+
+Issue #26: Remove Approval Route navigation.
+Eliminate the redundant Approval Route entry in shared Account navigation while preserving System Configuration in the Admin sidebar and all existing approval routing functionality. Target a 12-commit structured sequence.
+
+### Work Completed
+
+- Created and verified feature branch `feature/remove-approval-route`.
+- Audited navigation structure (`Sidebar.jsx`, `Header.jsx`, `App.jsx`, `SettingsPreferences.jsx`).
+- Established Issue #26 baseline and execution plan in `docs/plan/issue-26-remove-approval-route.md`.
