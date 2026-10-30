@@ -7,7 +7,7 @@ import { StatCard } from '../components/ui/StatCard';
 import { DataState } from '../components/ui/States';
 
 export const AdminClerkDashboard = () => {
-  const { setActivePage, openModal } = useApp();
+  const { user, setActivePage, openModal } = useApp();
   const dashboard = useApi('/api/dashboard');
   const inventory = useApi('/api/inventory?limit=1');
   const bills = useApi('/api/purchase-bills?limit=6');
