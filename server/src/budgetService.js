@@ -2,37 +2,46 @@
 // Authoritative calculation logic aligns with v_department_budget_summary
 // and fn_get_department_budget_context.
 
-/** Round a monetary figure to 2 decimal places to avoid floating point drift. */
-export const roundMoney = (val) => Math.round(Number(val ?? 0) * 100) / 100;
+/** Converts an Indian Rupee amount to integer paise to ensure exact arithmetic. */
+export const toPaise = (val) => Math.round(Number(val ?? 0) * 100);
+
+/** Converts integer paise back to Indian Rupees with 2 decimal precision. */
+export const fromPaise = (paise) => (Math.round(paise) / 100);
+
+/** Round a monetary figure to 2 decimal places using exact paise arithmetic. */
+export const roundMoney = (val) => fromPaise(toPaise(val));
 
 /** Format an Indian Rupee amount for user-facing error messages. */
 export const formatInr = (val) => Math.round(Number(val ?? 0)).toLocaleString('en-IN');
 
 /**
- * Calculates remaining and available budget amounts from allocation, utilization and commitments.
+ * Calculates remaining and available budget amounts from allocation, utilization and commitments
+ * using integer paise arithmetic to prevent floating point inaccuracies.
  */
 export function calculateRemainingBudget(allocatedAmount, { utilizedAmount = 0, committedAmount = 0 } = {}) {
-  const allocated = roundMoney(allocatedAmount);
-  const utilized = roundMoney(utilizedAmount);
-  const committed = roundMoney(committedAmount);
+  const allocPaise = toPaise(allocatedAmount);
+  const utilPaise = toPaise(utilizedAmount);
+  const commPaise = toPaise(committedAmount);
 
-  const remaining = roundMoney(allocated - (utilized + committed));
-  const available = roundMoney(allocated - utilized);
+  const remainingPaise = allocPaise - (utilPaise + commPaise);
+  const availPaise = allocPaise - utilPaise;
 
   return {
-    allocatedAmount: allocated,
-    utilizedAmount: utilized,
-    committedAmount: committed,
-    remainingAmount: remaining,
-    availableAmount: available,
+    allocatedAmount: fromPaise(allocPaise),
+    utilizedAmount: fromPaise(utilPaise),
+    committedAmount: fromPaise(commPaise),
+    remainingAmount: fromPaise(remainingPaise),
+    availableAmount: fromPaise(availPaise),
   };
 }
 
 /**
  * Validates whether a proposed request total is within the department's remaining budget.
+ * Uses exact paise comparison so requests are never falsely rejected or accepted due to rounding.
  */
 export function validateBudgetForRequest(budgetStatus, requestedTotal) {
-  const requested = roundMoney(requestedTotal);
+  const reqPaise = toPaise(requestedTotal);
+  const requested = fromPaise(reqPaise);
 
   if (!budgetStatus) {
     return {
@@ -43,9 +52,10 @@ export function validateBudgetForRequest(budgetStatus, requestedTotal) {
     };
   }
 
-  const remaining = roundMoney(budgetStatus.remainingAmount);
+  const remainingPaise = toPaise(budgetStatus.remainingAmount);
+  const remaining = fromPaise(remainingPaise);
 
-  if (requested <= remaining) {
+  if (reqPaise <= remainingPaise) {
     return {
       isValid: true,
       requestedAmount: requested,
@@ -57,7 +67,9 @@ export function validateBudgetForRequest(budgetStatus, requestedTotal) {
     };
   }
 
-  const excess = roundMoney(requested - remaining);
+  const excessPaise = reqPaise - remainingPaise;
+  const excess = fromPaise(excessPaise);
+
   return {
     isValid: false,
     reason: 'BUDGET_EXCEEDED',
@@ -127,15 +139,21 @@ export async function getDepartmentBudgetStatus(db, { departmentId, financialYea
   const summary = summaryRows[0];
   if (!summary) return null;
 
+  // Use paise-exact calculateRemainingBudget to guarantee decimal integrity
+  const exactRemaining = calculateRemainingBudget(summary.allocated_amount, {
+    utilizedAmount: summary.utilized_amount,
+    committedAmount: summary.committed_amount,
+  });
+
   return {
     budgetProvisionId: summary.budget_provision_id,
     departmentId: summary.department_id,
     financialYearId: summary.financial_year_id,
     budgetHeadId: summary.budget_head_id,
-    allocatedAmount: Number(summary.allocated_amount),
-    utilizedAmount: Number(summary.utilized_amount),
-    committedAmount: Number(summary.committed_amount),
-    remainingAmount: Number(summary.remaining_amount),
-    availableAmount: Number(summary.available_amount),
+    allocatedAmount: exactRemaining.allocatedAmount,
+    utilizedAmount: exactRemaining.utilizedAmount,
+    committedAmount: exactRemaining.committedAmount,
+    remainingAmount: exactRemaining.remainingAmount,
+    availableAmount: exactRemaining.availableAmount,
   };
 }

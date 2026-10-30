@@ -1,13 +1,23 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  toPaise,
+  fromPaise,
   roundMoney,
   formatInr,
   calculateRemainingBudget,
   validateBudgetForRequest,
+  getDepartmentBudgetStatus,
 } from '../../server/src/budgetService.js';
 
 describe('Issue #20 - Reusable Budget Service Calculations', () => {
+  test('toPaise and fromPaise handle fractional paise and avoid floating point drift', () => {
+    assert.equal(toPaise(0.1 + 0.2), 30);
+    assert.equal(fromPaise(30), 0.3);
+    assert.equal(toPaise(500000.05), 50000005);
+    assert.equal(fromPaise(50000005), 500000.05);
+  });
+
   test('roundMoney accurately handles numbers, decimals and nulls', () => {
     assert.equal(roundMoney(10.556), 10.56);
     assert.equal(roundMoney(10.554), 10.55);
@@ -21,17 +31,17 @@ describe('Issue #20 - Reusable Budget Service Calculations', () => {
     assert.equal(formatInr(1500000), '15,00,000');
   });
 
-  test('calculateRemainingBudget computes remaining and available amounts correctly', () => {
-    const res = calculateRemainingBudget(500000, {
-      utilizedAmount: 300000,
-      committedAmount: 50000,
+  test('calculateRemainingBudget computes remaining and available amounts correctly with exact decimal precision', () => {
+    const res = calculateRemainingBudget(500000.75, {
+      utilizedAmount: 300000.25,
+      committedAmount: 50000.10,
     });
 
-    assert.equal(res.allocatedAmount, 500000);
-    assert.equal(res.utilizedAmount, 300000);
-    assert.equal(res.committedAmount, 50000);
-    assert.equal(res.remainingAmount, 150000);
-    assert.equal(res.availableAmount, 200000);
+    assert.equal(res.allocatedAmount, 500000.75);
+    assert.equal(res.utilizedAmount, 300000.25);
+    assert.equal(res.committedAmount, 50000.10);
+    assert.equal(res.remainingAmount, 150000.40);
+    assert.equal(res.availableAmount, 200000.50);
   });
 
   test('validateBudgetForRequest returns valid when within budget', () => {
@@ -76,8 +86,6 @@ describe('Issue #20 - Reusable Budget Service Calculations', () => {
       'No budget provision has been declared for this department for the selected financial year.'
     );
   });
-});
-
 
   test('getDepartmentBudgetStatus resolves active financial year when omitted', async () => {
     let queriedQueries = [];
@@ -121,10 +129,10 @@ describe('Issue #20 - Reusable Budget Service Calculations', () => {
       },
     };
 
-    const status = await (await import('../../server/src/budgetService.js')).getDepartmentBudgetStatus(
-      mockDb,
-      { departmentId: 5, budgetHeadId: 2 }
-    );
+    const status = await getDepartmentBudgetStatus(mockDb, {
+      departmentId: 5,
+      budgetHeadId: 2,
+    });
 
     assert.ok(status, 'Must resolve status');
     assert.equal(status.departmentId, 5);
@@ -133,3 +141,4 @@ describe('Issue #20 - Reusable Budget Service Calculations', () => {
     assert.equal(status.remainingAmount, 250000);
     assert.equal(queriedQueries.some((q) => q.sql.includes('FROM financial_years WHERE is_active')), true);
   });
+});
