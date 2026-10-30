@@ -20,11 +20,13 @@ const ROLE_COLORS = {
 /** Who the system thinks you are — with a self-service password change form. */
 export const Profile = () => {
   const { user, showToast, signOut } = useApp();
+  const isAdmin = Boolean(user?.roles?.includes('ADMIN'));
   const [minLength, setMinLength] = useState(12);
   const [problems, setProblems] = useState([]);
   useEffect(() => {
+    if (!isAdmin) return;
     api('/api/auth/password-policy').then((r) => setMinLength(r.minLength)).catch(() => {});
-  }, []);
+  }, [isAdmin]);
   const [showPw, setShowPw] = useState(false);
   const [pw, setPw] = useState({ current: '', next: '', confirm: '' });
   const [changing, setChanging] = useState(false);
@@ -106,68 +108,70 @@ export const Profile = () => {
         </div>
       </div>
 
-      {/* Change password */}
-      <div className="bg-white rounded-2xl border border-gray-200">
-        <button
-          onClick={() => setShowPw((v) => !v)}
-          className="w-full flex items-center justify-between px-5 py-4 text-sm font-bold text-gray-800 hover:bg-gray-50 rounded-2xl transition-colors"
-        >
-          <span className="flex items-center gap-2"><KeyRound className="w-4 h-4 text-indigo-500" /> Change password</span>
-          <span className="text-xs text-gray-400 font-normal">{showPw ? 'Hide' : 'Expand'}</span>
-        </button>
+      {/* Change password (Admin only) */}
+      {isAdmin && (
+        <div className="bg-white rounded-2xl border border-gray-200">
+          <button
+            onClick={() => setShowPw((v) => !v)}
+            className="w-full flex items-center justify-between px-5 py-4 text-sm font-bold text-gray-800 hover:bg-gray-50 rounded-2xl transition-colors"
+          >
+            <span className="flex items-center gap-2"><KeyRound className="w-4 h-4 text-indigo-500" /> Change password</span>
+            <span className="text-xs text-gray-400 font-normal">{showPw ? 'Hide' : 'Expand'}</span>
+          </button>
 
-        {showPw && (
-          <div className="px-5 pb-5 space-y-3 border-t border-gray-100 pt-4">
-            {/* Current password */}
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Current password</label>
-              <div className="relative">
-                <input type={show.current ? 'text' : 'password'} className={inputCls}
-                  placeholder="Your current password"
-                  value={pw.current} onChange={(e) => setPw((p) => ({ ...p, current: e.target.value }))} />
-                <button type="button" onClick={() => setShow((s) => ({ ...s, current: !s.current }))}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                  {show.current ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          {showPw && (
+            <div className="px-5 pb-5 space-y-3 border-t border-gray-100 pt-4">
+              {/* Current password */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Current password</label>
+                <div className="relative">
+                  <input type={show.current ? 'text' : 'password'} className={inputCls}
+                    placeholder="Your current password"
+                    value={pw.current} onChange={(e) => setPw((p) => ({ ...p, current: e.target.value }))} />
+                  <button type="button" onClick={() => setShow((s) => ({ ...s, current: !s.current }))}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                    {show.current ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+              {/* New password */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">New password (at least {minLength} characters)</label>
+                <div className="relative">
+                  <input type={show.next ? 'text' : 'password'} className={inputCls}
+                    placeholder={`At least ${minLength} characters`}
+                    value={pw.next} onChange={(e) => setPw((p) => ({ ...p, next: e.target.value }))} />
+                  <button type="button" onClick={() => setShow((s) => ({ ...s, next: !s.next }))}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                    {show.next ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+              {/* Confirm */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Confirm new password</label>
+                <input type="password" className={inputCls.replace(' pr-10', '')}
+                  placeholder="Repeat the new password"
+                  value={pw.confirm} onChange={(e) => setPw((p) => ({ ...p, confirm: e.target.value }))} />
+              </div>
+              {problems.length > 0 && (
+                <ul role="alert" className="rounded-lg bg-red-50 border border-red-100 p-3 space-y-1 text-xs text-red-700">
+                  {problems.map((p) => <li key={p}>{p}</li>)}
+                </ul>
+              )}
+              <p className="text-[11px] text-gray-500">Changing your password signs you out everywhere, including here.</p>
+              <div className="flex justify-end gap-3 pt-1">
+                <button onClick={() => { setShowPw(false); setPw({ current: '', next: '', confirm: '' }); setProblems([]); }}
+                  className="px-4 py-2 rounded-lg text-sm text-gray-500 hover:bg-gray-100">Cancel</button>
+                <button onClick={changePassword} disabled={changing}
+                  className="px-5 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 flex items-center gap-2">
+                  {changing && <Loader2 className="w-3.5 h-3.5 animate-spin" />} Update password
                 </button>
               </div>
             </div>
-            {/* New password */}
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">New password (at least {minLength} characters)</label>
-              <div className="relative">
-                <input type={show.next ? 'text' : 'password'} className={inputCls}
-                  placeholder={`At least ${minLength} characters`}
-                  value={pw.next} onChange={(e) => setPw((p) => ({ ...p, next: e.target.value }))} />
-                <button type="button" onClick={() => setShow((s) => ({ ...s, next: !s.next }))}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                  {show.next ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
-            {/* Confirm */}
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Confirm new password</label>
-              <input type="password" className={inputCls.replace(' pr-10', '')}
-                placeholder="Repeat the new password"
-                value={pw.confirm} onChange={(e) => setPw((p) => ({ ...p, confirm: e.target.value }))} />
-            </div>
-            {problems.length > 0 && (
-              <ul role="alert" className="rounded-lg bg-red-50 border border-red-100 p-3 space-y-1 text-xs text-red-700">
-                {problems.map((p) => <li key={p}>{p}</li>)}
-              </ul>
-            )}
-            <p className="text-[11px] text-gray-500">Changing your password signs you out everywhere, including here.</p>
-            <div className="flex justify-end gap-3 pt-1">
-              <button onClick={() => { setShowPw(false); setPw({ current: '', next: '', confirm: '' }); setProblems([]); }}
-                className="px-4 py-2 rounded-lg text-sm text-gray-500 hover:bg-gray-100">Cancel</button>
-              <button onClick={changePassword} disabled={changing}
-                className="px-5 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 flex items-center gap-2">
-                {changing && <Loader2 className="w-3.5 h-3.5 animate-spin" />} Update password
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
       {user.mfa?.enabled && <TwoStepCard since={user.mfa.enabledAt} />}
 

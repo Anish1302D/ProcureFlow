@@ -888,3 +888,79 @@ test('SECURITY: Authentication service fails safely with 503 MIGRATION_REQUIRED 
   assert.equal(caughtError.status, 503);
   assert.equal(caughtError.code, 'MIGRATION_REQUIRED');
 });
+
+// ============================================================================
+// 12. ISSUE #29: CHANGE PASSWORD RESTRICTED TO ADMIN ONLY
+// ============================================================================
+
+test('ISSUE #29 / SECURITY: POST /api/auth/change-password endpoint requires ADMIN role and rejects all non-admin roles with 403', async () => {
+  const authRoutesCode = await fs.readFile(path.resolve('src/routes/auth.js'), 'utf8');
+  assert.match(
+    authRoutesCode,
+    /authRouter\.post\(\s*['"]\/change-password['"],\s*requireAuth,\s*requireRole\(['"]ADMIN['"]\)/,
+    'change-password endpoint must enforce requireRole("ADMIN") after requireAuth',
+  );
+
+  const nonAdminRoles = [
+    'PRINCIPAL',
+    'HEAD',
+    'PURCHASE_COMMITTEE',
+    'CDC_MEMBER',
+    'CDC_GRANT_MEMBER',
+    'CDC_NON_GRANT_MEMBER',
+    'CHAIRMAN',
+    'VICE_PRESIDENT',
+    'ACTIVITY_INCHARGE',
+    'FACULTY',
+    'STAFF',
+    'STUDENT',
+  ];
+
+  const adminRoleCheck = requireRole('ADMIN');
+
+  for (const role of nonAdminRoles) {
+    const nonAdminUser = { id: `user-${role.toLowerCase()}`, roles: [role] };
+    assert.throws(
+      () => adminRoleCheck({ user: nonAdminUser }, {}, () => {}),
+      (err) => err instanceof HttpError && err.status === 403 && err.message === 'Your role does not allow this',
+      `Role ${role} must be rejected with HTTP 403`,
+    );
+  }
+
+  // Multi-role user without ADMIN
+  assert.throws(
+    () => adminRoleCheck({ user: { id: 'multi-non-admin', roles: ['HEAD', 'ACTIVITY_INCHARGE'] } }, {}, () => {}),
+    (err) => err instanceof HttpError && err.status === 403 && err.message === 'Your role does not allow this',
+  );
+
+  // User with ADMIN role alone
+  let adminPassed = false;
+  adminRoleCheck({ user: { id: 'admin-1', roles: ['ADMIN'] } }, {}, () => {
+    adminPassed = true;
+  });
+  assert.equal(adminPassed, true, 'User with ADMIN role must be allowed');
+
+  // User with ADMIN role combined with other roles
+  let multiAdminPassed = false;
+  adminRoleCheck({ user: { id: 'admin-2', roles: ['HEAD', 'ADMIN'] } }, {}, () => {
+    multiAdminPassed = true;
+  });
+  assert.equal(multiAdminPassed, true, 'User with ADMIN role among multiple roles must be allowed');
+});
+
+test('ISSUE #29 / SECURITY: Role determination is based strictly on authenticated user session, ignoring client-provided parameters', () => {
+  const adminRoleCheck = requireRole('ADMIN');
+
+  // A malicious client passes role: 'ADMIN' in body or query, but authenticated session user has roles: ['PRINCIPAL']
+  const forgedRequest = {
+    user: { id: 'principal-1', roles: ['PRINCIPAL'] },
+    body: { role: 'ADMIN', roles: ['ADMIN'], isAdmin: true },
+    query: { role: 'ADMIN' },
+  };
+
+  assert.throws(
+    () => adminRoleCheck(forgedRequest, {}, () => {}),
+    (err) => err instanceof HttpError && err.status === 403 && err.message === 'Your role does not allow this',
+    'Client-provided role spoofing in body/query must be ignored',
+  );
+});

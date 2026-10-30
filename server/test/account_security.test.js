@@ -19,6 +19,21 @@ before(async () => {
     tok[key] = await t.login(email);
     id[key] = (await t.superuser.query('SELECT user_id FROM users WHERE email = $1', [email])).rows[0].user_id;
   }
+
+  // Dedicated administrator for testing password change policies so
+  // admin@spcollege.edu does not exhaust the 10-attempt login rate limiter.
+  const { rows: [pwAdmin] } = await t.superuser.query(
+    `INSERT INTO users (email, full_name, password_hash, is_active, token_version)
+     VALUES ('pwadmin@spcollege.edu', 'Admin Password Test', crypt($1, gen_salt('bf', 12)), TRUE, 1)
+     RETURNING user_id`,
+    [PASSWORD],
+  );
+  await t.superuser.query(
+    `INSERT INTO user_roles (user_id, role_id)
+     VALUES ($1, (SELECT role_id FROM roles WHERE code = 'ADMIN'))`,
+    [pwAdmin.user_id],
+  );
+  tok.pwadmin = await t.login('pwadmin@spcollege.edu');
 });
 
 after(() => t?.close());
@@ -38,34 +53,45 @@ test('the password rules are published, so pages show the real policy', async ()
   assert.equal(rules.maxBytes, 72);
 });
 
-test('a weak new password is refused with every reason listed', async () => {
+test('non-admin users are rejected from changing password with HTTP 403', async () => {
+  for (const roleKey of ['incharge', 'head']) {
+    const res = await t.api('POST', '/api/auth/change-password', {
+      token: tok[roleKey],
+      body: { currentPassword: PASSWORD, newPassword: 'violet-harbour-lantern-42' },
+    });
+    assert.equal(res.status, 403);
+    assert.equal(res.body.error.message, 'Your role does not allow this');
+  }
+});
+
+test('a weak new password for admin is refused with every reason listed', async () => {
   const short = await t.api('POST', '/api/auth/change-password', {
-    token: tok.incharge, body: { currentPassword: PASSWORD, newPassword: 'Short#1' } });
+    token: tok.pwadmin, body: { currentPassword: PASSWORD, newPassword: 'Short#1' } });
   assert.equal(short.status, 422);
   assert.equal(short.body.error.code, 'WEAK_PASSWORD');
   assert.ok(short.body.error.details.some((p) => /at least 12/.test(p)));
 
   // Built from the person's own name: refused even though it is long.
   const named = await t.api('POST', '/api/auth/change-password', {
-    token: tok.incharge, body: { currentPassword: PASSWORD, newPassword: 'Kulkarni-2026-Strong' } });
+    token: tok.pwadmin, body: { currentPassword: PASSWORD, newPassword: 'Password-Test-2026-Strong' } });
   assert.equal(named.status, 422);
-  assert.ok(named.body.error.details.some((p) => /your name/.test(p)));
+  assert.ok(named.body.error.details.some((p) => /your (name|email)/.test(p)));
 
   const common = await t.api('POST', '/api/auth/change-password', {
-    token: tok.incharge, body: { currentPassword: PASSWORD, newPassword: 'Password123!' } });
+    token: tok.pwadmin, body: { currentPassword: PASSWORD, newPassword: 'Password123!' } });
   assert.equal(common.status, 422);
 
-  assert.equal(await canSignIn('incharge@spcollege.edu', PASSWORD), true, 'a refused change leaves the old password working');
+  assert.equal(await canSignIn('pwadmin@spcollege.edu', PASSWORD), true, 'a refused change leaves the old password working');
 });
 
-test('a strong new password is accepted and signs out every other session', async () => {
+test('admin strong new password is accepted and signs out every other session', async () => {
   const strong = 'violet-harbour-lantern-42';
   expectStatus(await t.api('POST', '/api/auth/change-password', {
-    token: tok.incharge, body: { currentPassword: PASSWORD, newPassword: strong } }), 204);
+    token: tok.pwadmin, body: { currentPassword: PASSWORD, newPassword: strong } }), 204);
 
-  expectStatus(await t.api('GET', '/api/auth/me', { token: tok.incharge }), 401);
-  assert.equal(await canSignIn('incharge@spcollege.edu', PASSWORD), false);
-  assert.equal(await canSignIn('incharge@spcollege.edu', strong), true);
+  expectStatus(await t.api('GET', '/api/auth/me', { token: tok.pwadmin }), 401);
+  assert.equal(await canSignIn('pwadmin@spcollege.edu', PASSWORD), false);
+  assert.equal(await canSignIn('pwadmin@spcollege.edu', strong), true);
 });
 
 // ---------------------------------------------------------------------------
@@ -478,11 +504,15 @@ test('the administrator cannot sign in with a password alone', async () => {
 
 test('a code works once; a replayed code is refused', async () => {
   const first = await t.api('POST', '/api/auth/login', { body: { email: 'admin@spcollege.edu', password: 'granite-harbor-willow-37' } });
+  assert.equal(first.status, 200, `first login failed: ${JSON.stringify(first.body)}`);
+  assert.ok(first.body?.mfa?.challenge, 'expected mfa challenge on first login');
   await t.superuser.query("UPDATE users SET mfa_last_step = NULL WHERE email = 'admin@spcollege.edu'");
   const code = t.totpFor('admin@spcollege.edu');
   expectStatus(await t.api('POST', '/api/auth/mfa/verify', { body: { challenge: first.body.mfa.challenge, code } }), 200);
 
   const second = await t.api('POST', '/api/auth/login', { body: { email: 'admin@spcollege.edu', password: 'granite-harbor-willow-37' } });
+  assert.equal(second.status, 200, `second login failed: ${JSON.stringify(second.body)}`);
+  assert.ok(second.body?.mfa?.challenge, 'expected mfa challenge on second login');
   const replay = await t.api('POST', '/api/auth/mfa/verify', { body: { challenge: second.body.mfa.challenge, code } });
   assert.equal(replay.status, 401);
   assert.equal(replay.body.error.code, 'MFA_CODE_INVALID');
@@ -540,13 +570,15 @@ test('a role added to the policy must enrol at its next sign-in, and secrets are
 });
 
 test('people in roles that do not require it sign in with their password', async () => {
-  const res = await t.api('POST', '/api/auth/login', { body: { email: 'incharge@spcollege.edu', password: 'violet-harbour-lantern-42' } });
+  const res = await t.api('POST', '/api/auth/login', { body: { email: 'incharge@spcollege.edu', password: PASSWORD } });
   assert.ok(res.body.token);
   assert.equal(res.body.mfa, undefined);
 });
 
 test('a challenge stops working once the account is signed out everywhere', async () => {
   const res = await t.api('POST', '/api/auth/login', { body: { email: 'admin@spcollege.edu', password: 'granite-harbor-willow-37' } });
+  assert.equal(res.status, 200, `login failed: ${JSON.stringify(res.body)}`);
+  assert.ok(res.body?.mfa?.challenge, 'expected mfa challenge on login');
   await t.superuser.query(
     "UPDATE users SET token_version = token_version + 1, mfa_last_step = NULL WHERE email = 'admin@spcollege.edu'");
   const late = await t.api('POST', '/api/auth/mfa/verify', {
@@ -572,7 +604,7 @@ test('the signed-in profile says whether 2-step verification is on, never the se
   assert.equal(admin.mfa.enabled, true);
   assert.ok(admin.mfa.enabledAt);
   assert.doesNotMatch(JSON.stringify(admin), /mfa_secret|v1:/);
-  const requester = await t.login('incharge@spcollege.edu', 'violet-harbour-lantern-42');
+  const requester = await t.login('incharge@spcollege.edu', PASSWORD);
   const plain = expectStatus(await t.api('GET', '/api/auth/me', { token: requester }), 200);
   assert.equal(plain.mfa.enabled, false);
 });
