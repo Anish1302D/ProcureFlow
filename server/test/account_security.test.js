@@ -504,11 +504,15 @@ test('the administrator cannot sign in with a password alone', async () => {
 
 test('a code works once; a replayed code is refused', async () => {
   const first = await t.api('POST', '/api/auth/login', { body: { email: 'admin@spcollege.edu', password: 'granite-harbor-willow-37' } });
+  assert.equal(first.status, 200, `first login failed: ${JSON.stringify(first.body)}`);
+  assert.ok(first.body?.mfa?.challenge, 'expected mfa challenge on first login');
   await t.superuser.query("UPDATE users SET mfa_last_step = NULL WHERE email = 'admin@spcollege.edu'");
   const code = t.totpFor('admin@spcollege.edu');
   expectStatus(await t.api('POST', '/api/auth/mfa/verify', { body: { challenge: first.body.mfa.challenge, code } }), 200);
 
   const second = await t.api('POST', '/api/auth/login', { body: { email: 'admin@spcollege.edu', password: 'granite-harbor-willow-37' } });
+  assert.equal(second.status, 200, `second login failed: ${JSON.stringify(second.body)}`);
+  assert.ok(second.body?.mfa?.challenge, 'expected mfa challenge on second login');
   const replay = await t.api('POST', '/api/auth/mfa/verify', { body: { challenge: second.body.mfa.challenge, code } });
   assert.equal(replay.status, 401);
   assert.equal(replay.body.error.code, 'MFA_CODE_INVALID');
@@ -573,6 +577,8 @@ test('people in roles that do not require it sign in with their password', async
 
 test('a challenge stops working once the account is signed out everywhere', async () => {
   const res = await t.api('POST', '/api/auth/login', { body: { email: 'admin@spcollege.edu', password: 'granite-harbor-willow-37' } });
+  assert.equal(res.status, 200, `login failed: ${JSON.stringify(res.body)}`);
+  assert.ok(res.body?.mfa?.challenge, 'expected mfa challenge on login');
   await t.superuser.query(
     "UPDATE users SET token_version = token_version + 1, mfa_last_step = NULL WHERE email = 'admin@spcollege.edu'");
   const late = await t.api('POST', '/api/auth/mfa/verify', {
