@@ -192,3 +192,4 @@ describe('Issue #20 - Departmental Budget Calculation Regression Tests', () => {
     assert.equal(summary.remainingAmount, 100000);
   });
 });
+
