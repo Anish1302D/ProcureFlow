@@ -580,6 +580,9 @@ export const NewRequestModal = () => {
             title: form.title,
             description: form.description,
             budgetHeadId: form.budgetHeadId,
+            budgetHeadName: headIsOther ? form.customBudgetHead : ((heads.data ?? []).find((h) => String(h.id) === form.budgetHeadId)?.name || ''),
+            departmentName: ownDept ? (user.departmentName ?? '') : (deptIsOther ? form.customDepartment : ((departments.data ?? []).find((d) => String(d.id) === form.departmentId)?.name || '')),
+            courseName: courseIsOther ? form.customCourse : ((courses.data ?? []).find((c) => String(c.id) === form.courseId)?.name || ''),
             urgency: urgencyIsOther ? form.customUrgency : form.urgency,
             items: filled.map((l) => {
               const item = itemById.get(l.budgetItemId);
