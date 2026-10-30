@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { describe, test } from 'node:test';
+import { canCreateIssues, canRaiseRequests } from '../../server/src/roles.js';
 
 describe('Issue #25 - Admin Request Creation Restrictions', () => {
   test('REQUESTER_ROLES specification excludes ADMIN and retains HEAD and ACTIVITY_INCHARGE', () => {
@@ -22,19 +23,13 @@ describe('Issue #25 - Admin Request Creation Restrictions', () => {
     );
   });
 
-  test('canRaiseRequests policy strictly disallows ADMIN role from raising requests', () => {
-    function canRaiseRequests(user, requesterRoles = ['HEAD', 'ACTIVITY_INCHARGE']) {
-      if (!user?.roles || !Array.isArray(user.roles)) return false;
-      // Admin is explicitly prohibited from raising requests
-      if (user.roles.includes('ADMIN')) return false;
-      return user.roles.some((role) => requesterRoles.includes(role));
-    }
-
+  test('canRaiseRequests from roles.js strictly disallows ADMIN role', () => {
     // Admin alone
     assert.equal(canRaiseRequests({ roles: ['ADMIN'] }), false);
 
-    // Multi-role user containing Admin (e.g., Admin + Staff)
+    // Multi-role user containing Admin (e.g., Admin + Staff or Admin + Head)
     assert.equal(canRaiseRequests({ roles: ['ADMIN', 'STAFF'] }), false);
+    assert.equal(canRaiseRequests({ roles: ['ADMIN', 'HEAD'] }), false);
 
     // Eligible roles
     assert.equal(canRaiseRequests({ roles: ['HEAD'] }), true);
@@ -49,6 +44,20 @@ describe('Issue #25 - Admin Request Creation Restrictions', () => {
     assert.equal(canRaiseRequests({ roles: ['STAFF'] }), false);
     assert.equal(canRaiseRequests({ roles: [] }), false);
     assert.equal(canRaiseRequests(null), false);
+  });
+
+  test('canCreateIssues from roles.js strictly disallows ADMIN role and allows others', () => {
+    // Admin alone
+    assert.equal(canCreateIssues({ roles: ['ADMIN'] }), false);
+    assert.equal(canCreateIssues({ roles: ['ADMIN', 'FACULTY'] }), false);
+
+    // Eligible roles
+    assert.equal(canCreateIssues({ roles: ['FACULTY'] }), true);
+    assert.equal(canCreateIssues({ roles: ['STAFF'] }), true);
+    assert.equal(canCreateIssues({ roles: ['HEAD'] }), true);
+    assert.equal(canCreateIssues({ roles: ['STUDENT'] }), true);
+    assert.equal(canCreateIssues({ roles: ['PRINCIPAL'] }), true);
+    assert.equal(canCreateIssues(null), false);
   });
 
   test('Request creation API specification mandates HTTP 403 Forbidden for Admin', () => {
