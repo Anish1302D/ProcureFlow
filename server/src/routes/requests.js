@@ -8,6 +8,7 @@ import { buildRequestStatusEmail } from '../emailTemplates.js';
 import { HttpError, conflict, forbidden, notFound, unprocessable } from '../errors.js';
 import { sendMail } from '../mailer.js';
 import { REQUESTER_ROLES } from '../roles.js';
+import { getDepartmentBudgetStatus, assertDepartmentBudgetAvailable, calculateItemsTotal } from '../budgetService.js';
 import { seal, verifySeal } from '../signing.js';
 import { removeFile } from '../storage.js';
 import {
@@ -737,13 +738,16 @@ async function requireDetail(db, requestId, user) {
  */
 async function lockEditableRequest(db, requestId, user, statuses = EDITABLE_STATUSES) {
   const { rows } = await db.query(
-    'SELECT request_id, raised_by, current_status, budget_head_id, department_id FROM requests WHERE request_id = $1',
+    'SELECT request_id, raised_by, current_status, budget_head_id, department_id, financial_year_id FROM requests WHERE request_id = $1',
     [requestId],
   );
   const r = rows[0];
   if (!r) throw notFound('Request not found');
   if (r.raised_by !== user.id && !user.roles.includes('ADMIN')) {
     throw forbidden('Only the person who raised this request can change it');
+  }
+  if (user.roles.includes('HEAD') && user.departmentId != null && r.department_id != null && r.department_id !== user.departmentId) {
+    throw forbidden('You can only modify requests for your own department');
   }
   if (!statuses.includes(r.current_status)) {
     throw conflict(statuses.length === 1
@@ -907,12 +911,22 @@ requestsRouter.post('/', requireRole(...REQUESTER_ROLES), async (req, res) => {
   }
   const body = createSchema.parse(req.body);
 
-  if (body.departmentId != null && req.user.departmentId != null && body.departmentId !== req.user.departmentId) {
-    throw forbidden('You can only raise requests for your own department');
-  }
-  // Automatically set or default to the requester's assigned department
-  if (body.departmentId == null && req.user.departmentId != null) {
+  if (req.user.roles.includes('HEAD')) {
+    if (!req.user.departmentId) {
+      throw forbidden('Department Head must be assigned to a department to raise requests');
+    }
+    if (body.departmentId != null && body.departmentId !== req.user.departmentId) {
+      throw forbidden('You can only raise requests for your own department');
+    }
     body.departmentId = req.user.departmentId;
+  } else {
+    if (body.departmentId != null && req.user.departmentId != null && body.departmentId !== req.user.departmentId) {
+      throw forbidden('You can only raise requests for your own department');
+    }
+    // Automatically set or default to the requester's assigned department
+    if (body.departmentId == null && req.user.departmentId != null) {
+      body.departmentId = req.user.departmentId;
+    }
   }
 
   const detail = await withUser(req.user.id, async (db) => {
@@ -921,6 +935,22 @@ requestsRouter.post('/', requireRole(...REQUESTER_ROLES), async (req, res) => {
     if (!head.rowCount) throw unprocessable('Budget head not found');
     await checkItems(db, body.budgetHeadId, body.items.map((i) => i.budgetItemId));
     await checkPlacement(db, body);
+
+    let budgetStatus = null;
+    if (body.departmentId != null) {
+      budgetStatus = await getDepartmentBudgetStatus(db, {
+        departmentId: body.departmentId,
+        financialYearId: body.financialYearId,
+        budgetHeadId: body.budgetHeadId,
+        forUpdate: true,
+      });
+
+      if (budgetStatus) {
+        // Trusted server-side calculation from item quantities and unit costs
+        const serverCalculatedTotal = calculateItemsTotal(body.items);
+        assertDepartmentBudgetAvailable(budgetStatus, serverCalculatedTotal);
+      }
+    }
 
     const { rows } = await db.query(
       `INSERT INTO requests (raised_by, financial_year_id, budget_head_id, department_id, course_id,
@@ -958,6 +988,9 @@ requestsRouter.patch('/:id', async (req, res) => {
       throw forbidden('You cannot assign a request to a different department');
     }
   }
+  if (req.user.roles.includes('HEAD') && body.departmentId !== undefined && body.departmentId !== req.user.departmentId) {
+    throw forbidden('Department Head cannot reassign request to a different department');
+  }
 
   const detail = await withUser(req.user.id, async (db) => {
     const current = await lockEditableRequest(db, requestId, req.user);
@@ -990,6 +1023,28 @@ requestsRouter.patch('/:id', async (req, res) => {
       values.push(requestId);
       await db.query(`UPDATE requests SET ${sets.join(', ')} WHERE request_id = $${values.length}`, values);
     }
+
+    const effectiveDeptId = body.departmentId !== undefined ? body.departmentId : current.department_id;
+    const effectiveFyId = body.financialYearId !== undefined ? body.financialYearId : current.financial_year_id;
+    const effectiveHeadId = body.budgetHeadId !== undefined ? body.budgetHeadId : current.budget_head_id;
+
+    if (effectiveDeptId != null) {
+      const { rows: totRows } = await db.query(
+        'SELECT COALESCE(tentative_total_cost, 0)::numeric AS total FROM requests WHERE request_id = $1',
+        [requestId],
+      );
+      const currentTotal = Number(totRows[0]?.total ?? 0);
+      const budgetStatus = await getDepartmentBudgetStatus(db, {
+        departmentId: effectiveDeptId,
+        financialYearId: effectiveFyId,
+        budgetHeadId: effectiveHeadId,
+        forUpdate: true,
+      });
+      if (budgetStatus) {
+        assertDepartmentBudgetAvailable(budgetStatus, currentTotal);
+      }
+    }
+
     return requireDetail(db, requestId, req.user);
   });
 
@@ -1026,6 +1081,24 @@ requestsRouter.post('/:id/items', async (req, res) => {
     await checkItems(db, current.budget_head_id, [item.budgetItemId], rows.map((r) => r.budget_item_id));
     await insertItems(db, requestId, [item]);
     await recalcTotal(db, requestId);
+
+    if (current.department_id != null) {
+      const { rows: totRows } = await db.query(
+        'SELECT COALESCE(tentative_total_cost, 0)::numeric AS total FROM requests WHERE request_id = $1',
+        [requestId],
+      );
+      const newTotal = Number(totRows[0]?.total ?? 0);
+      const budgetStatus = await getDepartmentBudgetStatus(db, {
+        departmentId: current.department_id,
+        financialYearId: current.financial_year_id,
+        budgetHeadId: current.budget_head_id,
+        forUpdate: true,
+      });
+      if (budgetStatus) {
+        assertDepartmentBudgetAvailable(budgetStatus, newTotal);
+      }
+    }
+
     return requireDetail(db, requestId, req.user);
   });
 
@@ -1043,7 +1116,7 @@ requestsRouter.patch('/:id/items/:itemId', async (req, res) => {
   const body = itemUpdate.parse(req.body);
 
   const detail = await withUser(req.user.id, async (db) => {
-    await lockEditableRequest(db, requestId, req.user);
+    const current = await lockEditableRequest(db, requestId, req.user);
     const { rowCount } = await db.query(
       `UPDATE request_items
           SET requested_quantity  = COALESCE($3, requested_quantity),
@@ -1057,6 +1130,24 @@ requestsRouter.patch('/:id/items/:itemId', async (req, res) => {
     );
     if (!rowCount) throw notFound('Item not found on this request');
     await recalcTotal(db, requestId);
+
+    if (current.department_id != null) {
+      const { rows: totRows } = await db.query(
+        'SELECT COALESCE(tentative_total_cost, 0)::numeric AS total FROM requests WHERE request_id = $1',
+        [requestId],
+      );
+      const newTotal = Number(totRows[0]?.total ?? 0);
+      const budgetStatus = await getDepartmentBudgetStatus(db, {
+        departmentId: current.department_id,
+        financialYearId: current.financial_year_id,
+        budgetHeadId: current.budget_head_id,
+        forUpdate: true,
+      });
+      if (budgetStatus) {
+        assertDepartmentBudgetAvailable(budgetStatus, newTotal);
+      }
+    }
+
     return requireDetail(db, requestId, req.user);
   });
 
@@ -1087,12 +1178,26 @@ requestsRouter.post('/:id/submit', async (req, res) => {
   const requestId = param(req, 'id');
 
   const detail = await withUser(req.user.id, async (db) => {
-    await lockEditableRequest(db, requestId, req.user, ['DRAFT']);
+    const current = await lockEditableRequest(db, requestId, req.user, ['DRAFT']);
     const { rows } = await db.query(
       'SELECT count(*)::int AS n, COALESCE(SUM(estimated_total), 0)::numeric AS total FROM request_items WHERE request_id = $1', [requestId]);
     if (rows[0].n === 0) throw unprocessable('Add at least one item before submitting');
-    if (Number(rows[0].total) <= 0) throw unprocessable('Request total must be greater than ₹0 before submitting');
+    const total = Number(rows[0].total);
+    if (total <= 0) throw unprocessable('Request total must be greater than ₹0 before submitting');
     await recalcTotal(db, requestId);
+
+    if (current.department_id != null) {
+      const budgetStatus = await getDepartmentBudgetStatus(db, {
+        departmentId: current.department_id,
+        financialYearId: current.financial_year_id,
+        budgetHeadId: current.budget_head_id,
+        forUpdate: true,
+      });
+      if (budgetStatus) {
+        assertDepartmentBudgetAvailable(budgetStatus, total);
+      }
+    }
+
     await db.query('SELECT fn_submit_request($1)', [requestId]);
     return requireDetail(db, requestId, req.user);
   });

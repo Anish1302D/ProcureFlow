@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, Paperclip, Plus, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowRight, Paperclip, Plus, Trash2, X } from 'lucide-react';
 import { api, qs } from '../../api/client';
 import { money } from '../../api/format';
 import { useApp } from '../../context/AppContext';
@@ -62,6 +62,24 @@ export const NewRequestModal = () => {
   const stages = useApi(open ? '/api/workflow/stages' : null);
   const catalogue = useApi(open && form.budgetHeadId && form.budgetHeadId !== 'OTHER' ? `/api/budget-heads/${form.budgetHeadId}/items` : null);
 
+  const deptIdForBudget = form.departmentId && form.departmentId !== 'OTHER'
+    ? form.departmentId
+    : (ownDept || null);
+  const headIdForBudget = form.budgetHeadId && form.budgetHeadId !== 'OTHER'
+    ? form.budgetHeadId
+    : null;
+  const fyIdForBudget = form.financialYearId || null;
+
+  const budgetContextUrl = open && deptIdForBudget
+    ? `/api/budget-context${qs({
+        departmentId: deptIdForBudget,
+        financialYearId: fyIdForBudget,
+        budgetHeadId: headIdForBudget,
+      })}`
+    : null;
+
+  const budgetContext = useApi(budgetContextUrl);
+
   // Default the financial year to the active one.
   useEffect(() => {
     const active = years.data?.find((y) => y.isActive);
@@ -98,6 +116,29 @@ export const NewRequestModal = () => {
   ), [stages.data, total]);
 
   const catalogueItems = catalogue.data ?? [];
+
+  // Dynamic departmental budget limit calculation
+  const budgetValidation = useMemo(() => {
+    if (!deptIdForBudget || budgetContext.isLoading || !budgetContext.data) {
+      return { isValid: true, excessAmount: 0 };
+    }
+    const remaining = Number(budgetContext.data.remainingAmount ?? 0);
+    const excess = Math.max(0, Math.round((total - remaining) * 100) / 100);
+    if (excess > 0) {
+      return {
+        isValid: false,
+        reason: 'BUDGET_EXCEEDED',
+        excessAmount: excess,
+        remainingAmount: remaining,
+        error: `Request exceeds the available departmental budget by ${money(excess)}. Maximum permitted amount: ${money(remaining)}.`,
+      };
+    }
+    return {
+      isValid: true,
+      excessAmount: 0,
+      remainingAmount: remaining,
+    };
+  }, [deptIdForBudget, budgetContext.isLoading, budgetContext.data, total]);
   const itemById = new Map(catalogueItems.map((i) => [String(i.id), i]));
   const chosen = filled.map((l) => l.budgetItemId).filter(Boolean);
 
@@ -127,6 +168,8 @@ export const NewRequestModal = () => {
     if (l.unitCost === '' || Number(l.unitCost) <= 0) problems.push(`${label}: unit cost must be greater than ₹0.`);
   });
   if (new Set(chosen).size !== chosen.length) problems.push('Each item can appear only once — change the quantity instead.');
+  if (!budgetValidation.isValid) problems.push(budgetValidation.error);
+
   const submitProblems = [
     ...problems,
     ...(filled.length === 0 ? ['Add at least one item to submit.'] : (total <= 0 ? ['Total request amount must be greater than ₹0 to submit.'] : [])),
@@ -143,6 +186,10 @@ export const NewRequestModal = () => {
   // ---------------------------------------------------------------------------
   const save = async (andSubmit) => {
     setAttempted(andSubmit ? 'submit' : 'draft');
+    if (!budgetValidation.isValid) {
+      showToast(budgetValidation.error, 'error');
+      return;
+    }
     if ((andSubmit ? submitProblems : problems).length) return;
     setSaving(andSubmit ? 'submit' : 'draft');
 
@@ -336,6 +383,56 @@ export const NewRequestModal = () => {
           </div>
         </div>
 
+        {/* Departmental Budget Status Card */}
+        {deptIdForBudget && (
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                Departmental Budget Availability
+              </span>
+              {budgetContext.data?.financialYearCode && (
+                <span className="text-xs font-medium text-slate-500">
+                  FY {budgetContext.data.financialYearCode}
+                </span>
+              )}
+            </div>
+            {budgetContext.data ? (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-center">
+                <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-sm">
+                  <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Annual Provision</div>
+                  <div className="text-sm font-bold text-slate-900 tabular-nums">
+                    {money(budgetContext.data.allocatedAmount)}
+                  </div>
+                </div>
+                <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-sm">
+                  <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Utilized</div>
+                  <div className="text-sm font-bold text-emerald-700 tabular-nums">
+                    {money(budgetContext.data.utilizedAmount)}
+                  </div>
+                </div>
+                <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-sm">
+                  <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Committed (In-flight)</div>
+                  <div className="text-sm font-bold text-amber-700 tabular-nums">
+                    {money(budgetContext.data.committedAmount)}
+                  </div>
+                </div>
+                <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-sm">
+                  <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Remaining Balance</div>
+                  <div className={`text-sm font-bold tabular-nums ${budgetContext.data.remainingAmount > 0 ? 'text-indigo-700' : 'text-rose-600'}`}>
+                    {money(budgetContext.data.remainingAmount)}
+                  </div>
+                </div>
+              </div>
+            ) : budgetContext.isLoading ? (
+              <div className="text-xs text-slate-500 italic py-1">Loading budget availability…</div>
+            ) : (
+              <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2.5">
+                No approved budget provision has been declared for this department for the selected financial year.
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Line items */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
@@ -424,6 +521,21 @@ export const NewRequestModal = () => {
               At this amount the request goes first to <strong className="text-gray-900">{route.name}</strong>.
             </p>
           )}
+
+          {/* Dynamic Budget Overrun Warning Banner */}
+          {!budgetValidation.isValid && (
+            <div className="flex items-start gap-2.5 p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <div className="space-y-0.5">
+                <p className="font-semibold">{budgetValidation.error}</p>
+                {budgetValidation.reason === 'BUDGET_EXCEEDED' && (
+                  <p className="text-[11px] text-rose-600">
+                    Reduce quantities or estimated unit costs so the total request does not exceed the remaining balance of {money(budgetValidation.remainingAmount)}.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Justification */}
@@ -471,12 +583,12 @@ export const NewRequestModal = () => {
         {/* Actions */}
         <div className="flex flex-wrap items-center justify-end gap-3 pt-4 border-t border-gray-100">
           <button type="button" onClick={close} className="px-4 py-2 rounded-lg text-sm text-gray-500 hover:bg-gray-100">Cancel</button>
-          <button type="button" onClick={() => save(false)} disabled={Boolean(saving)}
-            className="px-4 py-2 rounded-lg text-sm font-semibold bg-white border border-gray-200 text-gray-700 hover:border-gray-300 disabled:opacity-50">
+          <button type="button" onClick={() => save(false)} disabled={Boolean(saving) || !budgetValidation.isValid}
+            className="px-4 py-2 rounded-lg text-sm font-semibold bg-white border border-gray-200 text-gray-700 hover:border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed">
             {saving === 'draft' ? 'Saving…' : 'Save as draft'}
           </button>
-          <button type="button" onClick={() => save(true)} disabled={Boolean(saving)}
-            className="px-5 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50">
+          <button type="button" onClick={() => save(true)} disabled={Boolean(saving) || !budgetValidation.isValid}
+            className="px-5 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 disabled:cursor-not-allowed">
             {saving === 'submit' ? 'Submitting…' : 'Submit for approval'}
           </button>
         </div>
