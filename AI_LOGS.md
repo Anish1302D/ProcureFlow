@@ -426,3 +426,29 @@ Prevent ADMIN users from raising procurement requests or creating/logging facult
 - Created and verified feature branch `feature/admin-cannot-raise-requests-issues` based on latest `origin/main`.
 - Audited authorization architecture across `server/src/roles.js`, `server/src/routes/requests.js`, `server/src/routes/issues.js`, `server/src/routes/auth.js`, and frontend components.
 - Established Issue #25 implementation plan in `docs/plan/issue-25-admin-restrictions.md`.
+- **Role & Authorization Segregation (`server/src/roles.js`)**:
+  - Removed `'ADMIN'` from `REQUESTER_ROLES = ['HEAD', 'ACTIVITY_INCHARGE']`.
+  - Defined explicit disallow lists `REQUESTER_DISALLOWED_ROLES = ['ADMIN']` and `ISSUE_CREATOR_DISALLOWED_ROLES = ['ADMIN']`.
+  - Added helper functions `canRaiseRequests(user)` and `canCreateIssues(user)`.
+- **Backend API Restrictions**:
+  - `POST /api/requests` (`server/src/routes/requests.js`): Enforced `requireRole(...REQUESTER_ROLES)` and an explicit defensive check throwing HTTP 403 `forbidden('Administrators cannot create procurement requests')` to prevent multi-role escalation.
+  - `POST /api/issues` (`server/src/routes/issues.js`): Enforced an explicit defensive check throwing HTTP 403 `forbidden('Administrators cannot create or log issues')`.
+- **Session Capability Alignment (`server/src/routes/auth.js`)**:
+  - Computed `can.raiseRequests` via `canRaiseRequests(user)`.
+  - Computed `can.logIssues` via `canCreateIssues(user)`.
+- **Frontend UI Visibility & Modal Gating**:
+  - `Header.jsx`: Hidden "New request" and "Log issue" buttons from `ADMIN`.
+  - `FinancialRequestsManagement.jsx`: Hidden "New request" button from `ADMIN`.
+  - `NonFinancialRequestsManagement.jsx`: Hidden "Log issue" button from `ADMIN`.
+  - `FacultyDashboard.jsx`: Hidden "New request" and "Log issue" buttons from `ADMIN`.
+  - `NewRequestModal.jsx` & `NewIssueModal.jsx`: Return `null` immediately when rendered by an `ADMIN`.
+  - `AdminClerkDashboard.jsx`: Aligned state to strictly administrative operations (inventory, purchase bills) with zero request/issue raising triggers.
+- **Administrative Capabilities Preserved**:
+  - Admin retains full viewing and search across all requests (`GET /api/requests`) and issues (`GET /api/issues`).
+  - Admin retains full suite of administrative modules: Dashboard, User Management, Master Data, System Configuration, Budgets, All Requests, Faculty Issues, Inventory, Purchase Bills, Reports, Exports, Audit Log.
+  - Database Row Level Security policies (`requests_admin`, `requests_own`, `issues_read`) preserved intact.
+- **Eligible Campus Roles Preserved**:
+  - `HEAD` and `ACTIVITY_INCHARGE` retain procurement requisition capabilities.
+  - Non-admin campus roles retain faculty issue logging capabilities.
+- **Comprehensive Test Coverage**:
+  - 10 targeted test suites covering role definitions, 403 responses, eligible requesters and creators, auth alignment, UI visibility, admin viewing preservation, and RLS security integrity.
