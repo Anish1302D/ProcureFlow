@@ -232,9 +232,9 @@ test('10. Budget context follows request visibility, and only a head declares a 
   assert.equal(crossDept.status, 404, 'another department\'s head cannot read it');
 
   // A head declares their own department's provision.
-  expectStatus(await t.api('POST', '/api/budget-provisions', {
+  const prov = expectStatus(await t.api('POST', '/api/budget-provisions', {
     token: tok.head,
-    body: { departmentId: ids.csDept, financialYearId: ids.fy, allocatedAmount: 500000 },
+    body: { departmentId: ids.csDept, financialYearId: ids.fy, allocatedAmount: 50000000 },
   }), 201);
 
   // A head cannot declare one for another department...
@@ -250,6 +250,9 @@ test('10. Budget context follows request visibility, and only a head declares a 
     body: { departmentId: ids.csDept, financialYearId: ids.fy, allocatedAmount: 100 },
   });
   assert.equal(clerk.status, 403, `expected a refusal, got ${clerk.status}`);
+
+  // Clean up provision so subsequent authorization test cases remain cleanly isolated
+  await t.superuser.query('DELETE FROM budget_provisions WHERE budget_provision_id = $1', [prov.id]);
 });
 
 test('11. A head cannot read another department\'s request', async () => {

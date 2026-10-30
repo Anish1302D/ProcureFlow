@@ -127,6 +127,18 @@ export function validateBudgetForRequest(budgetStatus, requestedTotal) {
   const reqPaise = toPaise(requestedTotal);
   const requested = fromPaise(reqPaise);
 
+  if (reqPaise <= 0) {
+    return {
+      isValid: true,
+      requestedAmount: 0,
+      allocatedAmount: roundMoney(budgetStatus?.allocatedAmount ?? 0),
+      utilizedAmount: roundMoney(budgetStatus?.utilizedAmount ?? 0),
+      committedAmount: roundMoney(budgetStatus?.committedAmount ?? 0),
+      remainingAmount: roundMoney(budgetStatus?.remainingAmount ?? 0),
+      excessAmount: 0,
+    };
+  }
+
   if (!budgetStatus) {
     return {
       isValid: false,

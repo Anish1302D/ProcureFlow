@@ -480,6 +480,7 @@ Prevent Heads of Department from raising procurement requests exceeding the avai
     - Resolves specific `budget_head_id` provision with fallback to general department-wide provision.
     - Acquires row-level exclusive lock `SELECT ... FOR UPDATE` on `budget_provisions` when mutating to serialize concurrent requests.
   - Implemented `validateBudgetForRequest` and `assertDepartmentBudgetAvailable`:
+    - Guarded empty drafts/zero-amount creations (`reqPaise <= 0` returns valid).
     - Rejects missing provisions with HTTP 422 `NO_PROVISION`.
     - Rejects budget overruns with HTTP 422 `BUDGET_EXCEEDED` and structured details (`requestedAmount`, `allocatedAmount`, `utilizedAmount`, `committedAmount`, `remainingAmount`, `excessAmount`).
 - **Backend Mutation Gateways (`server/src/routes/requests.js` & `server/src/routes/budget.js`)**:
@@ -497,6 +498,10 @@ Prevent Heads of Department from raising procurement requests exceeding the avai
   - Dynamic budget calculation comparing real-time line item totals against `remainingAmount`.
   - Real-time warning banner: `"Request exceeds the available departmental budget by ₹<excess>. Maximum permitted amount: ₹<remaining>."`
   - Form submission gating: Disabled both "Save as draft" and "Submit for approval" buttons when budget is exceeded or provision is missing; populated problem list and displayed error toast.
+- **CI & Test Isolation Fixes**:
+  - Resolved ESLint undefined reference in `server/src/routes/requests.js`.
+  - Cleaned up provision in `server/test/authz.test.js` Test 10 to prevent cross-test budget exhaustion in subsequent test cases (11-14).
+  - Validated zero-amount empty draft creation in `validateBudgetForRequest`.
 - **Comprehensive Regression & Test Coverage**:
   - Added 9 targeted test suites across `src/budget/`:
     - `budgetCalculation.test.js`: Core regression tests matching Issue #20 specifications (exact budget, under budget, over by ₹1, over by ₹50,000, zero budget).
