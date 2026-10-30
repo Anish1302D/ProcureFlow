@@ -8,7 +8,7 @@ import { buildRequestStatusEmail } from '../emailTemplates.js';
 import { HttpError, conflict, forbidden, notFound, unprocessable } from '../errors.js';
 import { sendMail } from '../mailer.js';
 import { REQUESTER_ROLES } from '../roles.js';
-import { getDepartmentBudgetStatus, assertDepartmentBudgetAvailable, calculateItemsTotal, roundMoney } from '../budgetService.js';
+import { getDepartmentBudgetStatus, assertDepartmentBudgetAvailable, calculateItemsTotal } from '../budgetService.js';
 import { seal, verifySeal } from '../signing.js';
 import { removeFile } from '../storage.js';
 import {
@@ -945,9 +945,11 @@ requestsRouter.post('/', requireRole(...REQUESTER_ROLES), async (req, res) => {
         forUpdate: true,
       });
 
-      // Trusted server-side calculation from item quantities and unit costs
-      const serverCalculatedTotal = calculateItemsTotal(body.items);
-      assertDepartmentBudgetAvailable(budgetStatus, serverCalculatedTotal);
+      if (budgetStatus) {
+        // Trusted server-side calculation from item quantities and unit costs
+        const serverCalculatedTotal = calculateItemsTotal(body.items);
+        assertDepartmentBudgetAvailable(budgetStatus, serverCalculatedTotal);
+      }
     }
 
     const { rows } = await db.query(
@@ -1038,7 +1040,9 @@ requestsRouter.patch('/:id', async (req, res) => {
         budgetHeadId: effectiveHeadId,
         forUpdate: true,
       });
-      assertDepartmentBudgetAvailable(budgetStatus, currentTotal);
+      if (budgetStatus) {
+        assertDepartmentBudgetAvailable(budgetStatus, currentTotal);
+      }
     }
 
     return requireDetail(db, requestId, req.user);
@@ -1090,7 +1094,9 @@ requestsRouter.post('/:id/items', async (req, res) => {
         budgetHeadId: current.budget_head_id,
         forUpdate: true,
       });
-      assertDepartmentBudgetAvailable(budgetStatus, newTotal);
+      if (budgetStatus) {
+        assertDepartmentBudgetAvailable(budgetStatus, newTotal);
+      }
     }
 
     return requireDetail(db, requestId, req.user);
@@ -1110,7 +1116,7 @@ requestsRouter.patch('/:id/items/:itemId', async (req, res) => {
   const body = itemUpdate.parse(req.body);
 
   const detail = await withUser(req.user.id, async (db) => {
-    await lockEditableRequest(db, requestId, req.user);
+    const current = await lockEditableRequest(db, requestId, req.user);
     const { rowCount } = await db.query(
       `UPDATE request_items
           SET requested_quantity  = COALESCE($3, requested_quantity),
@@ -1137,7 +1143,9 @@ requestsRouter.patch('/:id/items/:itemId', async (req, res) => {
         budgetHeadId: current.budget_head_id,
         forUpdate: true,
       });
-      assertDepartmentBudgetAvailable(budgetStatus, newTotal);
+      if (budgetStatus) {
+        assertDepartmentBudgetAvailable(budgetStatus, newTotal);
+      }
     }
 
     return requireDetail(db, requestId, req.user);
@@ -1185,7 +1193,9 @@ requestsRouter.post('/:id/submit', async (req, res) => {
         budgetHeadId: current.budget_head_id,
         forUpdate: true,
       });
-      assertDepartmentBudgetAvailable(budgetStatus, total);
+      if (budgetStatus) {
+        assertDepartmentBudgetAvailable(budgetStatus, total);
+      }
     }
 
     await db.query('SELECT fn_submit_request($1)', [requestId]);

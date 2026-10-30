@@ -2,8 +2,6 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
   assertDepartmentBudgetAvailable,
-  calculateRemainingBudget,
-  validateBudgetForRequest,
 } from '../../server/src/budgetService.js';
 import { HttpError } from '../../server/src/errors.js';
 

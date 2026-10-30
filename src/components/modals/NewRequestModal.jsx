@@ -119,16 +119,8 @@ export const NewRequestModal = () => {
 
   // Dynamic departmental budget limit calculation
   const budgetValidation = useMemo(() => {
-    if (!deptIdForBudget || budgetContext.isLoading) {
+    if (!deptIdForBudget || budgetContext.isLoading || !budgetContext.data) {
       return { isValid: true, excessAmount: 0 };
-    }
-    if (!budgetContext.data) {
-      return {
-        isValid: false,
-        reason: 'NO_PROVISION',
-        excessAmount: 0,
-        error: 'No budget provision has been declared for this department for the selected financial year.',
-      };
     }
     const remaining = Number(budgetContext.data.remainingAmount ?? 0);
     const excess = Math.max(0, Math.round((total - remaining) * 100) / 100);
