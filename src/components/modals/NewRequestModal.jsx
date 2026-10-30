@@ -1,3 +1,4 @@
+import { LocalAiAssistant } from '../LocalAiAssistant';
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, ArrowRight, Paperclip, Plus, Trash2, X } from 'lucide-react';
 import { api, qs } from '../../api/client';
@@ -572,6 +573,37 @@ export const NewRequestModal = () => {
             <span className="text-[11px] text-gray-400">PDF, image, Word or Excel · up to 10 MB each</span>
           </div>
         </div>
+
+        {/* ProcureFlow Smart Check (Authoritative Validation & Advisory Local AI) */}
+        <LocalAiAssistant
+          request={{
+            title: form.title,
+            description: form.description,
+            budgetHeadId: form.budgetHeadId,
+            urgency: urgencyIsOther ? form.customUrgency : form.urgency,
+            items: filled.map((l) => {
+              const item = itemById.get(l.budgetItemId);
+              const lineIsOther = isOther(item?.code ?? '');
+              return {
+                budgetItemId: l.budgetItemId,
+                name: lineIsOther ? l.customItemName : (item?.name ?? ''),
+                customItemName: l.customItemName,
+                quantity: l.quantity,
+                unitCost: l.unitCost,
+                remarks: l.remarks,
+              };
+            }),
+            files,
+            totalAmount: total,
+          }}
+          onApplySuggestion={(field, val) => {
+            if (field === 'title') set({ title: val });
+            if (field === 'description') set({ description: val });
+            if (field === 'itemRemark' && lines.length > 0) {
+              setLine(lines[0].key, { remarks: val });
+            }
+          }}
+        />
 
         {/* Validation errors */}
         {attempted && (attempted === 'submit' ? submitProblems : problems).length > 0 && (
