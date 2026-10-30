@@ -16,7 +16,7 @@ const FILTERS = {
 
 /** Faculty issues: maintenance, facilities, anything that isn't a purchase. */
 export const NonFinancialRequestsManagement = () => {
-  const { openRecord, openModal } = useApp();
+  const { user, openRecord, openModal } = useApp();
   const [filter, setFilter] = useState('open');
   const state = useApi(`/api/issues${qs({ status: FILTERS[filter].status, limit: 100 })}`);
   const issues = state.data?.items ?? [];
@@ -29,9 +29,11 @@ export const NonFinancialRequestsManagement = () => {
           <h2 className="text-xl font-extrabold text-gray-900">Faculty issues</h2>
           <p className="text-xs text-gray-500">Open an issue to review it, assign someone, or resolve it.</p>
         </div>
-        <button onClick={() => openModal('newIssue')} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-2 self-start">
-          <Plus className="w-4 h-4" /> Log issue
-        </button>
+        {user?.can?.logIssues && !user?.roles?.includes('ADMIN') && (
+          <button onClick={() => openModal('newIssue')} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-2 self-start">
+            <Plus className="w-4 h-4" /> Log issue
+          </button>
+        )}
       </div>
 
       <div className="flex items-center gap-1 p-1 bg-gray-100 rounded-xl w-fit">

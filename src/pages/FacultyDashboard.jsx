@@ -28,7 +28,9 @@ export const FacultyDashboard = () => {
           {user.can?.raiseRequests && !user.roles?.includes('ADMIN') && (
             <button onClick={() => openModal('newRequest')} className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-2"><Plus className="w-4 h-4" /> New request</button>
           )}
-          <button onClick={() => openModal('newIssue')} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-2"><Plus className="w-4 h-4" /> Log issue</button>
+          {user.can?.logIssues && !user.roles?.includes('ADMIN') && (
+            <button onClick={() => openModal('newIssue')} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-2"><Plus className="w-4 h-4" /> Log issue</button>
+          )}
         </div>
       </div>
 
