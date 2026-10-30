@@ -4,7 +4,6 @@ import { api } from '../../api/client';
 import { timeAgo } from '../../api/format';
 import { useApp } from '../../context/AppContext';
 import { useApi } from '../../hooks/useApi';
-import { PAGE_TITLES } from './navigation';
 
 /** Opens what a notification is about and marks it read. */
 export function useOpenNotification() {
@@ -18,6 +17,15 @@ export function useOpenNotification() {
     else if (n.issue) openRecord('issue', n.issue.id);
   };
 }
+
+const PAGE_TITLES = {
+  dashboard: 'Overview', 'review-queue': 'Awaiting my decision', 'requests-all': 'All requests',
+  'escalated-requests': 'With CDC & Chairman', 'non-financial-requests': 'Faculty issues',
+  'approver-dashboard': 'Overview', decisions: 'Decided requests', 'faculty-dashboard': 'Dashboard',
+  'faculty-requests': 'My requests & issues', 'admin-dashboard': 'Dashboard', inventory: 'Inventory',
+  'purchase-bills': 'Purchase bills', exports: 'Exports', reports: 'Reports', 'audit-history': 'Audit log',
+  notifications: 'Notifications', profile: 'Profile', settings: 'Approval route', pending: 'Pending over 3 days',
+};
 
 export const Header = ({ toggleSidebar }) => {
   const { user, portal, activePage, setActivePage, openModal } = useApp();
