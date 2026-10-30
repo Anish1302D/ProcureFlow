@@ -118,3 +118,4 @@ describe('Issue #25 - Role-Based Request and Issue Visibility', () => {
     );
   });
 });
+

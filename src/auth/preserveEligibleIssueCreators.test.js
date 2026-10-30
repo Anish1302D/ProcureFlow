@@ -55,3 +55,4 @@ describe('Issue #25 - Preserve Eligible User Issue Creation', () => {
     assert.equal(issue.raisedBy.id, 'fac-1');
   });
 });
+

@@ -17,7 +17,7 @@ import { configService } from '../configService.js';
 import { NO_STORE, assertTokenShape, hashToken, linkError, newToken } from '../oneTimeLinks.js';
 import { assertPasswordAcceptable, hashPassword, passwordRules } from '../passwordPolicy.js';
 import {
-  REQUESTER_ROLES, ISSUE_MANAGER_ROLES, INVENTORY_READER_ROLES, hasAnyRole,
+  ISSUE_MANAGER_ROLES, INVENTORY_READER_ROLES, hasAnyRole,
   canRaiseRequests, canCreateIssues,
 } from '../roles.js';
 

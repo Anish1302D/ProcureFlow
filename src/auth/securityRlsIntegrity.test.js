@@ -78,3 +78,4 @@ describe('Issue #25 - Authorization and RLS Security Integrity', () => {
     );
   });
 });
+
