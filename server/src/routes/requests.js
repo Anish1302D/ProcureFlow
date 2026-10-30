@@ -1057,6 +1057,22 @@ requestsRouter.post('/:id/items', async (req, res) => {
     await checkItems(db, current.budget_head_id, [item.budgetItemId], rows.map((r) => r.budget_item_id));
     await insertItems(db, requestId, [item]);
     await recalcTotal(db, requestId);
+
+    if (current.department_id != null) {
+      const { rows: totRows } = await db.query(
+        'SELECT COALESCE(tentative_total_cost, 0)::numeric AS total FROM requests WHERE request_id = $1',
+        [requestId],
+      );
+      const newTotal = Number(totRows[0]?.total ?? 0);
+      const budgetStatus = await getDepartmentBudgetStatus(db, {
+        departmentId: current.department_id,
+        financialYearId: current.financial_year_id,
+        budgetHeadId: current.budget_head_id,
+        forUpdate: true,
+      });
+      assertDepartmentBudgetAvailable(budgetStatus, newTotal);
+    }
+
     return requireDetail(db, requestId, req.user);
   });
 
@@ -1088,6 +1104,22 @@ requestsRouter.patch('/:id/items/:itemId', async (req, res) => {
     );
     if (!rowCount) throw notFound('Item not found on this request');
     await recalcTotal(db, requestId);
+
+    if (current.department_id != null) {
+      const { rows: totRows } = await db.query(
+        'SELECT COALESCE(tentative_total_cost, 0)::numeric AS total FROM requests WHERE request_id = $1',
+        [requestId],
+      );
+      const newTotal = Number(totRows[0]?.total ?? 0);
+      const budgetStatus = await getDepartmentBudgetStatus(db, {
+        departmentId: current.department_id,
+        financialYearId: current.financial_year_id,
+        budgetHeadId: current.budget_head_id,
+        forUpdate: true,
+      });
+      assertDepartmentBudgetAvailable(budgetStatus, newTotal);
+    }
+
     return requireDetail(db, requestId, req.user);
   });
 
@@ -1118,12 +1150,24 @@ requestsRouter.post('/:id/submit', async (req, res) => {
   const requestId = param(req, 'id');
 
   const detail = await withUser(req.user.id, async (db) => {
-    await lockEditableRequest(db, requestId, req.user, ['DRAFT']);
+    const current = await lockEditableRequest(db, requestId, req.user, ['DRAFT']);
     const { rows } = await db.query(
       'SELECT count(*)::int AS n, COALESCE(SUM(estimated_total), 0)::numeric AS total FROM request_items WHERE request_id = $1', [requestId]);
     if (rows[0].n === 0) throw unprocessable('Add at least one item before submitting');
-    if (Number(rows[0].total) <= 0) throw unprocessable('Request total must be greater than ₹0 before submitting');
+    const total = Number(rows[0].total);
+    if (total <= 0) throw unprocessable('Request total must be greater than ₹0 before submitting');
     await recalcTotal(db, requestId);
+
+    if (current.department_id != null) {
+      const budgetStatus = await getDepartmentBudgetStatus(db, {
+        departmentId: current.department_id,
+        financialYearId: current.financial_year_id,
+        budgetHeadId: current.budget_head_id,
+        forUpdate: true,
+      });
+      assertDepartmentBudgetAvailable(budgetStatus, total);
+    }
+
     await db.query('SELECT fn_submit_request($1)', [requestId]);
     return requireDetail(db, requestId, req.user);
   });

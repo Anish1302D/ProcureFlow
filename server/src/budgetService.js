@@ -209,6 +209,7 @@ export async function getDepartmentBudgetStatus(db, { departmentId, financialYea
 
   // 1. Resolve applicable provision matching stored procedure logic:
   // specific budget_head_id first, falling back to department-wide (null)
+  const lockClause = forUpdate ? ' FOR UPDATE' : '';
   const { rows: provRows } = await db.query(
     `SELECT budget_provision_id, department_id, financial_year_id, budget_head_id, allocated_amount
        FROM budget_provisions
@@ -216,20 +217,12 @@ export async function getDepartmentBudgetStatus(db, { departmentId, financialYea
         AND financial_year_id = $2
         AND ($3::int IS NULL OR budget_head_id = $3 OR budget_head_id IS NULL)
       ORDER BY budget_head_id NULLS LAST
-      LIMIT 1`,
+      LIMIT 1${lockClause}`,
     [Number(departmentId), fyId, targetHeadId],
   );
 
   const provision = provRows[0];
   if (!provision) return null;
-
-  // 2. If row locking requested for concurrency protection, lock the provision row
-  if (forUpdate) {
-    await db.query(
-      'SELECT budget_provision_id FROM budget_provisions WHERE budget_provision_id = $1 FOR UPDATE',
-      [provision.budget_provision_id],
-    );
-  }
 
   // 3. Query v_department_budget_summary for the provision's computed accounting stats
   const { rows: summaryRows } = await db.query(
