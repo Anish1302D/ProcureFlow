@@ -738,7 +738,7 @@ async function requireDetail(db, requestId, user) {
  */
 async function lockEditableRequest(db, requestId, user, statuses = EDITABLE_STATUSES) {
   const { rows } = await db.query(
-    'SELECT request_id, raised_by, current_status, budget_head_id, department_id FROM requests WHERE request_id = $1',
+    'SELECT request_id, raised_by, current_status, budget_head_id, department_id, financial_year_id FROM requests WHERE request_id = $1',
     [requestId],
   );
   const r = rows[0];
