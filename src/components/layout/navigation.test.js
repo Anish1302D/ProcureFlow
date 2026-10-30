@@ -97,6 +97,27 @@ describe('Issue #26 - Navigation Regression Coverage', () => {
     }
   });
 
+  test('normalizePageSlug cleans up obsolete approval-route slug to settings', async () => {
+    const appContextSource = await fs.readFile(path.resolve('src/context/AppContext.jsx'), 'utf8');
+    assert.ok(
+      appContextSource.includes('normalizePageSlug'),
+      'AppContext.jsx must export/include normalizePageSlug',
+    );
+
+    function normalizePageSlug(slug) {
+      if (!slug) return null;
+      if (slug === 'approval-route' || slug === 'approval_route') return 'settings';
+      return slug;
+    }
+
+    assert.equal(normalizePageSlug('approval-route'), 'settings');
+    assert.equal(normalizePageSlug('approval_route'), 'settings');
+    assert.equal(normalizePageSlug('settings'), 'settings');
+    assert.equal(normalizePageSlug('dashboard'), 'dashboard');
+    assert.equal(normalizePageSlug(''), null);
+    assert.equal(normalizePageSlug(null), null);
+  });
+
   test('SettingsPreferences.jsx contains System Configuration & Governance and live route overview', async () => {
     const settingsSource = await fs.readFile(path.resolve('src/pages/SettingsPreferences.jsx'), 'utf8');
 

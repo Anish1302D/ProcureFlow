@@ -94,6 +94,7 @@ export const PAGE_TITLES = {
   notifications: 'Notifications',
   profile: 'Profile',
   settings: 'System configuration',
+  'approval-route': 'System configuration',
   pending: 'Pending over 3 days',
 };
 

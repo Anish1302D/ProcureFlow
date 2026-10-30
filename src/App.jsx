@@ -65,6 +65,7 @@ const PAGES = {
   reports: ReportsAnalytics,
   notifications: NotificationsCenter,
   settings: SettingsPreferences,
+  'approval-route': SettingsPreferences,
 };
 
 const PageRenderer = () => {
