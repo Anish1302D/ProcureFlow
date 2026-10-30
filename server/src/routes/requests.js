@@ -8,6 +8,7 @@ import { buildRequestStatusEmail } from '../emailTemplates.js';
 import { HttpError, conflict, forbidden, notFound, unprocessable } from '../errors.js';
 import { sendMail } from '../mailer.js';
 import { REQUESTER_ROLES } from '../roles.js';
+import { getDepartmentBudgetStatus, assertDepartmentBudgetAvailable, roundMoney } from '../budgetService.js';
 import { seal, verifySeal } from '../signing.js';
 import { removeFile } from '../storage.js';
 import {
@@ -921,6 +922,22 @@ requestsRouter.post('/', requireRole(...REQUESTER_ROLES), async (req, res) => {
     if (!head.rowCount) throw unprocessable('Budget head not found');
     await checkItems(db, body.budgetHeadId, body.items.map((i) => i.budgetItemId));
     await checkPlacement(db, body);
+
+    if (body.departmentId != null) {
+      const budgetStatus = await getDepartmentBudgetStatus(db, {
+        departmentId: body.departmentId,
+        financialYearId: body.financialYearId,
+        budgetHeadId: body.budgetHeadId,
+        forUpdate: true,
+      });
+
+      const requestedTotal = body.items.reduce(
+        (sum, item) => sum + Math.round(Number(item.quantity) * Number(item.unitCost) * 100),
+        0,
+      ) / 100;
+
+      assertDepartmentBudgetAvailable(budgetStatus, requestedTotal);
+    }
 
     const { rows } = await db.query(
       `INSERT INTO requests (raised_by, financial_year_id, budget_head_id, department_id, course_id,
