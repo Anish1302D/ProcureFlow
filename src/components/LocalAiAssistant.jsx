@@ -100,18 +100,7 @@ export const LocalAiAssistant = ({
     }, 700);
 
     return () => clearTimeout(timer);
-  }, [
-    hasRunAi,
-    request.title,
-    request.description,
-    request.urgency,
-    request.budgetHeadId,
-    request.budgetHeadName,
-    request.departmentName,
-    request.courseName,
-    request.items,
-    request.totalAmount,
-  ]);
+  }, [hasRunAi, aiLoading, existingRequests, request]);
 
   const handleApply = (suggestionId, suggestion) => {
     setPendingConfirm({ id: suggestionId, suggestion });
