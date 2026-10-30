@@ -10,11 +10,9 @@ import {
   HelpCircle,
   Loader2,
   Lock,
-  RotateCcw,
   Shield,
   ShieldCheck,
   Sparkles,
-  X,
   XCircle,
 } from 'lucide-react';
 import { validateRequestRules, STATUS } from '../validation/requestRules';
@@ -238,7 +236,7 @@ export const LocalAiAssistant = ({
 
       {/* 2. Optional Browser-Local AI Assistant */}
       <div className="pt-2 border-t border-gray-100 space-y-3">
-        {!hasAiFeature() ? (
+        {!aiFeatureAvailable ? (
           <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl flex items-center justify-between text-xs text-gray-500">
             <span>Optional Local AI Assistant is disabled in this environment configuration.</span>
             <span className="text-[10px] uppercase font-semibold text-gray-400">Deterministic check active</span>
@@ -441,7 +439,3 @@ export const LocalAiAssistant = ({
     </section>
   );
 };
-
-function hasAiFeature() {
-  return isLocalAiFeatureEnabled();
-}
