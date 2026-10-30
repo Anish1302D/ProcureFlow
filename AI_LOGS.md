@@ -452,3 +452,17 @@ Prevent ADMIN users from raising procurement requests or creating/logging facult
   - Non-admin campus roles retain faculty issue logging capabilities.
 - **Comprehensive Test Coverage**:
   - 10 targeted test suites covering role definitions, 403 responses, eligible requesters and creators, auth alignment, UI visibility, admin viewing preservation, and RLS security integrity.
+
+
+## 2026-10-30 (Issue #20)
+
+### Prompt
+
+Issue #20: Budget Limit Exceed Not Allowed.
+Prevent Heads of Department from raising procurement requests exceeding the available departmental budget in both frontend and backend. Follow a structured 25-commit implementation strategy with concurrency protection, RLS integrity, dynamic frontend feedback, and comprehensive regression tests.
+
+### Work Completed
+
+- Created and verified feature branch `feature/department-budget-limit-enforcement` based on latest `origin/main`.
+- Audited existing budget architecture across `db/schema/` (`budget_provisions`, `v_department_budget_summary`, `fn_get_department_budget_context`), backend request creation routes, and frontend request modal.
+- Documented implementation plan in `docs/plan/issue-20-budget-enforcement.md`.
