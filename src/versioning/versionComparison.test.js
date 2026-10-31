@@ -158,3 +158,4 @@ describe('Request Version Comparison & Diff Engine', () => {
     assert.equal(diff.summary.docsRemovedCount, 0);
   });
 });
+

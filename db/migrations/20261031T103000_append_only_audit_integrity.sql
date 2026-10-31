@@ -42,3 +42,4 @@ DROP TRIGGER IF EXISTS trg_approval_actions_no_delete ON approval_actions;
 CREATE TRIGGER trg_approval_actions_no_delete
     BEFORE DELETE ON approval_actions
     FOR EACH ROW EXECUTE FUNCTION fn_prevent_approval_action_deletion();
+

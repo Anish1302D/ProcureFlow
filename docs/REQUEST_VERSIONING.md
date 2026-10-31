@@ -45,3 +45,4 @@ This document specifies the architecture, data models, workflows, and security s
 ## 5. UI Interfaces
 - **Version Timeline**: Visual version history in Request Details modal, showing timestamps, changes, and authors.
 - **Version Diff View**: Side-by-side and highlighted comparison of differences between revisions (quantities, costs, line items, and attachments).
+

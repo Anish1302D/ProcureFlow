@@ -147,3 +147,4 @@ BEGIN
             jsonb_build_object('status', v_status, 'version', 1, 'stage_id', v_stage, 'amount', v_req.tentative_total_cost));
 END;
 $$;
+
