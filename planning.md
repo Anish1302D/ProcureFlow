@@ -119,7 +119,7 @@ piece of work and it is fully specified, so it can start today.*
 
 | # | Task | Files |
 |---|---|---|
-| C1 | Expose prior request versions. `request_versions` stores a full snapshot of every version including items, but nothing reads it back — a reviewer cannot see what the original said. Add `GET /api/requests/:id/versions` and a view of it on the request screen. | `server/src/routes/requests.js`, `src/components/modals/RequestDetailModal.jsx` |
+| C1 | Expose prior request versions and immutable audit trail. `request_versions` stores a full snapshot of every version including items and documents. Add `GET /api/requests/:id/versions`, version history modal tabs, comparison diffs, and item-level recommendation preservation. (In progress on `feature/request-versioning`) | `server/src/routes/requests.js`, `src/components/modals/RequestDetailModal.jsx` |
 | C2 | Add a review step to budget provisions so the Principal can record that they have seen one (reviewed by, reviewed at, optional note). Today they can only read it. | `db/` migration, `server/src/routes/budget.js`, `src/pages/BudgetProvisions.jsx` |
 | C3 | Keep a history of provision changes. `POST` currently overwrites the amount with no record of the previous value. | `db/` migration, `server/src/routes/budget.js` |
 | C4 | Implement the Q10 answer if provisions must follow the academic year. | `db/` migration + everything reading `financial_year_id` for budgets |
