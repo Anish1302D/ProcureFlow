@@ -19,7 +19,11 @@ CREATE TABLE attachments (
     version_number         INTEGER NOT NULL DEFAULT 1,
     superseded_by_id       UUID REFERENCES attachments(attachment_id) ON DELETE SET NULL,
     request_version_number INTEGER DEFAULT 1,
-    replacement_reason     TEXT
+    replacement_reason     TEXT,
+    archived_at            TIMESTAMPTZ DEFAULT NULL,
+    archived_by            UUID REFERENCES users(user_id) ON DELETE SET NULL,
+    archived_by_role       TEXT,
+    archived_reason        TEXT
 );
 
 CREATE INDEX attachments_request_idx          ON attachments(request_id);
@@ -27,6 +31,7 @@ CREATE INDEX attachments_action_idx           ON attachments(action_id);
 CREATE INDEX attachments_superseded_idx       ON attachments(superseded_by_id);
 CREATE INDEX attachments_budget_provision_idx ON attachments(budget_provision_id);
 CREATE INDEX attachments_sha256_idx           ON attachments(sha256_hash);
+CREATE INDEX attachments_archived_idx         ON attachments(archived_at) WHERE archived_at IS NOT NULL;
 
 -- Generic audit log for anything worth tracing beyond the domain-level
 -- approval_actions (login, permission changes, master-data edits, etc.).

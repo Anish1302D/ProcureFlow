@@ -35,6 +35,8 @@ const attachmentRow = (r) => ({
   supersededById: r.superseded_by_id ?? null,
   requestVersionNumber: r.request_version_number ?? 1,
   replacementReason: r.replacement_reason ?? null,
+  archivedAt: r.archived_at ?? null,
+  archivedReason: r.archived_reason ?? null,
   uploadedBy: { id: r.uploaded_by, name: r.uploaded_by_name },
   uploadedAt: r.uploaded_at,
 });
@@ -97,18 +99,28 @@ async function store(req, parent, authorise) {
 
 attachmentsRouter.get('/requests/:id/attachments', async (req, res) => {
   const requestId = param(req, 'id');
+  const includeArchived = req.query.includeArchived === 'true' && req.user.roles.includes('ADMIN');
+
   const rows = await withUser(req.user.id, async (db) => {
     const { rows: reqRows } = await db.query(
       'SELECT request_id FROM requests WHERE request_id = $1',
       [requestId],
     );
     if (!reqRows[0]) throw notFound('Request not found');
-    return (await db.query(
-      `SELECT a.*, u.full_name AS uploaded_by_name
-         FROM attachments a JOIN users u ON u.user_id = a.uploaded_by
-        WHERE a.request_id = $1 ORDER BY a.version_number ASC, a.uploaded_at ASC`,
-      [requestId],
-    )).rows;
+
+    const query = includeArchived
+      ? `SELECT a.*, u.full_name AS uploaded_by_name
+           FROM attachments a JOIN users u ON u.user_id = a.uploaded_by
+          WHERE a.request_id = $1 ORDER BY a.version_number ASC, a.uploaded_at ASC`
+      : `SELECT a.*, u.full_name AS uploaded_by_name
+           FROM attachments a JOIN users u ON u.user_id = a.uploaded_by
+          WHERE a.request_id = $1
+            AND (a.archived_at IS NULL OR NOT EXISTS (
+                   SELECT 1 FROM information_schema.columns WHERE table_name = 'attachments' AND column_name = 'archived_at'
+                 ))
+          ORDER BY a.version_number ASC, a.uploaded_at ASC`;
+
+    return (await db.query(query, [requestId])).rows;
   });
   res.json(rows.map(attachmentRow));
 });
@@ -197,6 +209,66 @@ attachmentsRouter.post('/attachments/:id/supersede', upload, async (req, res) =>
   }
 });
 
+// Auditable soft-removal / archival mechanism
+attachmentsRouter.post('/attachments/:id/archive', async (req, res) => {
+  const attachmentId = param(req, 'id');
+  const reason = (req.body?.reason || '').trim();
+  if (!reason) {
+    throw new HttpError(400, 'A reason is required to archive an evidentiary document');
+  }
+  const userRole = req.user.roles[0] || 'USER';
+
+  const updated = await withUser(req.user.id, async (db) => {
+    const { rows } = await db.query(
+      `SELECT a.*, r.current_status, r.current_stage_id, r.raised_by,
+              EXISTS (SELECT 1 FROM stage_approvers sa
+                       WHERE sa.stage_id = r.current_stage_id AND sa.user_id = $2) AS staffed_here
+         FROM attachments a
+         LEFT JOIN requests r ON r.request_id = a.request_id
+        WHERE a.attachment_id = $1
+          FOR UPDATE OF a`,
+      [attachmentId, req.user.id],
+    );
+    const a = rows[0];
+    if (!a) throw notFound('Attachment not found');
+    if (a.archived_at) throw conflict('Attachment has already been archived');
+
+    const isAdmin = req.user.roles.includes('ADMIN');
+    const isRaiser = a.raised_by === req.user.id;
+    const isUploader = a.uploaded_by === req.user.id;
+    const isStaffed = a.staffed_here;
+    if (!isAdmin && !isRaiser && !isUploader && !isStaffed) {
+      throw forbidden('You do not have permission to archive this document');
+    }
+
+    await db.query(
+      `UPDATE attachments
+          SET archived_at = NOW(),
+              archived_by = $2,
+              archived_by_role = $3,
+              archived_reason = $4
+        WHERE attachment_id = $1`,
+      [attachmentId, req.user.id, userRole, reason],
+    );
+
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, before_json, after_json)
+       VALUES ('attachment', $1, $2, 'ARCHIVE_ATTACHMENT',
+               jsonb_build_object('attachment_id', $1::text, 'file_name', $3::text, 'version_number', $4::int),
+               jsonb_build_object('archived_at', NOW(), 'archived_by', $2::text, 'archived_by_role', $5::text, 'archived_reason', $6::text))`,
+      [attachmentId, req.user.id, a.file_name, a.version_number, userRole, reason],
+    );
+
+    return (await db.query(
+      `SELECT a.*, u.full_name AS uploaded_by_name FROM attachments a
+         JOIN users u ON u.user_id = a.uploaded_by WHERE a.attachment_id = $1`,
+      [attachmentId],
+    )).rows[0];
+  });
+
+  res.status(200).json(attachmentRow(updated));
+});
+
 // The sanction letter behind a department's annual provision. Only the head of
 // that department (or an administrator) may attach one; the RLS insert policy
 // says the same, and is what stops a head reaching into another department.
@@ -267,12 +339,13 @@ attachmentsRouter.get('/attachments/:id', async (req, res) => {
 
 // Removing evidence from a decided request would weaken the record, so files
 // can only be removed while their request is still a draft, or their issue
-// still open.
+// still open. Historical document versions cannot be hard deleted.
 attachmentsRouter.delete('/attachments/:id', async (req, res) => {
   const attachmentId = param(req, 'id');
   const fileInfo = await withUser(req.user.id, async (db) => {
     const { rows } = await db.query(
       `SELECT a.storage_path, a.storage_backend, a.uploaded_by, a.budget_provision_id, a.action_id,
+              a.version_number, a.superseded_by_id, a.file_name, a.request_id,
               r.current_status AS request_status, i.status AS issue_status
          FROM attachments a
          LEFT JOIN requests r ON r.request_id = a.request_id
@@ -294,6 +367,19 @@ attachmentsRouter.delete('/attachments/:id', async (req, res) => {
     if (a.budget_provision_id) {
       throw conflict('Sanction documents on a budget provision are part of the official financial record and cannot be deleted');
     }
+    if (a.version_number > 1 || a.superseded_by_id !== null) {
+      throw conflict('Historical document versions cannot be permanently deleted; archive instead');
+    }
+
+    // Record audit entry for deletion
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, before_json, after_json)
+       VALUES ('attachment', $1, $2, 'DELETE_DRAFT_ATTACHMENT',
+               jsonb_build_object('attachment_id', $1::text, 'file_name', $3::text, 'request_id', $4::text),
+               jsonb_build_object('deleted_at', NOW(), 'deleted_by', $2::text))`,
+      [attachmentId, req.user.id, a.file_name, a.request_id],
+    );
+
     await db.query('DELETE FROM attachments WHERE attachment_id = $1', [attachmentId]);
     return { storagePath: a.storage_path, backend: a.storage_backend };
   });
