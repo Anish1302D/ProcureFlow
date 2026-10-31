@@ -1521,6 +1521,79 @@ requestsRouter.get('/:id/timeline', async (req, res) => {
   }));
 });
 
+requestsRouter.get('/:id/versions', async (req, res) => {
+  const requestId = param(req, 'id');
+
+  const versions = await withUser(req.user.id, async (db) => {
+    const { rows: reqRows } = await db.query(
+      'SELECT request_id, current_version_number FROM requests WHERE request_id = $1',
+      [requestId],
+    );
+    if (!reqRows[0]) throw notFound('Request not found');
+    const currentVersionNumber = reqRows[0].current_version_number;
+
+    const { rows } = await db.query(
+      `SELECT rv.version_id, rv.request_id, rv.version_number,
+              rv.title, rv.description, rv.department_id, d.name AS department_name,
+              rv.course_id, c.name AS course_name,
+              rv.financial_year_id, fy.year_code AS financial_year_code,
+              rv.budget_head_id, bh.name AS budget_head_name, bh.head_type,
+              rv.tentative_total_cost, rv.extra, rv.items_snapshot,
+              COALESCE(rv.documents_snapshot, '[]'::jsonb) AS documents_snapshot,
+              rv.submitted_by, u.full_name AS submitted_by_name, u.email AS submitted_by_email,
+              rv.submitted_at, rv.correction_id,
+              cr.reason AS correction_reason, cr.requested_by AS correction_requested_by,
+              cru.full_name AS correction_requested_by_name, ws.name AS correction_stage_name
+         FROM request_versions rv
+         LEFT JOIN departments d ON d.department_id = rv.department_id
+         LEFT JOIN courses c ON c.course_id = rv.course_id
+         LEFT JOIN financial_years fy ON fy.financial_year_id = rv.financial_year_id
+         LEFT JOIN budget_heads bh ON bh.budget_head_id = rv.budget_head_id
+         LEFT JOIN users u ON u.user_id = rv.submitted_by
+         LEFT JOIN correction_requests cr ON cr.correction_id = rv.correction_id
+         LEFT JOIN users cru ON cru.user_id = cr.requested_by
+         LEFT JOIN workflow_stages ws ON ws.stage_id = cr.requested_at_stage_id
+        WHERE rv.request_id = $1
+        ORDER BY rv.version_number ASC`,
+      [requestId],
+    );
+
+    return rows.map((r) => ({
+      versionId: r.version_id,
+      requestId: r.request_id,
+      versionNumber: r.version_number,
+      isCurrent: r.version_number === currentVersionNumber,
+      title: r.title,
+      description: r.description,
+      department: r.department_id ? { id: r.department_id, name: r.department_name } : null,
+      course: r.course_id ? { id: r.course_id, name: r.course_name } : null,
+      financialYear: { id: r.financial_year_id, code: r.financial_year_code },
+      budgetHead: { id: r.budget_head_id, name: r.budget_head_name, headType: r.head_type },
+      tentativeTotalCost: Number(r.tentative_total_cost),
+      extra: r.extra || {},
+      items: typeof r.items_snapshot === 'string' ? JSON.parse(r.items_snapshot) : r.items_snapshot,
+      documents: typeof r.documents_snapshot === 'string' ? JSON.parse(r.documents_snapshot) : r.documents_snapshot,
+      submittedBy: {
+        id: r.submitted_by,
+        name: r.submitted_by_name,
+        email: r.submitted_by_email,
+      },
+      submittedAt: r.submitted_at,
+      correction: r.correction_id ? {
+        id: r.correction_id,
+        reason: r.correction_reason,
+        requestedBy: {
+          id: r.correction_requested_by,
+          name: r.correction_requested_by_name,
+        },
+        stageName: r.correction_stage_name,
+      } : null,
+    }));
+  });
+
+  res.json(versions);
+});
+
 requestsRouter.post('/:id/carry-forward', async (req, res) => {
   const requestId = param(req, 'id');
   const { financialYearId } = z.object({ financialYearId: intId }).parse(req.body);
