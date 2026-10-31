@@ -527,6 +527,12 @@ BEGIN
             USING ERRCODE = 'SP004';
     END IF;
 
+    -- Linear versioning protection: Cannot supersede a document that has already been superseded
+    IF v_old.superseded_by_id IS NOT NULL THEN
+        RAISE EXCEPTION 'Attachment % has already been superseded by %', p_old_attachment_id, v_old.superseded_by_id
+            USING ERRCODE = 'SP015';
+    END IF;
+
     IF v_old.request_id IS NOT NULL THEN
         SELECT current_version_number, current_status INTO v_req_v, v_req_status
           FROM requests WHERE request_id = v_old.request_id;
