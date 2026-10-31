@@ -45,5 +45,6 @@ INSERT INTO schema_migrations (filename) VALUES
     ('20261018T130000_two_step_verification.sql'),
     ('20261031T090000_strengthen_request_version_snapshots.sql'),
     ('20261031T093000_preserve_complete_resubmission_history.sql'),
-    ('20261031T100000_item_level_partial_recommendations.sql')
+    ('20261031T100000_item_level_partial_recommendations.sql'),
+    ('20261031T103000_append_only_audit_integrity.sql')
 ON CONFLICT (filename) DO NOTHING;
