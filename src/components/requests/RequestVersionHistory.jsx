@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
-import { Clock, GitCommit, History, AlertCircle, FileText, ArrowLeft } from 'lucide-react';
+import { Clock, GitCommit, History, AlertCircle, FileText, ArrowLeft, ArrowLeftRight } from 'lucide-react';
 import { useApi } from '../../hooks/useApi';
 import { date, money } from '../../api/format';
 import { Loading } from '../ui/States';
+import { RequestVersionComparison } from './RequestVersionComparison';
 
 export const RequestVersionHistory = ({ requestId, currentVersionNumber }) => {
   const { data: versions, loading, error } = useApi(requestId ? `/api/requests/${requestId}/versions` : null);
   const [selectedVersion, setSelectedVersion] = useState(null);
+  const [viewMode, setViewMode] = useState('inspect'); // 'inspect' | 'compare'
 
   if (loading) {
     return <Loading text="Loading version history…" />;
@@ -22,37 +24,80 @@ export const RequestVersionHistory = ({ requestId, currentVersionNumber }) => {
 
   return (
     <div className="space-y-4">
-      {/* Version timeline list */}
-      <div className="flex flex-wrap items-center gap-2">
-        {versions.map((ver) => {
-          const isSelected = selectedVersion === ver.versionNumber;
-          const isCurrent = ver.isCurrent || ver.versionNumber === currentVersionNumber;
-
-          return (
+      {/* Mode Switcher for multi-version requests */}
+      {versions.length > 1 && (
+        <div className="flex items-center justify-between border-b border-gray-100 pb-2">
+          <div className="flex items-center gap-1.5 p-1 rounded-lg bg-gray-100/80 text-xs">
             <button
-              key={ver.versionId}
               type="button"
-              onClick={() => setSelectedVersion(isSelected ? null : ver.versionNumber)}
-              className={`px-3 py-2 rounded-lg text-xs font-medium border transition-all flex items-center gap-2 ${
-                isSelected
-                  ? 'bg-indigo-50 border-indigo-400 text-indigo-700 ring-2 ring-indigo-200'
-                  : isCurrent
-                  ? 'bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100'
-                  : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100'
+              onClick={() => {
+                setViewMode('inspect');
+              }}
+              className={`px-3 py-1 rounded-md font-semibold transition-all ${
+                viewMode === 'inspect'
+                  ? 'bg-white text-indigo-700 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900'
               }`}
             >
-              <GitCommit className={`w-3.5 h-3.5 ${isCurrent ? 'text-emerald-600' : 'text-gray-400'}`} />
-              <span className="font-semibold">v{ver.versionNumber}</span>
-              {isCurrent && (
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-700 uppercase">
-                  Current
-                </span>
-              )}
-              <span className="text-gray-500 font-normal">({money(ver.tentativeTotalCost)})</span>
+              Inspect Snapshots
             </button>
-          );
-        })}
-      </div>
+            <button
+              type="button"
+              onClick={() => {
+                setViewMode('compare');
+                setSelectedVersion(null);
+              }}
+              className={`px-3 py-1 rounded-md font-semibold flex items-center gap-1.5 transition-all ${
+                viewMode === 'compare'
+                  ? 'bg-white text-indigo-700 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <ArrowLeftRight className="w-3.5 h-3.5" /> Compare Revisions
+            </button>
+          </div>
+
+          <span className="text-[11px] text-gray-500">
+            {versions.length} revisions on record
+          </span>
+        </div>
+      )}
+
+      {viewMode === 'compare' && versions.length > 1 ? (
+        <RequestVersionComparison versions={versions} />
+      ) : (
+        <>
+          {/* Version timeline list */}
+          <div className="flex flex-wrap items-center gap-2">
+            {versions.map((ver) => {
+              const isSelected = selectedVersion === ver.versionNumber;
+              const isCurrent = ver.isCurrent || ver.versionNumber === currentVersionNumber;
+
+              return (
+                <button
+                  key={ver.versionId}
+                  type="button"
+                  onClick={() => setSelectedVersion(isSelected ? null : ver.versionNumber)}
+                  className={`px-3 py-2 rounded-lg text-xs font-medium border transition-all flex items-center gap-2 ${
+                    isSelected
+                      ? 'bg-indigo-50 border-indigo-400 text-indigo-700 ring-2 ring-indigo-200'
+                      : isCurrent
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100'
+                      : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100'
+                  }`}
+                >
+                  <GitCommit className={`w-3.5 h-3.5 ${isCurrent ? 'text-emerald-600' : 'text-gray-400'}`} />
+                  <span className="font-semibold">v{ver.versionNumber}</span>
+                  {isCurrent && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-700 uppercase">
+                      Current
+                    </span>
+                  )}
+                  <span className="text-gray-500 font-normal">({money(ver.tentativeTotalCost)})</span>
+                </button>
+              );
+            })}
+          </div>
 
       {/* Selected Version Detail Snapshot View */}
       {activeVersion ? (
@@ -220,6 +265,8 @@ export const RequestVersionHistory = ({ requestId, currentVersionNumber }) => {
             <span className="text-[11px] text-indigo-600 font-medium">Click a version to inspect</span>
           )}
         </div>
+      )}
+        </>
       )}
     </div>
   );
