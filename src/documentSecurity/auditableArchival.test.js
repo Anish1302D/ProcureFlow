@@ -139,13 +139,13 @@ describe('Auditable Document Archival & Retention Enforcement', () => {
 
   test('Historical version relationships are preserved after archival', () => {
     const store = new DocumentAuditStore();
-    const v1 = store.addDocument({
+    store.addDocument({
       id: 'doc-v1',
       fileName: 'quotation_v1.pdf',
       versionNumber: 1,
       supersededById: 'doc-v2',
     });
-    const v2 = store.addDocument({
+    store.addDocument({
       id: 'doc-v2',
       fileName: 'quotation_v2.pdf',
       versionNumber: 2,

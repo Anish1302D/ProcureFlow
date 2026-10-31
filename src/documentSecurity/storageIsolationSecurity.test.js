@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { describe, test } from 'node:test';
 
-/* global process */
 process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5433/procureflow_test';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret-at-least-32-chars-long';
 process.env.SIGNING_SECRET = process.env.SIGNING_SECRET || 'test-signing-secret-for-security';

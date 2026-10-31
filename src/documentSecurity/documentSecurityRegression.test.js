@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import crypto from 'node:crypto';
 import { describe, test } from 'node:test';
 
@@ -13,15 +14,15 @@ describe('Document Security & Versioning Regression Coverage', () => {
       ZIP_GENERIC: Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.alloc(64, 0x00)]),
       ZIP_DOCX: Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from('word/document.xml content')]),
       ZIP_XLSX: Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from('xl/workbook.xml content')]),
-      // Executables & scripts
+      // Executables & scripts (synthetic safe test byte markers)
       EXE_PE: Buffer.from([0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00]), // MZ
       ELF_BIN: Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00]), // .ELF
       MACHO_BIN: Buffer.from([0xfe, 0xed, 0xfa, 0xce]),
       JAVA_CLASS: Buffer.from([0xca, 0xfe, 0xba, 0xbe]),
-      SHEBANG_SH: Buffer.from('#!/bin/bash\nrm -rf /'),
-      PHP_SCRIPT: Buffer.from('<?php system($_GET["cmd"]); ?>'),
-      HTML_SCRIPT: Buffer.from('<script>alert("xss")</script>'),
-      BAT_SCRIPT: Buffer.from('@echo off\ndir /s'),
+      SHEBANG_SH: Buffer.from('#!/bin/sh\necho test\n'),
+      PHP_SCRIPT: Buffer.from('<?php echo "test script"; ?>'),
+      HTML_SCRIPT: Buffer.from('<script>console.log(1)</script>'),
+      BAT_SCRIPT: Buffer.from('@echo off\nexit\n'),
     };
 
     test('Allowed file formats exhibit valid magic byte signatures', () => {
@@ -63,6 +64,7 @@ describe('Document Security & Versioning Regression Coverage', () => {
       // Strip directory traversal
       let base = name.replace(/\\/g, '/').split('/').pop() || '';
       // Remove null bytes and control chars
+      // eslint-disable-next-line no-control-regex
       base = base.replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200D\uFEFF]/g, '_');
       // Replace quotes and forbidden characters
       base = base.replace(/[<>:"/\\|?*]/g, '_');
@@ -97,26 +99,25 @@ describe('Document Security & Versioning Regression Coverage', () => {
 
     test('Enforces maximum length bounds', () => {
       const longName = 'a'.repeat(250) + '.pdf';
-      const clean = sanitize(longName, '.pdf');
-      assert.ok(clean.length <= 200);
+      const sanitized = sanitize(longName, '.pdf');
+      assert.ok(sanitized.length <= 200);
     });
   });
 
-  // ── 3. CRYPTOGRAPHIC INTEGRITY (SHA-256) SPECIFICATION ──
+  // ── 3. CRYPTOGRAPHIC INTEGRITY VERIFICATION ──
   describe('Cryptographic Integrity Verification', () => {
     test('Calculates consistent SHA-256 digest on document upload', () => {
-      const docBytes = Buffer.from('%PDF-1.7 Critical Requisition Quote Document');
-      const hash1 = crypto.createHash('sha256').update(docBytes).digest('hex');
-      const hash2 = crypto.createHash('sha256').update(docBytes).digest('hex');
+      const buffer = Buffer.from('%PDF-1.7 Valid quotation ₹90,000');
+      const hash = crypto.createHash('sha256').update(buffer).digest('hex');
 
-      assert.equal(hash1, hash2);
-      assert.equal(hash1.length, 64);
-      assert.match(hash1, /^[0-9a-f]{64}$/);
+      assert.equal(typeof hash, 'string');
+      assert.equal(hash.length, 64);
+      assert.equal(hash, crypto.createHash('sha256').update(buffer).digest('hex'));
     });
 
     test('Tampering even a single byte alters the SHA-256 integrity hash', () => {
-      const original = Buffer.from('%PDF-1.7 Valid quotation ₹50,000');
-      const tampered = Buffer.from('%PDF-1.7 Valid quotation ₹90,000');
+      const original = Buffer.from('%PDF-1.7 Valid quotation ₹90,000');
+      const tampered = Buffer.from('%PDF-1.7 Valid quotation ₹90,001');
 
       const originalHash = crypto.createHash('sha256').update(original).digest('hex');
       const tamperedHash = crypto.createHash('sha256').update(tampered).digest('hex');

@@ -81,6 +81,25 @@ export default [
   // The Node API and its scripts and tests.
   // ---------------------------------------------------------------------
   {
+    files: ['src/**/*.test.js'],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'module',
+      globals: { ...globals.browser, ...globals.node },
+    },
+    rules: {
+      'no-unused-vars': ['error', {
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_',
+        caughtErrors: 'none',
+      }],
+    },
+  },
+
+  // ---------------------------------------------------------------------
+  // The Node API and its scripts and tests.
+  // ---------------------------------------------------------------------
+  {
     files: ['server/**/*.js'],
     languageOptions: {
       ecmaVersion: 2023,

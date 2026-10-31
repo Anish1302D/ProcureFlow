@@ -235,6 +235,7 @@ export function cleanFileName(name, fallbackExt = '') {
   let base = name.replace(/\\/g, '/').split('/').pop() || '';
 
   // Remove null bytes and non-printable control characters
+  // eslint-disable-next-line no-control-regex
   base = base.replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200D\uFEFF]/gu, '_');
 
   // Replace filesystem reserved characters: < > : " / \ | ? *
