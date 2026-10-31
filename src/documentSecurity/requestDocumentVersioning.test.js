@@ -47,7 +47,7 @@ describe('Request Document Version Association & Concurrency Safety', () => {
 
         if (oldDoc.supersededById !== null) {
           const err = new Error(`Attachment ${oldId} has already been superseded by ${oldDoc.supersededById}`);
-          err.code = 'SP015';
+          err.code = 'SP019';
           throw err;
         }
 
@@ -185,7 +185,7 @@ describe('Request Document Version Association & Concurrency Safety', () => {
         uploadedBy: 'user-head',
         replacementReason: 'Conflicting replacement',
       }),
-      (err) => err.code === 'SP015' && err.message.includes('already been superseded'),
+      (err) => err.code === 'SP019' && err.message.includes('already been superseded'),
     );
   });
 

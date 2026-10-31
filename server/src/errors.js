@@ -50,6 +50,7 @@ const PG_ERRORS = {
   SP016: [409, 'A request cannot move past the Principal without the Principal\'s decision'],
   SP017: [409, 'This request is waiting for the requester to correct and resubmit it'],
   SP018: [409, 'This request has not been returned for correction, so it cannot be resubmitted'],
+  SP019: [409, 'This document has already been superseded'],
   ST001: [404, 'Invalid or unknown setup token'],
   ST002: [400, 'This setup link has already been used'],
   ST003: [400, 'This setup link has expired. Please contact your administrator.'],

@@ -532,7 +532,13 @@ BEGIN
     -- Linear versioning protection: Cannot supersede a document that has already been superseded
     IF v_old.superseded_by_id IS NOT NULL THEN
         RAISE EXCEPTION 'Attachment % has already been superseded by %', p_old_attachment_id, v_old.superseded_by_id
-            USING ERRCODE = 'SP015';
+            USING ERRCODE = 'SP019';
+    END IF;
+
+    -- Cannot supersede an archived document
+    IF v_old.archived_at IS NOT NULL THEN
+        RAISE EXCEPTION 'Attachment % has been archived and cannot be superseded', p_old_attachment_id
+            USING ERRCODE = 'SP019';
     END IF;
 
     IF v_old.request_id IS NOT NULL THEN

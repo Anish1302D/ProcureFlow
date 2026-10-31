@@ -46,5 +46,8 @@ INSERT INTO schema_migrations (filename) VALUES
     ('20261031T090000_strengthen_request_version_snapshots.sql'),
     ('20261031T093000_preserve_complete_resubmission_history.sql'),
     ('20261031T100000_item_level_partial_recommendations.sql'),
-    ('20261031T103000_append_only_audit_integrity.sql')
+    ('20261031T103000_append_only_audit_integrity.sql'),
+    ('20261031T110000_strengthen_document_versioning.sql'),
+    ('20261031T113000_document_integrity_and_metadata.sql'),
+    ('20261031T120000_auditable_document_archival.sql')
 ON CONFLICT (filename) DO NOTHING;

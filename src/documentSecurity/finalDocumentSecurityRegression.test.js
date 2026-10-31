@@ -107,10 +107,10 @@ describe('Final Document Security & Versioning Regression Suite', () => {
       const oldDoc = attachments.get(oldId);
       assert.ok(oldDoc, 'Old attachment must exist');
 
-      // Concurrency and linear chain check (fn_supersede_attachment SP015)
+      // Concurrency and linear chain check (fn_supersede_attachment SP019)
       if (oldDoc.supersededById !== null) {
         const err = new Error('Cannot supersede an already superseded attachment');
-        err.code = 'SP015';
+        err.code = 'SP019';
         throw err;
       }
 
@@ -148,7 +148,7 @@ describe('Final Document Security & Versioning Regression Suite', () => {
     assert.notEqual(docV1.sha256, docV2.sha256);
 
     // ── STEP 4: Concurrency Collision Protection ──
-    // A concurrent request attempting to supersede docV1 again MUST fail with SP015
+    // A concurrent request attempting to supersede docV1 again MUST fail with SP019
     assert.throws(
       () => supersedeAttachment({
         oldId: 'att-v1-001',
@@ -160,7 +160,7 @@ describe('Final Document Security & Versioning Regression Suite', () => {
         reason: 'Concurrent race attempt',
         requestVersionNumber: 2,
       }),
-      (err) => err.code === 'SP015' && /already superseded/.test(err.message),
+      (err) => err.code === 'SP019' && /already superseded/.test(err.message),
     );
 
     // ── STEP 5: Second Resubmission & Version Progression (v2 -> v3) ──

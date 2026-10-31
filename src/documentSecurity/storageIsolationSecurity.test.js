@@ -205,7 +205,7 @@ describe('Storage Security & Access Isolation Test Suite', () => {
         // Check if already superseded
         if (row.superseded_by_id) {
           const err = new Error('Cannot supersede an already superseded attachment');
-          err.code = 'SP015';
+          err.code = 'SP019';
           throw err;
         }
 
@@ -226,10 +226,10 @@ describe('Storage Security & Access Isolation Test Suite', () => {
       assert.equal(v2.version_number, 2);
       assert.equal(attachmentTable.get('att-base-01').superseded_by_id, 'att-v2-02');
 
-      // Concurrent second supersession on same base doc: must throw SP015
+      // Concurrent second supersession on same base doc: must throw SP019
       assert.throws(
         () => supersedeAttachmentAtomic('att-base-01', 'att-v2-collision'),
-        (err) => err.code === 'SP015' && /already superseded/.test(err.message),
+        (err) => err.code === 'SP019' && /already superseded/.test(err.message),
       );
 
       // Third supersession linearly supersedes v2 -> v3

@@ -49,7 +49,8 @@ function acceptedFile(req) {
     throw new HttpError(400, 'Uploaded file is empty (0 bytes)');
   }
   if (req.file.size > config.maxUploadBytes || req.file.buffer.length > config.maxUploadBytes) {
-    throw new HttpError(413, `File exceeds the maximum allowed size of ${config.maxUploadMb} MB`);
+    const maxMb = Math.round(config.maxUploadBytes / (1024 * 1024)) || 10;
+    throw new HttpError(413, `File exceeds the maximum allowed size of ${maxMb} MB`);
   }
   const type = detectType(req.file.buffer, req.file.mimetype, req.file.originalname);
   if (!type) {
@@ -102,22 +103,13 @@ attachmentsRouter.get('/requests/:id/attachments', async (req, res) => {
   const includeArchived = req.query.includeArchived === 'true' && req.user.roles.includes('ADMIN');
 
   const rows = await withUser(req.user.id, async (db) => {
-    const { rows: reqRows } = await db.query(
-      'SELECT request_id FROM requests WHERE request_id = $1',
-      [requestId],
-    );
-    if (!reqRows[0]) throw notFound('Request not found');
-
     const query = includeArchived
       ? `SELECT a.*, u.full_name AS uploaded_by_name
            FROM attachments a JOIN users u ON u.user_id = a.uploaded_by
           WHERE a.request_id = $1 ORDER BY a.version_number ASC, a.uploaded_at ASC`
       : `SELECT a.*, u.full_name AS uploaded_by_name
            FROM attachments a JOIN users u ON u.user_id = a.uploaded_by
-          WHERE a.request_id = $1
-            AND (a.archived_at IS NULL OR NOT EXISTS (
-                   SELECT 1 FROM information_schema.columns WHERE table_name = 'attachments' AND column_name = 'archived_at'
-                 ))
+          WHERE a.request_id = $1 AND a.archived_at IS NULL
           ORDER BY a.version_number ASC, a.uploaded_at ASC`;
 
     return (await db.query(query, [requestId])).rows;
@@ -154,34 +146,6 @@ attachmentsRouter.post('/attachments/:id/supersede', upload, async (req, res) =>
   let savedFile;
   try {
     const row = await withUser(req.user.id, async (db) => {
-      // Pre-authorization check and lock old attachment row before saving file to storage
-      const { rows: oldRows } = await db.query(
-        `SELECT a.*, r.current_status, r.current_stage_id, r.raised_by,
-                EXISTS (SELECT 1 FROM stage_approvers sa
-                         WHERE sa.stage_id = r.current_stage_id AND sa.user_id = $2) AS staffed_here
-           FROM attachments a
-           LEFT JOIN requests r ON r.request_id = a.request_id
-          WHERE a.attachment_id = $1
-            FOR UPDATE OF a`,
-        [oldAttachmentId, req.user.id],
-      );
-      const oldDoc = oldRows[0];
-      if (!oldDoc) throw notFound('Attachment not found');
-      if (oldDoc.superseded_by_id) {
-        throw conflict('This document has already been superseded');
-      }
-      if (oldDoc.archived_at) {
-        throw conflict('This document is archived and cannot be superseded');
-      }
-      if (oldDoc.request_id) {
-        if (CLOSED_REQUEST.includes(oldDoc.current_status)) {
-          throw conflict('Request is closed; its documents cannot be replaced');
-        }
-        if (oldDoc.raised_by !== req.user.id && !oldDoc.staffed_here && !req.user.roles.includes('ADMIN')) {
-          throw forbidden('Only the requester or an approver at the current stage can replace files');
-        }
-      }
-
       savedFile = await saveFile(req.file.buffer, type.ext);
       const sha256 = calculateSha256(req.file.buffer);
       const originalName = req.file.originalname || 'file';
@@ -305,10 +269,7 @@ attachmentsRouter.get('/attachments/:id', async (req, res) => {
   const attachmentId = param(req, 'id');
   const row = await withUser(req.user.id, async (db) =>
     (await db.query(
-      `SELECT file_name, mime_type, storage_path, storage_backend,
-              (CASE WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'attachments' AND column_name = 'archived_at')
-                    THEN archived_at ELSE NULL END) AS archived_at
-         FROM attachments WHERE attachment_id = $1`,
+      'SELECT file_name, mime_type, storage_path, storage_backend, archived_at FROM attachments WHERE attachment_id = $1',
       [attachmentId],
     )).rows[0]);
   if (!row || row.archived_at) throw notFound('Attachment not found');
