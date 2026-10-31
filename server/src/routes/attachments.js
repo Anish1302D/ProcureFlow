@@ -4,7 +4,7 @@ import { config } from '../config.js';
 import { withUser } from '../db.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
 import {
-  ACCEPTED_TYPES, USE_DRIVE, absolutePath, cleanFileName,
+  ACCEPTED_TYPES, USE_DRIVE, absolutePath, calculateSha256, cleanFileName,
   detectType, removeFile, saveFile, streamFromDrive,
 } from '../storage.js';
 import { param } from '../validate.js';
@@ -27,12 +27,16 @@ const attachmentRow = (r) => ({
   issueId: r.issue_id,
   budgetProvisionId: r.budget_provision_id ?? null,
   fileName: r.file_name,
+  originalFileName: r.original_file_name ?? r.file_name,
   mimeType: r.mime_type,
   sizeBytes: r.size_bytes,
+  sha256: r.sha256_hash ?? null,
   versionNumber: r.version_number ?? 1,
   supersededById: r.superseded_by_id ?? null,
   requestVersionNumber: r.request_version_number ?? 1,
   replacementReason: r.replacement_reason ?? null,
+  archivedAt: r.archived_at ?? null,
+  archivedReason: r.archived_reason ?? null,
   uploadedBy: { id: r.uploaded_by, name: r.uploaded_by_name },
   uploadedAt: r.uploaded_at,
 });
@@ -40,6 +44,13 @@ const attachmentRow = (r) => ({
 function acceptedFile(req) {
   if (!req.file) {
     throw new HttpError(400, 'Attach a file in the "file" field');
+  }
+  if (!req.file.buffer || req.file.buffer.length === 0) {
+    throw new HttpError(400, 'Uploaded file is empty (0 bytes)');
+  }
+  if (req.file.size > config.maxUploadBytes || req.file.buffer.length > config.maxUploadBytes) {
+    const maxMb = Math.round(config.maxUploadBytes / (1024 * 1024)) || 10;
+    throw new HttpError(413, `File exceeds the maximum allowed size of ${maxMb} MB`);
   }
   const type = detectType(req.file.buffer, req.file.mimetype, req.file.originalname);
   if (!type) {
@@ -60,15 +71,20 @@ async function store(req, parent, authorise) {
   let savedFile;
   try {
     return await withUser(req.user.id, async (db) => {
-      await authorise(db);
+      const authResult = await authorise(db);
       savedFile = await saveFile(req.file.buffer, type.ext);
+      const reqVersion = authResult?.currentVersionNumber ?? 1;
+      const sha256 = calculateSha256(req.file.buffer);
+      const originalName = req.file.originalname || 'file';
+      const cleanName = cleanFileName(originalName);
+
       const { rows } = await db.query(
-        `INSERT INTO attachments (request_id, issue_id, budget_provision_id, file_name, mime_type, size_bytes,
-                                  storage_path, storage_backend, uploaded_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING attachment_id`,
+        `INSERT INTO attachments (request_id, issue_id, budget_provision_id, file_name, original_file_name,
+                                  mime_type, size_bytes, sha256_hash, storage_path, storage_backend, uploaded_by, request_version_number)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING attachment_id`,
         [parent.requestId ?? null, parent.issueId ?? null, parent.budgetProvisionId ?? null,
-          cleanFileName(req.file.originalname),
-          type.mime, req.file.size, savedFile.storagePath, savedFile.backend, req.user.id],
+          cleanName, originalName,
+          type.mime, req.file.size, sha256, savedFile.storagePath, savedFile.backend, req.user.id, reqVersion],
       );
       return (await db.query(
         `SELECT a.*, u.full_name AS uploaded_by_name FROM attachments a
@@ -84,13 +100,20 @@ async function store(req, parent, authorise) {
 
 attachmentsRouter.get('/requests/:id/attachments', async (req, res) => {
   const requestId = param(req, 'id');
-  const rows = await withUser(req.user.id, async (db) =>
-    (await db.query(
-      `SELECT a.*, u.full_name AS uploaded_by_name
-         FROM attachments a JOIN users u ON u.user_id = a.uploaded_by
-        WHERE a.request_id = $1 ORDER BY a.version_number ASC, a.uploaded_at ASC`,
-      [requestId],
-    )).rows);
+  const includeArchived = req.query.includeArchived === 'true' && req.user.roles.includes('ADMIN');
+
+  const rows = await withUser(req.user.id, async (db) => {
+    const query = includeArchived
+      ? `SELECT a.*, u.full_name AS uploaded_by_name
+           FROM attachments a JOIN users u ON u.user_id = a.uploaded_by
+          WHERE a.request_id = $1 ORDER BY a.version_number ASC, a.uploaded_at ASC`
+      : `SELECT a.*, u.full_name AS uploaded_by_name
+           FROM attachments a JOIN users u ON u.user_id = a.uploaded_by
+          WHERE a.request_id = $1 AND a.archived_at IS NULL
+          ORDER BY a.version_number ASC, a.uploaded_at ASC`;
+
+    return (await db.query(query, [requestId])).rows;
+  });
   res.json(rows.map(attachmentRow));
 });
 
@@ -98,7 +121,7 @@ attachmentsRouter.post('/requests/:id/attachments', upload, async (req, res) => 
   const requestId = param(req, 'id');
   const row = await store(req, { requestId }, async (db) => {
     const { rows } = await db.query(
-      `SELECT r.raised_by, r.current_status,
+      `SELECT r.raised_by, r.current_status, r.current_version_number,
               EXISTS (SELECT 1 FROM stage_approvers sa
                        WHERE sa.stage_id = r.current_stage_id AND sa.user_id = $2) AS staffed_here
          FROM requests r WHERE r.request_id = $1`,
@@ -110,6 +133,7 @@ attachmentsRouter.post('/requests/:id/attachments', upload, async (req, res) => 
     if (r.raised_by !== req.user.id && !r.staffed_here && !req.user.roles.includes('ADMIN')) {
       throw forbidden('Only the requester or an approver at the current stage can attach files');
     }
+    return { currentVersionNumber: r.current_version_number || 1 };
   });
   res.status(201).json(attachmentRow(row));
 });
@@ -123,12 +147,16 @@ attachmentsRouter.post('/attachments/:id/supersede', upload, async (req, res) =>
   try {
     const row = await withUser(req.user.id, async (db) => {
       savedFile = await saveFile(req.file.buffer, type.ext);
+      const sha256 = calculateSha256(req.file.buffer);
+      const originalName = req.file.originalname || 'file';
+      const cleanName = cleanFileName(originalName);
+
       const { rows } = await db.query(
-        'SELECT fn_supersede_attachment($1, $2, $3, $4, $5, $6, $7, $8) AS new_id',
+        'SELECT fn_supersede_attachment($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) AS new_id',
         [
-          oldAttachmentId, cleanFileName(req.file.originalname), type.mime,
+          oldAttachmentId, cleanName, type.mime,
           req.file.size, savedFile.storagePath, savedFile.backend,
-          req.user.id, replacementReason,
+          req.user.id, replacementReason, originalName, sha256,
         ],
       );
       const newId = rows[0].new_id;
@@ -143,6 +171,66 @@ attachmentsRouter.post('/attachments/:id/supersede', upload, async (req, res) =>
     if (savedFile?.storagePath) await removeFile(savedFile.storagePath, savedFile.backend);
     throw err;
   }
+});
+
+// Auditable soft-removal / archival mechanism
+attachmentsRouter.post('/attachments/:id/archive', async (req, res) => {
+  const attachmentId = param(req, 'id');
+  const reason = (req.body?.reason || '').trim();
+  if (!reason) {
+    throw new HttpError(400, 'A reason is required to archive an evidentiary document');
+  }
+  const userRole = req.user.roles[0] || 'USER';
+
+  const updated = await withUser(req.user.id, async (db) => {
+    const { rows } = await db.query(
+      `SELECT a.*, r.current_status, r.current_stage_id, r.raised_by,
+              EXISTS (SELECT 1 FROM stage_approvers sa
+                       WHERE sa.stage_id = r.current_stage_id AND sa.user_id = $2) AS staffed_here
+         FROM attachments a
+         LEFT JOIN requests r ON r.request_id = a.request_id
+        WHERE a.attachment_id = $1
+          FOR UPDATE OF a`,
+      [attachmentId, req.user.id],
+    );
+    const a = rows[0];
+    if (!a) throw notFound('Attachment not found');
+    if (a.archived_at) throw conflict('Attachment has already been archived');
+
+    const isAdmin = req.user.roles.includes('ADMIN');
+    const isRaiser = a.raised_by === req.user.id;
+    const isUploader = a.uploaded_by === req.user.id;
+    const isStaffed = a.staffed_here;
+    if (!isAdmin && !isRaiser && !isUploader && !isStaffed) {
+      throw forbidden('You do not have permission to archive this document');
+    }
+
+    await db.query(
+      `UPDATE attachments
+          SET archived_at = NOW(),
+              archived_by = $2,
+              archived_by_role = $3,
+              archived_reason = $4
+        WHERE attachment_id = $1`,
+      [attachmentId, req.user.id, userRole, reason],
+    );
+
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, before_json, after_json)
+       VALUES ('attachment', $1, $2, 'ARCHIVE_ATTACHMENT',
+               jsonb_build_object('attachment_id', $1::text, 'file_name', $3::text, 'version_number', $4::int),
+               jsonb_build_object('archived_at', NOW(), 'archived_by', $2::text, 'archived_by_role', $5::text, 'archived_reason', $6::text))`,
+      [attachmentId, req.user.id, a.file_name, a.version_number, userRole, reason],
+    );
+
+    return (await db.query(
+      `SELECT a.*, u.full_name AS uploaded_by_name FROM attachments a
+         JOIN users u ON u.user_id = a.uploaded_by WHERE a.attachment_id = $1`,
+      [attachmentId],
+    )).rows[0];
+  });
+
+  res.status(200).json(attachmentRow(updated));
 });
 
 // The sanction letter behind a department's annual provision. Only the head of
@@ -181,10 +269,10 @@ attachmentsRouter.get('/attachments/:id', async (req, res) => {
   const attachmentId = param(req, 'id');
   const row = await withUser(req.user.id, async (db) =>
     (await db.query(
-      'SELECT file_name, mime_type, storage_path, storage_backend FROM attachments WHERE attachment_id = $1',
+      'SELECT file_name, mime_type, storage_path, storage_backend, archived_at FROM attachments WHERE attachment_id = $1',
       [attachmentId],
     )).rows[0]);
-  if (!row) throw notFound('Attachment not found');
+  if (!row || row.archived_at) throw notFound('Attachment not found');
 
   const isDrive = row.storage_backend === 'drive' || (USE_DRIVE && !row.storage_path.includes('/'));
   if (isDrive) {
@@ -212,12 +300,13 @@ attachmentsRouter.get('/attachments/:id', async (req, res) => {
 
 // Removing evidence from a decided request would weaken the record, so files
 // can only be removed while their request is still a draft, or their issue
-// still open.
+// still open. Historical document versions cannot be hard deleted.
 attachmentsRouter.delete('/attachments/:id', async (req, res) => {
   const attachmentId = param(req, 'id');
   const fileInfo = await withUser(req.user.id, async (db) => {
     const { rows } = await db.query(
       `SELECT a.storage_path, a.storage_backend, a.uploaded_by, a.budget_provision_id, a.action_id,
+              a.version_number, a.superseded_by_id, a.file_name, a.request_id,
               r.current_status AS request_status, i.status AS issue_status
          FROM attachments a
          LEFT JOIN requests r ON r.request_id = a.request_id
@@ -239,6 +328,19 @@ attachmentsRouter.delete('/attachments/:id', async (req, res) => {
     if (a.budget_provision_id) {
       throw conflict('Sanction documents on a budget provision are part of the official financial record and cannot be deleted');
     }
+    if (a.version_number > 1 || a.superseded_by_id !== null) {
+      throw conflict('Historical document versions cannot be permanently deleted; archive instead');
+    }
+
+    // Record audit entry for deletion
+    await db.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, before_json, after_json)
+       VALUES ('attachment', $1, $2, 'DELETE_DRAFT_ATTACHMENT',
+               jsonb_build_object('attachment_id', $1::text, 'file_name', $3::text, 'request_id', $4::text),
+               jsonb_build_object('deleted_at', NOW(), 'deleted_by', $2::text))`,
+      [attachmentId, req.user.id, a.file_name, a.request_id],
+    );
+
     await db.query('DELETE FROM attachments WHERE attachment_id = $1', [attachmentId]);
     return { storagePath: a.storage_path, backend: a.storage_backend };
   });

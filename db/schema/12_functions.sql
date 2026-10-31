@@ -483,7 +483,9 @@ CREATE OR REPLACE FUNCTION fn_supersede_attachment(
     p_storage_path        TEXT,
     p_storage_backend     TEXT,
     p_uploaded_by         UUID,
-    p_replacement_reason  TEXT DEFAULT NULL
+    p_replacement_reason  TEXT DEFAULT NULL,
+    p_original_file_name  TEXT DEFAULT NULL,
+    p_sha256_hash         TEXT DEFAULT NULL
 ) RETURNS UUID
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -527,6 +529,18 @@ BEGIN
             USING ERRCODE = 'SP004';
     END IF;
 
+    -- Linear versioning protection: Cannot supersede a document that has already been superseded
+    IF v_old.superseded_by_id IS NOT NULL THEN
+        RAISE EXCEPTION 'Attachment % has already been superseded by %', p_old_attachment_id, v_old.superseded_by_id
+            USING ERRCODE = 'SP019';
+    END IF;
+
+    -- Cannot supersede an archived document
+    IF v_old.archived_at IS NOT NULL THEN
+        RAISE EXCEPTION 'Attachment % has been archived and cannot be superseded', p_old_attachment_id
+            USING ERRCODE = 'SP019';
+    END IF;
+
     IF v_old.request_id IS NOT NULL THEN
         SELECT current_version_number, current_status INTO v_req_v, v_req_status
           FROM requests WHERE request_id = v_old.request_id;
@@ -539,11 +553,12 @@ BEGIN
     END IF;
 
     INSERT INTO attachments (
-        request_id, issue_id, budget_provision_id, file_name, mime_type, size_bytes,
-        storage_path, storage_backend, uploaded_by, version_number,
-        request_version_number, replacement_reason
+        request_id, issue_id, budget_provision_id, file_name, original_file_name,
+        mime_type, size_bytes, sha256_hash, storage_path, storage_backend, uploaded_by,
+        version_number, request_version_number, replacement_reason
     ) VALUES (
-        v_old.request_id, v_old.issue_id, v_old.budget_provision_id, p_file_name, p_mime_type, p_size_bytes,
+        v_old.request_id, v_old.issue_id, v_old.budget_provision_id, p_file_name,
+        COALESCE(p_original_file_name, p_file_name), p_mime_type, p_size_bytes, p_sha256_hash,
         p_storage_path, COALESCE(p_storage_backend, 'local'), p_uploaded_by,
         v_old.version_number + 1, COALESCE(v_req_v, v_old.request_version_number, 1), p_replacement_reason
     ) RETURNING attachment_id INTO v_new_id;
