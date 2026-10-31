@@ -43,5 +43,6 @@ INSERT INTO schema_migrations (filename) VALUES
     ('20261017T120000_remove_issue_assignment_and_escalation.sql'),
     ('20261018T120000_invitations_and_password_recovery.sql'),
     ('20261018T130000_two_step_verification.sql'),
-    ('20261031T090000_strengthen_request_version_snapshots.sql')
+    ('20261031T090000_strengthen_request_version_snapshots.sql'),
+    ('20261031T093000_preserve_complete_resubmission_history.sql')
 ON CONFLICT (filename) DO NOTHING;

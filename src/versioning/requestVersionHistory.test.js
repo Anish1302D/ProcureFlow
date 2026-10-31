@@ -252,4 +252,91 @@ describe('Request Version History & Immutable Snapshots Regression Suite', () =>
     assert.equal(frozenItem.estimatedTotal, 300000);
     assert.equal(frozenItem.remarks, 'Lab 3 deployment');
   });
+
+  test('Preserves multi-iteration resubmission history (v1 -> v2 -> v3) with resolved corrections', () => {
+    const requestId = 'req-multi-iter-01';
+    const baseRequest = {
+      title: 'Department Chemistry Lab Consumables',
+      departmentId: 14,
+      financialYearId: 2,
+      budgetHeadId: 104,
+      extra: {},
+    };
+
+    // v1: Initial submission
+    const v1Snapshot = createVersionSnapshot({
+      requestId,
+      versionNumber: 1,
+      request: baseRequest,
+      items: [{ requestItemId: 'chem-1', budgetItemId: 601, itemName: 'Beakers 500ml', quantity: 50, unitCost: 200 }],
+      documents: [{ attachmentId: 'doc-cat-1', fileName: 'catalog_v1.pdf', sizeBytes: 12000 }],
+      actorId: 'hod-chem',
+    });
+
+    // Correction 1 requested by Purchase Committee
+    const correction1 = {
+      correctionId: 'corr-chem-01',
+      requestId,
+      reason: 'Quantity excessive for semester 1. Please reduce to 30 units and attach quote.',
+      resolvedByVersion: null,
+    };
+
+    // v2: Resubmission 1
+    correction1.resolvedByVersion = 2;
+    const v2Snapshot = createVersionSnapshot({
+      requestId,
+      versionNumber: 2,
+      request: { ...baseRequest, title: 'Department Chemistry Lab Consumables - Rev 1' },
+      items: [{ requestItemId: 'chem-1', budgetItemId: 601, itemName: 'Beakers 500ml', quantity: 30, unitCost: 200 }],
+      documents: [
+        { attachmentId: 'doc-cat-1', fileName: 'catalog_v1.pdf', sizeBytes: 12000 },
+        { attachmentId: 'doc-quote-v2', fileName: 'vendor_beaker_quote.pdf', sizeBytes: 34000 },
+      ],
+      actorId: 'hod-chem',
+      correctionId: correction1.correctionId,
+    });
+
+    // Correction 2 requested by Principal
+    const correction2 = {
+      correctionId: 'corr-chem-02',
+      requestId,
+      reason: 'Need brand specification included in remarks.',
+      resolvedByVersion: null,
+    };
+
+    // v3: Resubmission 2
+    correction2.resolvedByVersion = 3;
+    const v3Snapshot = createVersionSnapshot({
+      requestId,
+      versionNumber: 3,
+      request: { ...baseRequest, title: 'Department Chemistry Lab Consumables - Borosil Specification' },
+      items: [{ requestItemId: 'chem-1', budgetItemId: 601, itemName: 'Beakers 500ml', quantity: 30, unitCost: 200, remarks: 'Borosil Grade A' }],
+      documents: [
+        { attachmentId: 'doc-cat-1', fileName: 'catalog_v1.pdf', sizeBytes: 12000 },
+        { attachmentId: 'doc-quote-v2', fileName: 'vendor_beaker_quote.pdf', sizeBytes: 34000 },
+        { attachmentId: 'doc-spec-v3', fileName: 'borosil_compliance.pdf', sizeBytes: 18000 },
+      ],
+      actorId: 'hod-chem',
+      correctionId: correction2.correctionId,
+    });
+
+    // Verify all 3 version snapshots exist independently
+    assert.equal(v1Snapshot.versionNumber, 1);
+    assert.equal(v1Snapshot.itemsSnapshot[0].requestedQuantity, 50);
+    assert.equal(v1Snapshot.tentativeTotalCost, 10000);
+    assert.equal(v1Snapshot.correctionId, null);
+
+    assert.equal(v2Snapshot.versionNumber, 2);
+    assert.equal(v2Snapshot.itemsSnapshot[0].requestedQuantity, 30);
+    assert.equal(v2Snapshot.tentativeTotalCost, 6000);
+    assert.equal(v2Snapshot.correctionId, 'corr-chem-01');
+    assert.equal(v2Snapshot.documentsSnapshot.length, 2);
+
+    assert.equal(v3Snapshot.versionNumber, 3);
+    assert.equal(v3Snapshot.itemsSnapshot[0].requestedQuantity, 30);
+    assert.equal(v3Snapshot.itemsSnapshot[0].remarks, 'Borosil Grade A');
+    assert.equal(v3Snapshot.tentativeTotalCost, 6000);
+    assert.equal(v3Snapshot.correctionId, 'corr-chem-02');
+    assert.equal(v3Snapshot.documentsSnapshot.length, 3);
+  });
 });
