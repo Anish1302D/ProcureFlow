@@ -124,3 +124,4 @@ describe('Document Authorization, Department Isolation & IDOR Prevention', () =>
     assert.equal(canDownloadAttachment(approverPC, activeAttachment, activeRequestCS).allowed, true);
   });
 });
+

@@ -47,3 +47,4 @@ Draft / Active Requisition
 | **IDOR / Cross-Department Access** | PostgreSQL RLS policies (`attachments_read`, `attachments_insert`, `attachments_delete`) combined with API endpoint authorization ensure users only access documents within their departmental jurisdiction. |
 | **Evidence Tampering / Silent Overwrite** | Hard deletion on historical documents is prohibited. Replaced documents are kept permanently. SHA-256 checksums verify byte integrity. |
 | **Accidental or Malicious Deletion** | Replaced by auditable soft archival (`archived_at`, `archived_by`, `archived_reason`). Audit trails record all archival actions. Archived files are blocked from normal downloads. |
+
