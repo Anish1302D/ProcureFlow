@@ -8,8 +8,10 @@ CREATE TABLE attachments (
     issue_id               UUID,                                  -- FK added in 08_non_financial.sql
     budget_provision_id    UUID,                                  -- FK added in 08_non_financial.sql / migration
     file_name              TEXT NOT NULL,
+    original_file_name     TEXT,
     mime_type              TEXT,
     size_bytes             BIGINT CHECK (size_bytes IS NULL OR size_bytes >= 0),
+    sha256_hash            TEXT,
     storage_path           TEXT NOT NULL,                         -- key in S3/MinIO/local
     storage_backend        TEXT NOT NULL DEFAULT 'local',
     uploaded_by            UUID NOT NULL REFERENCES users(user_id) ON DELETE RESTRICT,
@@ -24,6 +26,7 @@ CREATE INDEX attachments_request_idx          ON attachments(request_id);
 CREATE INDEX attachments_action_idx           ON attachments(action_id);
 CREATE INDEX attachments_superseded_idx       ON attachments(superseded_by_id);
 CREATE INDEX attachments_budget_provision_idx ON attachments(budget_provision_id);
+CREATE INDEX attachments_sha256_idx           ON attachments(sha256_hash);
 
 -- Generic audit log for anything worth tracing beyond the domain-level
 -- approval_actions (login, permission changes, master-data edits, etc.).

@@ -261,6 +261,14 @@ export function cleanFileName(name, fallbackExt = '') {
   return base || 'file' + fallbackExt;
 }
 
+/**
+ * Calculates cryptographic SHA-256 hash of a buffer.
+ */
+export function calculateSha256(buffer) {
+  if (!buffer) return null;
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
 // ---------------------------------------------------------------------------
 // Storage backend — Google Drive when credentials are present, local disk
 // otherwise (local development without a service account).

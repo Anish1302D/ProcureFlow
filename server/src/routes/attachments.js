@@ -4,7 +4,7 @@ import { config } from '../config.js';
 import { withUser } from '../db.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
 import {
-  ACCEPTED_TYPES, USE_DRIVE, absolutePath, cleanFileName,
+  ACCEPTED_TYPES, USE_DRIVE, absolutePath, calculateSha256, cleanFileName,
   detectType, removeFile, saveFile, streamFromDrive,
 } from '../storage.js';
 import { param } from '../validate.js';
@@ -27,8 +27,10 @@ const attachmentRow = (r) => ({
   issueId: r.issue_id,
   budgetProvisionId: r.budget_provision_id ?? null,
   fileName: r.file_name,
+  originalFileName: r.original_file_name ?? r.file_name,
   mimeType: r.mime_type,
   sizeBytes: r.size_bytes,
+  sha256: r.sha256_hash ?? null,
   versionNumber: r.version_number ?? 1,
   supersededById: r.superseded_by_id ?? null,
   requestVersionNumber: r.request_version_number ?? 1,
@@ -69,13 +71,17 @@ async function store(req, parent, authorise) {
       const authResult = await authorise(db);
       savedFile = await saveFile(req.file.buffer, type.ext);
       const reqVersion = authResult?.currentVersionNumber ?? 1;
+      const sha256 = calculateSha256(req.file.buffer);
+      const originalName = req.file.originalname || 'file';
+      const cleanName = cleanFileName(originalName);
+
       const { rows } = await db.query(
-        `INSERT INTO attachments (request_id, issue_id, budget_provision_id, file_name, mime_type, size_bytes,
-                                  storage_path, storage_backend, uploaded_by, request_version_number)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING attachment_id`,
+        `INSERT INTO attachments (request_id, issue_id, budget_provision_id, file_name, original_file_name,
+                                  mime_type, size_bytes, sha256_hash, storage_path, storage_backend, uploaded_by, request_version_number)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING attachment_id`,
         [parent.requestId ?? null, parent.issueId ?? null, parent.budgetProvisionId ?? null,
-          cleanFileName(req.file.originalname),
-          type.mime, req.file.size, savedFile.storagePath, savedFile.backend, req.user.id, reqVersion],
+          cleanName, originalName,
+          type.mime, req.file.size, sha256, savedFile.storagePath, savedFile.backend, req.user.id, reqVersion],
       );
       return (await db.query(
         `SELECT a.*, u.full_name AS uploaded_by_name FROM attachments a
@@ -165,12 +171,16 @@ attachmentsRouter.post('/attachments/:id/supersede', upload, async (req, res) =>
       }
 
       savedFile = await saveFile(req.file.buffer, type.ext);
+      const sha256 = calculateSha256(req.file.buffer);
+      const originalName = req.file.originalname || 'file';
+      const cleanName = cleanFileName(originalName);
+
       const { rows } = await db.query(
-        'SELECT fn_supersede_attachment($1, $2, $3, $4, $5, $6, $7, $8) AS new_id',
+        'SELECT fn_supersede_attachment($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) AS new_id',
         [
-          oldAttachmentId, cleanFileName(req.file.originalname), type.mime,
+          oldAttachmentId, cleanName, type.mime,
           req.file.size, savedFile.storagePath, savedFile.backend,
-          req.user.id, replacementReason,
+          req.user.id, replacementReason, originalName, sha256,
         ],
       );
       const newId = rows[0].new_id;
