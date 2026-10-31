@@ -40,6 +40,8 @@ CREATE TABLE request_items (
     requested_quantity   NUMERIC(12,2) NOT NULL,
     estimated_unit_cost  NUMERIC(14,2) NOT NULL,
     estimated_total      NUMERIC(14,2) NOT NULL,
+    recommended_quantity NUMERIC(12,2) DEFAULT NULL,
+    recommended_amount   NUMERIC(14,2) DEFAULT NULL,
     approved_quantity    NUMERIC(12,2) NOT NULL DEFAULT 0,
     approved_amount      NUMERIC(14,2) NOT NULL DEFAULT 0,
     item_status          request_item_status NOT NULL DEFAULT 'PENDING',

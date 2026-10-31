@@ -545,7 +545,10 @@ const itemRow = (r) => ({
   approvedQuantity: r.approved_quantity,
   approvedAmount: r.approved_amount,
   // Never overwritten, so the shortfall is always recoverable.
+  recommendedQuantity: r.recommended_quantity != null ? r.recommended_quantity : null,
+  recommendedAmount: r.recommended_amount != null ? r.recommended_amount : null,
   unapprovedQuantity: Math.round((r.requested_quantity - r.approved_quantity) * 100) / 100,
+  unapprovedAmount: Math.round((r.estimated_total - r.approved_amount) * 100) / 100,
   status: r.item_status,
   remarks: r.remarks,
 });
@@ -1213,7 +1216,9 @@ const note = z.string().trim().max(2000).optional()
 
 const decisionInput = z.object({
   requestItemId: id,
-  approvedQuantity,
+  approvedQuantity: approvedQuantity.optional(),
+  recommendedQuantity: approvedQuantity.optional(),
+  recommendedAmount: amount.optional(),
   approvedAmount: amount.optional(),
   remarks: z.string().trim().max(1000).optional(),
 });
@@ -1224,8 +1229,10 @@ const actionSchema = z.discriminatedUnion('action', [
              itemDecisions: z.array(decisionInput).min(1).max(50) }),
   z.object({ action: z.literal('REJECT'), comments: note,
              rejectionReason: z.string().trim().min(3).max(2000) }),
-  z.object({ action: z.literal('ESCALATE'), comments: note }),
-  z.object({ action: z.literal('FORWARD'), comments: note }),
+  z.object({ action: z.literal('ESCALATE'), comments: note,
+             itemDecisions: z.array(decisionInput).max(50).optional() }),
+  z.object({ action: z.literal('FORWARD'), comments: note,
+             itemDecisions: z.array(decisionInput).max(50).optional() }),
   // A return has to say what needs correcting — it is the only thing the
   // requester is shown when the request comes back to them.
   z.object({ action: z.literal('RETURN'),
@@ -1251,9 +1258,14 @@ async function buildDecisions(db, requestId, body) {
       remarks: null,
     }));
   }
-  if (body.action !== 'PARTIAL_APPROVE') return [];
+  if (!['PARTIAL_APPROVE', 'ESCALATE', 'FORWARD'].includes(body.action) || !body.itemDecisions?.length) return [];
 
-  const decisions = body.itemDecisions.map((d) => ({ ...d, requestItemId: d.requestItemId.toLowerCase() }));
+  const decisions = body.itemDecisions.map((d) => ({
+    ...d,
+    requestItemId: d.requestItemId.toLowerCase(),
+    approvedQuantity: d.approvedQuantity ?? d.recommendedQuantity ?? 0,
+    approvedAmount: d.approvedAmount ?? d.recommendedAmount,
+  }));
   const byId = new Map(items.map((i) => [i.request_item_id, i]));
 
   const unknown = decisions.filter((d) => !byId.has(d.requestItemId)).map((d) => d.requestItemId);
@@ -1266,7 +1278,7 @@ async function buildDecisions(db, requestId, body) {
   // Every line must be decided. Leaving some untouched would leave them
   // pending under a decision that reads as final.
   const missing = items.filter((i) => !decisions.some((d) => d.requestItemId === i.request_item_id));
-  if (missing.length) {
+  if (body.action === 'PARTIAL_APPROVE' && missing.length) {
     throw unprocessable('A partial approval must decide every item on the request', {
       requestItemIds: missing.map((i) => i.request_item_id),
     });
