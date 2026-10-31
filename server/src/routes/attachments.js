@@ -41,6 +41,12 @@ function acceptedFile(req) {
   if (!req.file) {
     throw new HttpError(400, 'Attach a file in the "file" field');
   }
+  if (!req.file.buffer || req.file.buffer.length === 0) {
+    throw new HttpError(400, 'Uploaded file is empty (0 bytes)');
+  }
+  if (req.file.size > config.maxUploadBytes || req.file.buffer.length > config.maxUploadBytes) {
+    throw new HttpError(413, `File exceeds the maximum allowed size of ${config.maxUploadMb} MB`);
+  }
   const type = detectType(req.file.buffer, req.file.mimetype, req.file.originalname);
   if (!type) {
     throw new HttpError(415, 'Only PDF, PNG, JPEG, Word (.docx) and Excel (.xlsx) files are accepted', {

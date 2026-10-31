@@ -6,8 +6,8 @@ import { google } from 'googleapis';
 import { config } from './config.js';
 
 // ---------------------------------------------------------------------------
-// Type detection — unchanged from original. Based on file magic bytes so
-// the browser's declared MIME type or extension cannot be spoofed.
+// Type detection — Based on file magic bytes so the browser's declared
+// MIME type or extension cannot be spoofed.
 // ---------------------------------------------------------------------------
 
 const ZIP = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
@@ -24,6 +24,77 @@ const TYPES = {
 };
 
 export const ACCEPTED_TYPES = Object.keys(TYPES);
+
+export const DANGEROUS_EXTENSIONS = new Set([
+  '.exe', '.dll', '.so', '.dylib', '.bat', '.cmd', '.ps1', '.sh', '.bash',
+  '.vbs', '.js', '.mjs', '.cjs', '.jar', '.war', '.php', '.phtml', '.py',
+  '.pyc', '.rb', '.pl', '.msi', '.scr', '.hta', '.cpl', '.wsf', '.com',
+  '.bin', '.app', '.deb', '.rpm', '.iso', '.dmg',
+]);
+
+/**
+ * Checks for known dangerous binary or script signatures.
+ */
+export function isDangerousPayload(buffer) {
+  if (!buffer || buffer.length < 2) return false;
+
+  // Windows PE / DOS executable (MZ)
+  if (buffer[0] === 0x4d && buffer[1] === 0x5a) return true;
+
+  // Linux ELF binary (\x7fELF)
+  if (
+    buffer.length >= 4 &&
+    buffer[0] === 0x7f &&
+    buffer[1] === 0x45 &&
+    buffer[2] === 0x4c &&
+    buffer[3] === 0x46
+  ) {
+    return true;
+  }
+
+  // Java bytecode / Mach-O universal binary (0xCAFEBABE)
+  if (
+    buffer.length >= 4 &&
+    buffer[0] === 0xca &&
+    buffer[1] === 0xfe &&
+    buffer[2] === 0xba &&
+    buffer[3] === 0xbe
+  ) {
+    return true;
+  }
+
+  // Mach-O binary signatures
+  if (buffer.length >= 4) {
+    if (
+      (buffer[0] === 0xfe && buffer[1] === 0xed && buffer[2] === 0xfa && (buffer[3] === 0xce || buffer[3] === 0xcf)) ||
+      ((buffer[0] === 0xce || buffer[0] === 0xcf) && buffer[1] === 0xfa && buffer[2] === 0xed && buffer[3] === 0xfe)
+    ) {
+      return true;
+    }
+  }
+
+  // Unix shebang script (#!)
+  if (buffer[0] === 0x23 && buffer[1] === 0x21) return true;
+
+  // Text/script signatures in the preamble
+  const sample = buffer.subarray(0, Math.min(buffer.length, 1024)).toString('utf8').toLowerCase();
+  if (
+    sample.includes('<?php') ||
+    sample.includes('<?=') ||
+    sample.includes('<script') ||
+    sample.includes('<svg') ||
+    sample.includes('<!doctype html') ||
+    sample.includes('<html') ||
+    sample.startsWith('@echo off') ||
+    sample.startsWith('rem ') ||
+    sample.includes('wscript.shell') ||
+    sample.includes('activexobject')
+  ) {
+    return true;
+  }
+
+  return false;
+}
 
 /**
  * Inspects a ZIP container buffer to find distinguishing OOXML paths.
@@ -89,32 +160,58 @@ export function inspectZipContainer(buffer) {
  * Secondary sniff: if the declared MIME type is ambiguous or generic
  * (e.g. application/octet-stream), inspect ZIP containers or magic bytes.
  */
-export function detectType(buffer, declaredMime, _fileName) {
+export function detectType(buffer, declaredMime, fileName) {
   if (!buffer || buffer.length === 0) return null;
+
+  // Block dangerous binary and script payloads
+  if (isDangerousPayload(buffer)) return null;
+
+  // Check dangerous extension in filename if provided
+  if (fileName) {
+    const lowerName = String(fileName).toLowerCase();
+    for (const ext of DANGEROUS_EXTENSIONS) {
+      if (lowerName.endsWith(ext) || lowerName.includes(`${ext}.`)) return null;
+    }
+  }
+
+  let detected = null;
 
   // ZIP container handling (DOCX and XLSX share ZIP magic bytes)
   if (buffer.length >= 4 && buffer.subarray(0, 4).equals(ZIP)) {
     const zipType = inspectZipContainer(buffer);
-    if (zipType === 'docx') return { mime: DOCX_MIME, ext: '.docx' };
-    if (zipType === 'xlsx') return { mime: XLSX_MIME, ext: '.xlsx' };
+    if (zipType === 'docx') detected = { mime: DOCX_MIME, ext: '.docx' };
+    else if (zipType === 'xlsx') detected = { mime: XLSX_MIME, ext: '.xlsx' };
+    else return null; // Reject generic / non-OOXML ZIP
+  } else {
+    // Non-ZIP formats inspection
+    for (const [mime, type] of Object.entries(TYPES)) {
+      if (type.magic.equals(ZIP)) continue;
+      const head = buffer.subarray(0, type.magic.length);
+      if (head.equals(type.magic)) {
+        detected = { mime, ext: type.ext };
+        break;
+      }
+    }
+  }
+
+  if (!detected) return null;
+
+  // Prevent MIME spoofing: if declaredMime is an accepted type, it must match detected MIME
+  if (declaredMime && ACCEPTED_TYPES.includes(declaredMime) && declaredMime !== detected.mime) {
     return null;
   }
 
-  // Fast path — declared non-ZIP MIME matches signature.
-  const declared = TYPES[declaredMime];
-  if (declared && !declared.magic.equals(ZIP)) {
-    const head = buffer.subarray(0, declared.magic.length);
-    if (head.equals(declared.magic)) return { mime: declaredMime, ext: declared.ext };
+  // Validate filename extension match if fileName is provided
+  if (fileName) {
+    const lowerName = String(fileName).toLowerCase();
+    if (detected.ext === '.pdf' && !lowerName.endsWith('.pdf')) return null;
+    if (detected.ext === '.png' && !lowerName.endsWith('.png')) return null;
+    if (detected.ext === '.jpg' && !lowerName.endsWith('.jpg') && !lowerName.endsWith('.jpeg')) return null;
+    if (detected.ext === '.docx' && !lowerName.endsWith('.docx')) return null;
+    if (detected.ext === '.xlsx' && !lowerName.endsWith('.xlsx')) return null;
   }
 
-  // Slow path — sniff non-ZIP magic bytes.
-  for (const [mime, type] of Object.entries(TYPES)) {
-    if (type.magic.equals(ZIP)) continue;
-    const head = buffer.subarray(0, type.magic.length);
-    if (head.equals(type.magic)) return { mime, ext: type.ext };
-  }
-
-  return null;
+  return detected;
 }
 
 /**
