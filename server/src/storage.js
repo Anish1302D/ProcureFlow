@@ -32,6 +32,12 @@ export const DANGEROUS_EXTENSIONS = new Set([
   '.bin', '.app', '.deb', '.rpm', '.iso', '.dmg',
 ]);
 
+export const RESERVED_DEVICE_NAMES = new Set([
+  'CON', 'PRN', 'AUX', 'NUL',
+  'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+  'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9',
+]);
+
 /**
  * Checks for known dangerous binary or script signatures.
  */
@@ -215,14 +221,44 @@ export function detectType(buffer, declaredMime, fileName) {
 }
 
 /**
- * A display name safe to store and echo back in a download header: path
- * components stripped, control characters, quotes and slashes replaced.
+ * A display name safe to store and echo back in a download header:
+ * - Directory traversal segments stripped across platforms
+ * - Control characters, quotes, and slashes replaced
+ * - Windows reserved device names neutralized
+ * - Dangerous double extensions neutralized
+ * - Length bounded to 200 characters
  */
-export function cleanFileName(name) {
-  const base = path
-    .basename(String(name ?? 'file'))
-    .replace(/[\p{Cc}"\\/]/gu, '_');
-  return base.slice(0, 200) || 'file';
+export function cleanFileName(name, fallbackExt = '') {
+  if (!name || typeof name !== 'string') return 'file' + fallbackExt;
+
+  // Normalize slashes and take basename
+  let base = name.replace(/\\/g, '/').split('/').pop() || '';
+
+  // Remove null bytes and non-printable control characters
+  base = base.replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200D\uFEFF]/gu, '_');
+
+  // Replace filesystem reserved characters: < > : " / \ | ? *
+  base = base.replace(/[<>:"/\\|?*]/g, '_');
+
+  // Strip leading dots to prevent hidden files or relative directory navigation
+  base = base.trim().replace(/^\.+/, '');
+
+  if (!base) return 'file' + fallbackExt;
+
+  // Check for Windows reserved device names (e.g. CON.pdf -> safe_CON.pdf)
+  const stem = base.split('.')[0].toUpperCase();
+  if (RESERVED_DEVICE_NAMES.has(stem)) {
+    base = `safe_${base}`;
+  }
+
+  // Bound length to 200 characters preserving extension if possible
+  if (base.length > 200) {
+    const ext = path.extname(base);
+    const stemPart = base.slice(0, 200 - ext.length);
+    base = `${stemPart}${ext}`;
+  }
+
+  return base || 'file' + fallbackExt;
 }
 
 // ---------------------------------------------------------------------------
@@ -317,8 +353,9 @@ async function driveDelete(fileId) {
 // ---------------------------------------------------------------------------
 
 function resolveInside(storagePath) {
-  const full = path.resolve(config.uploadDir, storagePath);
-  if (!full.startsWith(config.uploadDir + path.sep)) {
+  const normalizedBase = path.resolve(config.uploadDir);
+  const full = path.resolve(normalizedBase, storagePath);
+  if (!full.startsWith(normalizedBase + path.sep) && full !== normalizedBase) {
     throw new Error(`storage path escapes the upload directory: ${storagePath}`);
   }
   return full;
