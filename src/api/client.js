@@ -372,6 +372,13 @@ export async function openPrintable(path) {
   }
 }
 
+/**
+ * Fetches all version snapshots for a request (accessible to requester, approvers, admin).
+ */
+export async function getRequestVersions(requestId) {
+  return api(`/api/requests/${requestId}/versions`);
+}
+
 /** Query string from an object, skipping empty values. */
 export function qs(params) {
   const search = new URLSearchParams();

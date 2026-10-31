@@ -22,6 +22,7 @@ CREATE TABLE approval_actions (
     rejection_reason     TEXT,
     comments             TEXT,
     signature_id         UUID REFERENCES digital_signatures(signature_id),
+    request_version_number INTEGER NOT NULL DEFAULT 1,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -51,6 +52,8 @@ CREATE TABLE approval_action_items (
     request_id          UUID NOT NULL,
     approved_quantity   NUMERIC(12,2) NOT NULL,
     approved_amount     NUMERIC(14,2) NOT NULL,
+    recommended_quantity NUMERIC(12,2) DEFAULT NULL,
+    recommended_amount  NUMERIC(14,2) DEFAULT NULL,
     item_decision       request_item_status NOT NULL,
     remarks             TEXT,
     PRIMARY KEY (action_id, request_item_id),

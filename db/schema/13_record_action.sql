@@ -261,11 +261,11 @@ BEGIN
     INSERT INTO approval_actions (
         request_id, stage_id, performed_by, role_id, action,
         previous_status, new_status, amount_requested_snapshot,
-        rejection_reason, comments, signature_id)
+        rejection_reason, comments, signature_id, request_version_number)
     VALUES (
         p_request_id, v_req.current_stage_id, p_actor_id, v_actor_role_id, p_action,
         v_req.current_status, v_new_status, v_req.tentative_total_cost,
-        p_rejection_reason, p_comments, v_signature_id)
+        p_rejection_reason, p_comments, v_signature_id, v_req.current_version_number)
     RETURNING action_id INTO v_action_id;
 
     IF p_action = 'RETURN' THEN
@@ -281,47 +281,84 @@ BEGIN
 
     -- Item-level decisions
     IF p_item_decisions IS NOT NULL AND jsonb_array_length(p_item_decisions) > 0 THEN
-        INSERT INTO approval_action_items (
-            action_id, request_item_id, request_id,
-            approved_quantity, approved_amount, item_decision, remarks)
-        SELECT
-            v_action_id, ri.request_item_id, p_request_id,
-            (d->>'approved_quantity')::NUMERIC,
-            (d->>'approved_amount')::NUMERIC,
-            (CASE
-                WHEN (d->>'approved_quantity')::NUMERIC = 0 THEN 'REJECTED'
-                WHEN (d->>'approved_quantity')::NUMERIC >= ri.requested_quantity THEN 'APPROVED'
-                ELSE 'PARTIALLY_APPROVED'
-             END)::request_item_status,
-            d->>'remarks'
-        FROM jsonb_array_elements(p_item_decisions) d
-        JOIN request_items ri
-          ON ri.request_item_id = (d->>'request_item_id')::UUID
-         AND ri.request_id      = p_request_id;
+        IF v_stage_code = 'PURCHASE_COMMITTEE' THEN
+            -- Purchase Committee recommends quantities and amounts without final approval
+            INSERT INTO approval_action_items (
+                action_id, request_item_id, request_id,
+                approved_quantity, approved_amount,
+                recommended_quantity, recommended_amount,
+                item_decision, remarks)
+            SELECT
+                v_action_id, ri.request_item_id, p_request_id,
+                0, 0,
+                COALESCE((d->>'recommended_quantity')::NUMERIC, (d->>'approved_quantity')::NUMERIC),
+                COALESCE((d->>'recommended_amount')::NUMERIC, (d->>'approved_amount')::NUMERIC),
+                'PENDING'::request_item_status,
+                d->>'remarks'
+            FROM jsonb_array_elements(p_item_decisions) d
+            JOIN request_items ri
+              ON ri.request_item_id = (d->>'request_item_id')::UUID
+             AND ri.request_id      = p_request_id;
 
-        GET DIAGNOSTICS v_decided = ROW_COUNT;
-        IF v_decided <> jsonb_array_length(p_item_decisions) THEN
-            RAISE EXCEPTION
-                'Item decisions reference % line item(s) that do not belong to request %',
-                jsonb_array_length(p_item_decisions) - v_decided, v_req.request_number
-                USING ERRCODE = 'SP010';
+            UPDATE request_items ri
+               SET recommended_quantity = COALESCE((d->>'recommended_quantity')::NUMERIC, (d->>'approved_quantity')::NUMERIC),
+                   recommended_amount   = COALESCE((d->>'recommended_amount')::NUMERIC, (d->>'approved_amount')::NUMERIC),
+                   remarks              = COALESCE(d->>'remarks', ri.remarks)
+              FROM jsonb_array_elements(p_item_decisions) d
+             WHERE ri.request_item_id = (d->>'request_item_id')::UUID
+               AND ri.request_id      = p_request_id;
+        ELSE
+            -- Final stage financial approval (Principal, CDC, Chairman / Vice Chairman)
+            INSERT INTO approval_action_items (
+                action_id, request_item_id, request_id,
+                approved_quantity, approved_amount,
+                recommended_quantity, recommended_amount,
+                item_decision, remarks)
+            SELECT
+                v_action_id, ri.request_item_id, p_request_id,
+                (d->>'approved_quantity')::NUMERIC,
+                (d->>'approved_amount')::NUMERIC,
+                ri.recommended_quantity,
+                ri.recommended_amount,
+                (CASE
+                    WHEN (d->>'approved_quantity')::NUMERIC = 0 THEN 'REJECTED'
+                    WHEN (d->>'approved_quantity')::NUMERIC >= ri.requested_quantity THEN 'APPROVED'
+                    ELSE 'PARTIALLY_APPROVED'
+                 END)::request_item_status,
+                d->>'remarks'
+            FROM jsonb_array_elements(p_item_decisions) d
+            JOIN request_items ri
+              ON ri.request_item_id = (d->>'request_item_id')::UUID
+             AND ri.request_id      = p_request_id;
+
+            GET DIAGNOSTICS v_decided = ROW_COUNT;
+            IF v_decided <> jsonb_array_length(p_item_decisions) THEN
+                RAISE EXCEPTION
+                    'Item decisions reference % line item(s) that do not belong to request %',
+                    jsonb_array_length(p_item_decisions) - v_decided, v_req.request_number
+                    USING ERRCODE = 'SP010';
+            END IF;
+
+            UPDATE request_items ri
+               SET approved_quantity = aai.approved_quantity,
+                   approved_amount   = aai.approved_amount,
+                   item_status       = aai.item_decision,
+                   remarks           = COALESCE(aai.remarks, ri.remarks)
+              FROM approval_action_items aai
+             WHERE aai.action_id       = v_action_id
+               AND aai.request_item_id = ri.request_item_id;
         END IF;
-
-        UPDATE request_items ri
-           SET approved_quantity = aai.approved_quantity,
-               approved_amount   = aai.approved_amount,
-               item_status       = aai.item_decision,
-               remarks           = COALESCE(aai.remarks, ri.remarks)
-          FROM approval_action_items aai
-         WHERE aai.action_id       = v_action_id
-           AND aai.request_item_id = ri.request_item_id;
 
     ELSIF p_action = 'APPROVE' THEN
         INSERT INTO approval_action_items (
             action_id, request_item_id, request_id,
-            approved_quantity, approved_amount, item_decision)
+            approved_quantity, approved_amount,
+            recommended_quantity, recommended_amount,
+            item_decision)
         SELECT v_action_id, ri.request_item_id, p_request_id,
-               ri.requested_quantity, ri.estimated_total, 'APPROVED'
+               ri.requested_quantity, ri.estimated_total,
+               ri.recommended_quantity, ri.recommended_amount,
+               'APPROVED'
         FROM request_items ri
         WHERE ri.request_id = p_request_id;
 
@@ -403,8 +440,8 @@ BEGIN
 
     INSERT INTO audit_logs (entity_type, entity_id, actor_user_id, action, before_json, after_json)
     VALUES ('request', p_request_id::TEXT, p_actor_id, p_action::TEXT,
-            jsonb_build_object('status', v_req.current_status, 'stage_id', v_req.current_stage_id),
-            jsonb_build_object('status', v_new_status,        'stage_id', v_new_stage));
+            jsonb_build_object('status', v_req.current_status, 'stage_id', v_req.current_stage_id, 'version', v_req.current_version_number),
+            jsonb_build_object('status', v_new_status,        'stage_id', v_new_stage,          'version', v_req.current_version_number));
 
     RETURN v_action_id;
 END;

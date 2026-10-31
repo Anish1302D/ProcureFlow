@@ -17,6 +17,7 @@ import { DecisionPanel } from '../requests/DecisionPanel';
 import { RequestEditPanel } from '../requests/RequestEditPanel';
 import { ItemsTable } from '../requests/ItemsTable';
 import { Timeline } from '../requests/Timeline';
+import { RequestVersionHistory } from '../requests/RequestVersionHistory';
 
 const Section = ({ title, children }) => (
   <section className="space-y-2">
@@ -267,6 +268,12 @@ export const RequestDetailModal = () => {
           )}
 
           {r.permissions.canCarryForward && r.status !== 'DRAFT' && <CarryForward request={r} />}
+
+          {r.status !== 'DRAFT' && (
+            <Section title="Version History">
+              <RequestVersionHistory requestId={r.id} currentVersionNumber={r.versionNumber || r.currentVersionNumber} />
+            </Section>
+          )}
 
           <Section title="History">
             <Timeline requestId={r.id} />
