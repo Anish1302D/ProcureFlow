@@ -66,15 +66,16 @@ async function store(req, parent, authorise) {
   let savedFile;
   try {
     return await withUser(req.user.id, async (db) => {
-      await authorise(db);
+      const authResult = await authorise(db);
       savedFile = await saveFile(req.file.buffer, type.ext);
+      const reqVersion = authResult?.currentVersionNumber ?? 1;
       const { rows } = await db.query(
         `INSERT INTO attachments (request_id, issue_id, budget_provision_id, file_name, mime_type, size_bytes,
-                                  storage_path, storage_backend, uploaded_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING attachment_id`,
+                                  storage_path, storage_backend, uploaded_by, request_version_number)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING attachment_id`,
         [parent.requestId ?? null, parent.issueId ?? null, parent.budgetProvisionId ?? null,
           cleanFileName(req.file.originalname),
-          type.mime, req.file.size, savedFile.storagePath, savedFile.backend, req.user.id],
+          type.mime, req.file.size, savedFile.storagePath, savedFile.backend, req.user.id, reqVersion],
       );
       return (await db.query(
         `SELECT a.*, u.full_name AS uploaded_by_name FROM attachments a
@@ -90,13 +91,19 @@ async function store(req, parent, authorise) {
 
 attachmentsRouter.get('/requests/:id/attachments', async (req, res) => {
   const requestId = param(req, 'id');
-  const rows = await withUser(req.user.id, async (db) =>
-    (await db.query(
+  const rows = await withUser(req.user.id, async (db) => {
+    const { rows: reqRows } = await db.query(
+      'SELECT request_id FROM requests WHERE request_id = $1',
+      [requestId],
+    );
+    if (!reqRows[0]) throw notFound('Request not found');
+    return (await db.query(
       `SELECT a.*, u.full_name AS uploaded_by_name
          FROM attachments a JOIN users u ON u.user_id = a.uploaded_by
         WHERE a.request_id = $1 ORDER BY a.version_number ASC, a.uploaded_at ASC`,
       [requestId],
-    )).rows);
+    )).rows;
+  });
   res.json(rows.map(attachmentRow));
 });
 
@@ -104,7 +111,7 @@ attachmentsRouter.post('/requests/:id/attachments', upload, async (req, res) => 
   const requestId = param(req, 'id');
   const row = await store(req, { requestId }, async (db) => {
     const { rows } = await db.query(
-      `SELECT r.raised_by, r.current_status,
+      `SELECT r.raised_by, r.current_status, r.current_version_number,
               EXISTS (SELECT 1 FROM stage_approvers sa
                        WHERE sa.stage_id = r.current_stage_id AND sa.user_id = $2) AS staffed_here
          FROM requests r WHERE r.request_id = $1`,
@@ -116,6 +123,7 @@ attachmentsRouter.post('/requests/:id/attachments', upload, async (req, res) => 
     if (r.raised_by !== req.user.id && !r.staffed_here && !req.user.roles.includes('ADMIN')) {
       throw forbidden('Only the requester or an approver at the current stage can attach files');
     }
+    return { currentVersionNumber: r.current_version_number || 1 };
   });
   res.status(201).json(attachmentRow(row));
 });
@@ -128,6 +136,34 @@ attachmentsRouter.post('/attachments/:id/supersede', upload, async (req, res) =>
   let savedFile;
   try {
     const row = await withUser(req.user.id, async (db) => {
+      // Pre-authorization check and lock old attachment row before saving file to storage
+      const { rows: oldRows } = await db.query(
+        `SELECT a.*, r.current_status, r.current_stage_id, r.raised_by,
+                EXISTS (SELECT 1 FROM stage_approvers sa
+                         WHERE sa.stage_id = r.current_stage_id AND sa.user_id = $2) AS staffed_here
+           FROM attachments a
+           LEFT JOIN requests r ON r.request_id = a.request_id
+          WHERE a.attachment_id = $1
+            FOR UPDATE OF a`,
+        [oldAttachmentId, req.user.id],
+      );
+      const oldDoc = oldRows[0];
+      if (!oldDoc) throw notFound('Attachment not found');
+      if (oldDoc.superseded_by_id) {
+        throw conflict('This document has already been superseded');
+      }
+      if (oldDoc.archived_at) {
+        throw conflict('This document is archived and cannot be superseded');
+      }
+      if (oldDoc.request_id) {
+        if (CLOSED_REQUEST.includes(oldDoc.current_status)) {
+          throw conflict('Request is closed; its documents cannot be replaced');
+        }
+        if (oldDoc.raised_by !== req.user.id && !oldDoc.staffed_here && !req.user.roles.includes('ADMIN')) {
+          throw forbidden('Only the requester or an approver at the current stage can replace files');
+        }
+      }
+
       savedFile = await saveFile(req.file.buffer, type.ext);
       const { rows } = await db.query(
         'SELECT fn_supersede_attachment($1, $2, $3, $4, $5, $6, $7, $8) AS new_id',
@@ -187,10 +223,13 @@ attachmentsRouter.get('/attachments/:id', async (req, res) => {
   const attachmentId = param(req, 'id');
   const row = await withUser(req.user.id, async (db) =>
     (await db.query(
-      'SELECT file_name, mime_type, storage_path, storage_backend FROM attachments WHERE attachment_id = $1',
+      `SELECT file_name, mime_type, storage_path, storage_backend,
+              (CASE WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'attachments' AND column_name = 'archived_at')
+                    THEN archived_at ELSE NULL END) AS archived_at
+         FROM attachments WHERE attachment_id = $1`,
       [attachmentId],
     )).rows[0]);
-  if (!row) throw notFound('Attachment not found');
+  if (!row || row.archived_at) throw notFound('Attachment not found');
 
   const isDrive = row.storage_backend === 'drive' || (USE_DRIVE && !row.storage_path.includes('/'));
   if (isDrive) {
