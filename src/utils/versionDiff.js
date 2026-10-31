@@ -37,8 +37,8 @@ export function diffVersions(baseVersion, targetVersion) {
     remarks: item.remarks || '',
   });
 
-  const baseItems = (baseVersion.items || []).map(normalizeItem);
-  const targetItems = (targetVersion.items || []).map(normalizeItem);
+  const baseItems = (baseVersion.items || baseVersion.itemsSnapshot || []).map(normalizeItem);
+  const targetItems = (targetVersion.items || targetVersion.itemsSnapshot || []).map(normalizeItem);
 
   const baseItemsByBudgetId = new Map();
   baseItems.forEach((item) => {
@@ -133,8 +133,8 @@ export function diffVersions(baseVersion, targetVersion) {
     sizeBytes: doc.size_bytes || doc.sizeBytes || 0,
   });
 
-  const baseDocs = (baseVersion.documents || []).map(normalizeDoc);
-  const targetDocs = (targetVersion.documents || []).map(normalizeDoc);
+  const baseDocs = (baseVersion.documents || baseVersion.documentsSnapshot || []).map(normalizeDoc);
+  const targetDocs = (targetVersion.documents || targetVersion.documentsSnapshot || []).map(normalizeDoc);
 
   const baseDocNames = new Set(baseDocs.map((d) => d.fileName));
   const targetDocNames = new Set(targetDocs.map((d) => d.fileName));

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
+import { Buffer } from 'node:buffer';
 import crypto from 'node:crypto';
 
 describe('Versioning Authorization, Approval Hierarchy & Audit Integrity Suite', () => {
