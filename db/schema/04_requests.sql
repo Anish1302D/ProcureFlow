@@ -83,6 +83,7 @@ CREATE TABLE request_versions (
     tentative_total_cost    NUMERIC(14,2) NOT NULL,
     extra                   JSONB NOT NULL DEFAULT '{}'::jsonb,
     items_snapshot          JSONB NOT NULL,
+    documents_snapshot      JSONB NOT NULL DEFAULT '[]'::jsonb,
     submitted_by            UUID NOT NULL REFERENCES users(user_id) ON DELETE RESTRICT,
     submitted_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     correction_id           UUID REFERENCES correction_requests(correction_id),

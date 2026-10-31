@@ -221,4 +221,35 @@ describe('Request Version History & Immutable Snapshots Regression Suite', () =>
     assert.equal(snapshot.documentsSnapshot[0].requestVersionNumber, 1);
     assert.equal(snapshot.documentsSnapshot[1].fileName, 'compliance_sheet.xlsx');
   });
+
+  test('Enriches items_snapshot with canonical item_name, item_code, and unit on initial submission', () => {
+    const item = {
+      requestItemId: 'item-enriched-1',
+      budgetItemId: 101,
+      itemName: 'Dell OptiPlex Desktop',
+      itemCode: 'IT-COMP-01',
+      unit: 'Units',
+      itemType: 'CONSUMABLE_GOODS',
+      quantity: 5,
+      unitCost: 60000,
+      remarks: 'Lab 3 deployment',
+    };
+
+    const snapshot = createVersionSnapshot({
+      requestId: 'req-enriched-01',
+      versionNumber: 1,
+      request: { title: 'Lab computers', departmentId: 10, financialYearId: 2, budgetHeadId: 101 },
+      items: [item],
+      actorId: 'hod-cs',
+    });
+
+    const frozenItem = snapshot.itemsSnapshot[0];
+    assert.equal(frozenItem.itemName, 'Dell OptiPlex Desktop');
+    assert.equal(frozenItem.itemCode, 'IT-COMP-01');
+    assert.equal(frozenItem.unit, 'Units');
+    assert.equal(frozenItem.requestedQuantity, 5);
+    assert.equal(frozenItem.estimatedUnitCost, 60000);
+    assert.equal(frozenItem.estimatedTotal, 300000);
+    assert.equal(frozenItem.remarks, 'Lab 3 deployment');
+  });
 });

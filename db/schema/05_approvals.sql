@@ -22,6 +22,7 @@ CREATE TABLE approval_actions (
     rejection_reason     TEXT,
     comments             TEXT,
     signature_id         UUID REFERENCES digital_signatures(signature_id),
+    request_version_number INTEGER NOT NULL DEFAULT 1,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
